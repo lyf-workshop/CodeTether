@@ -69,6 +69,7 @@ internal enum class TabletListGlyph(val path: String) {
     Folder("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"),
     Settings("M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3 1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1.1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8 1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"),
     Search("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14ZM20 20l-4-4"),
+    Plus("M12 5v14M5 12h14"),
     Chevron("M9 18l6-6-6-6"),
     Down("M6 9l6 6 6-6"),
     Check("M20 6 9 17l-5-5"),
@@ -76,6 +77,7 @@ internal enum class TabletListGlyph(val path: String) {
     Alert("M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01"),
     Sidebar("M4 4h16a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1ZM9 4v16"),
     WifiOff("M2 2l20 20M8.5 16.5a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.6M12 20h.01M1.4 9a16 16 0 0 1 4.7-2.9M10.7 5a16 16 0 0 1 11.9 4"),
+    Map("M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2ZM9 4v14M15 6v14"),
 }
 
 @Composable
@@ -134,8 +136,8 @@ internal fun TabletListSection(
 }
 
 @Composable
-internal fun TabletListRule() {
-    HorizontalDivider(Modifier.padding(start = 16.dp), thickness = 1.dp, color = ink.rule)
+internal fun TabletListRule(inset: Dp = 16.dp) {
+    HorizontalDivider(Modifier.padding(start = inset), thickness = 1.dp, color = ink.rule)
 }
 
 @Composable
@@ -149,18 +151,26 @@ internal fun TabletListEmpty(text: String) {
 }
 
 @Composable
-internal fun TabletListSegments(options: List<Pair<String, Boolean>>, modifier: Modifier = Modifier, select: (Int) -> Unit) {
+internal fun TabletListSegments(
+    options: List<Pair<String, Boolean>>,
+    modifier: Modifier = Modifier,
+    optionEnabled: (Int) -> Boolean = { true },
+    select: (Int) -> Unit,
+) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Box(Modifier.fillMaxWidth().height(38.dp).background(listTint, RoundedCornerShape(9.dp)))
         Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp).selectableGroup()) {
             options.forEachIndexed { index, (label, selected) ->
-                Box(Modifier.weight(1f).heightIn(min = 48.dp).selectable(selected, role = Role.Tab, onClick = { select(index) }),
+                val enabled = optionEnabled(index)
+                Box(Modifier.weight(1f).heightIn(min = 48.dp)
+                    .selectable(selected, enabled = enabled, role = Role.Tab, onClick = { select(index) }),
                     contentAlignment = Alignment.Center) {
                     val shape = RoundedCornerShape(7.dp)
                     Box(Modifier.fillMaxWidth().height(34.dp)
                         .then(if (selected) Modifier.shadow(1.dp, shape).background(ink.card, shape) else Modifier)
                         .padding(horizontal = 3.dp), contentAlignment = Alignment.Center) {
-                        Text(label, color = ink.text, fontSize = 14.sp, lineHeight = 16.sp, textAlign = TextAlign.Center,
+                        Text(label, color = if (enabled) ink.text else ink.secondary,
+                            fontSize = 14.sp, lineHeight = 16.sp, textAlign = TextAlign.Center,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium, maxLines = 2)
                     }
                 }
@@ -248,4 +258,10 @@ internal fun listMachineSubtitle(entry: ComputerView, machine: RemoteMachine): S
     val online = entry.connection != null && machine.available && (machine.isLocal || machine.status == "online")
     val lastSeen = if (online) null else tabletRelativeTime(machine.lastSeenAt)?.let { "${it}在线" }
     return listOfNotNull(if (online) "在线" else "离线", lastSeen, via?.let { "经由 $it" }).joinToString(" · ")
+}
+
+internal fun tabletMachineGlyph(machine: RemoteMachine): TabletListGlyph = when {
+    machine.name.startsWith("MacBook", ignoreCase = true) -> TabletListGlyph.Laptop
+    !machine.isLocal -> TabletListGlyph.Server
+    else -> TabletListGlyph.Monitor
 }

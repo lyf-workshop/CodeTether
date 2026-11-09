@@ -97,7 +97,7 @@ private fun RecoveryButton(label: String, primary: Boolean, onClick: () -> Unit)
 }
 
 @Composable
-internal fun RemovedPairSheet(state: TabletState, actions: TabletActions, onDismiss: () -> Unit, onConnected: () -> Unit) {
+internal fun PairCodeSheet(state: TabletState, actions: TabletActions, onDismiss: () -> Unit, onConnected: () -> Unit) {
     var code by remember { mutableStateOf("") }
     val connected = state.lastPairedName
     fun close() {

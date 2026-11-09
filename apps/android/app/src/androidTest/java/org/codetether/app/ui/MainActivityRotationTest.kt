@@ -89,7 +89,7 @@ class MainActivityRotationTest {
         compose.onNode(hasText(PROJECT.name) and hasAnyAncestor(isDialog())).performClick()
         compose.onNode(hasText("Codex") and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithText("第一条消息").performScrollTo().performTextInput("旋转中的首条消息")
-        compose.onNodeWithText("创建会话").performScrollTo().assertIsEnabled().performClick()
+        compose.onNodeWithText("开始").assertIsEnabled().performClick()
         compose.waitUntil(15_000L) { session.creates.get() == 1 }
 
         rotateToPortrait(scenario, controller)
@@ -156,11 +156,11 @@ class MainActivityRotationTest {
             compose.onNode(hasText("Codex") and hasAnyAncestor(isDialog())).performClick()
             val originalText = "Original create message"
             compose.onNodeWithText("第一条消息").performScrollTo().performTextInput(originalText)
-            compose.onNodeWithText("创建会话").performScrollTo().performClick()
+            compose.onNodeWithText("开始").performClick()
             compose.waitUntil(15_000L) {
                 controller.state.value.createMutation(COMPUTER.id, PROJECT)?.status == MutationStatus.Unknown
             }
-            compose.onNodeWithText("创建会话").assertIsNotEnabled()
+            compose.onNodeWithText("开始").assertIsNotEnabled()
             compose.onNodeWithText("重试").performScrollTo().performClick()
             compose.waitUntil(15_000L) {
                 controller.state.value.createMutation(COMPUTER.id, PROJECT)?.status == MutationStatus.Failed &&
@@ -174,7 +174,7 @@ class MainActivityRotationTest {
 
             val editedText = "Corrected create message"
             compose.onNodeWithText("第一条消息").performScrollTo().performTextReplacement(editedText)
-            compose.onNodeWithText("创建会话").performScrollTo().assertIsEnabled().performClick()
+            compose.onNodeWithText("开始").assertIsEnabled().performClick()
             compose.waitUntil(15_000L) { session.createAttempts.size == 3 }
             assertNotEquals(session.createAttempts.first().actionId, session.createAttempts.last().actionId)
             assertEquals(editedText, session.createAttempts.last().text)

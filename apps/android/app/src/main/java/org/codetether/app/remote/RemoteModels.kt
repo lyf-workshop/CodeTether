@@ -50,6 +50,7 @@ data class RemoteProvider(
     val approvals: Boolean,
     val interrupt: Boolean,
     val diff: Boolean,
+    val requiresSignIn: Boolean = false,
 )
 
 data class RemoteProject(

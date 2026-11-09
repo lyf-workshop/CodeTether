@@ -126,11 +126,7 @@ private fun SidebarMachine(
     val id = entry.computer.id
     val selected = page == TabletPage.Device(id, machine.id)
     val online = entry.connection != null && machine.available && (machine.isLocal || machine.status == "online")
-    val icon = when {
-        !machine.isLocal -> TabletListGlyph.Server
-        machine.platform.startsWith("mac", ignoreCase = true) -> TabletListGlyph.Laptop
-        else -> TabletListGlyph.Monitor
-    }
+    val icon = tabletMachineGlyph(machine)
     Column(Modifier.alpha(if (online) 1f else .55f)) {
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
             .background(if (selected) ink.selected else Color.Transparent), verticalAlignment = Alignment.CenterVertically) {

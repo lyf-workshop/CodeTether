@@ -1,6 +1,7 @@
 package org.codetether.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -37,14 +39,15 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import org.codetether.app.account.PairedComputer
 import org.codetether.app.remote.ConversationTarget
-import org.codetether.app.remote.RemoteConversation
-import org.codetether.app.remote.RemoteMachine
 import org.codetether.app.remote.RemoteMessage
 import org.codetether.app.remote.RemoteProject
 import java.util.UUID
@@ -69,88 +72,6 @@ private fun ListPage(
 @Composable
 private fun Empty(text: String) {
     Group { RowItem(text) }
-}
-
-@Composable
-internal fun DevicesPage(state: TabletState, go: (TabletPage) -> Unit) {
-    ListPage("设备", "查看每台电脑和它可以访问的设备。") {
-        QuietButton("输入配对码") { go(TabletPage.Pair) }
-        state.computers.forEach { entry ->
-            SectionTitle(entry.computer.name)
-            val machines = entry.workspace?.machines.orEmpty()
-            if (machines.isEmpty()) Empty(entry.problem ?: "正在连接…") else Group {
-                machines.forEachIndexed { index, machine ->
-                    if (index > 0) Rule()
-                    RowItem(machine.name, machineSubtitle(entry, machine), trailing = machine.platform) {
-                        go(TabletPage.Device(entry.computer.id, machine.id))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun DevicePage(state: TabletState, page: TabletPage.Device, go: (TabletPage) -> Unit) {
-    val entry = state.computer(page.computerId)
-    val machine = state.machine(page.computerId, page.machineId)
-    ListPage(machine?.name ?: "设备", machine?.let { entry?.let { owner -> machineSubtitle(owner, it) } }) {
-        QuietButton("所有设备") { go(TabletPage.Devices) }
-        if (entry?.connection == null || machine?.available != true) {
-            Empty(entry?.problem ?: "这台电脑现在连不上，请确认它开着并且联网")
-        }
-        val workspace = entry?.workspace
-        if (workspace != null) {
-            SectionTitle("项目")
-            val projects = workspace.projects.filter { it.machineId == page.machineId }
-            if (projects.isEmpty()) Empty("没有项目") else Group {
-                projects.forEachIndexed { index, project ->
-                    if (index > 0) Rule()
-                    RowItem(project.name, if (project.available) null else "暂时无法访问") {
-                        go(TabletPage.Project(page.computerId, project))
-                    }
-                }
-            }
-            SectionTitle("最近的会话")
-            val recent = workspace.recent.filter { it.target.machineId == page.machineId && !it.archived }
-            if (recent.isEmpty()) Empty("没有会话") else Group {
-                recent.take(5).forEachIndexed { index, row ->
-                    if (index > 0) Rule()
-                    ConversationRow(page.computerId, row, state, go)
-                }
-            }
-        }
-        if (!machine?.providers.isNullOrEmpty()) {
-            SectionTitle("AI 工具")
-            Group {
-                machine?.providers?.forEachIndexed { index, provider ->
-                    if (index > 0) Rule()
-                    RowItem(provider.displayName, providerStatus(provider.status))
-                }
-            }
-        }
-    }
-}
-
-private fun machineSubtitle(entry: ComputerView, machine: RemoteMachine): String {
-    val online = entry.connection != null && machine.available && machine.status in setOf("online", "local")
-    return listOfNotNull(
-        if (online) "在线" else "离线",
-        if (!machine.isLocal) "经由 ${entry.computer.name}" else null,
-    ).joinToString(" · ")
-}
-
-private fun providerStatus(status: String): String = when (status) {
-    "available" -> "可用"
-    "not_installed" -> "尚未安装，请在电脑上处理"
-    "misconfigured", "unauthenticated" -> "请先在电脑上登录"
-    "unsupported_version" -> "版本不支持，请在电脑上检查"
-    else -> "暂时不可用"
-}
-
-@Composable
-private fun ConversationRow(computer: String, row: RemoteConversation, state: TabletState, go: (TabletPage) -> Unit) {
-    ConversationListRow(computer, row, state) { go(TabletPage.Conversation(computer, row.target)) }
 }
 
 @Composable
@@ -308,80 +229,6 @@ private fun TimelineMessage(message: RemoteMessage, provider: String) {
 }
 
 @Composable
-private fun ApprovalButtons(enabled: Boolean, approve: () -> Unit, decline: () -> Unit) {
-    Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        InkButton("允许一次", enabled = enabled, onClick = approve)
-        QuietButton("拒绝", enabled = enabled, onClick = decline)
-    }
-}
-
-@Composable
-internal fun SettingsPage(state: TabletState, page: TabletPage.Settings, actions: TabletActions, go: (TabletPage) -> Unit) {
-    if (page.section == SettingSection.Connection) {
-        ConnectionCheckPage(state, actions)
-        return
-    }
-    var removing by remember { mutableStateOf<PairedComputer?>(null) }
-    var signOut by remember { mutableStateOf(false) }
-    ListPage("设置") {
-        Group {
-            SettingSection.entries.forEachIndexed { index, section ->
-                if (index > 0) Rule()
-                RowItem(section.label, active = section == page.section) { go(TabletPage.Settings(section)) }
-            }
-        }
-        SectionTitle(page.section.label)
-        when (page.section) {
-            SettingSection.Account -> Group {
-                RowItem("已登录", state.profile?.email)
-                QuietButton("退出登录", enabled = !state.busy) { signOut = true }
-            }
-            SettingSection.Computers -> {
-                Group {
-                    state.computers.forEachIndexed { index, entry ->
-                        if (index > 0) Rule()
-                        RowItem(entry.computer.name, if (entry.connection != null) "在线" else "暂时连不上")
-                        QuietButton("移除 ${entry.computer.name}", enabled = !state.busy) { removing = entry.computer }
-                    }
-                    QuietButton("输入配对码") { go(TabletPage.Pair) }
-                }
-            }
-            SettingSection.Appearance -> Segments(Appearance.entries.map { it.label to (state.appearance == it) }) {
-                actions.setAppearance(Appearance.entries[it])
-            }
-            SettingSection.Connection -> Unit
-            SettingSection.Plans -> Group {
-                listOf(
-                    "添加项目、浏览文件夹和导入以前的会话",
-                    "移除项目、项目内搜索、置顶、重命名和恢复",
-                    "通知、后台保持连接和解锁确认",
-                    "手机布局和切换 AI 工具使用的服务",
-                ).forEachIndexed { index, plan ->
-                    if (index > 0) Rule()
-                    RowItem(plan)
-                }
-            }
-        }
-    }
-    removing?.let { computer ->
-        CenterSheet("移除电脑", { removing = null }) {
-            Text("移除后将与 ${computer.name} 断开。电脑上正在运行的工作会继续。", color = ink.secondary)
-            InkButton("移除", Modifier.fillMaxWidth(), !state.busy) {
-                removing = null
-                actions.removeComputer(computer)
-            }
-        }
-    }
-    if (signOut) CenterSheet("退出登录", { signOut = false }) {
-        Text("退出后，这台设备会断开连接。电脑上正在运行的工作会继续。", color = ink.secondary)
-        InkButton("退出登录", Modifier.fillMaxWidth(), !state.busy) {
-            signOut = false
-            actions.signOut()
-        }
-    }
-}
-
-@Composable
 internal fun CreateSheet(
     state: TabletState,
     actions: TabletActions,
@@ -432,9 +279,14 @@ internal fun CreateSheet(
             actions.create(selection.first, selection.second, tool.id, text, reasoning, newSubmissionActionId())
         }
     }
-    CenterSheet("新建会话", onDismiss) {
-        Column(Modifier.heightIn(max = 530.dp).verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    CenterSheet("新建会话", onDismiss, header = { title ->
+        CreateSheetHeader(title, enabled, onDismiss, ::send)
+    }) {
+        Column(
+            Modifier.heightIn(max = 530.dp).verticalScroll(rememberScrollState())
+                .padding(horizontal = 22.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             if (outstanding.isNotEmpty()) {
                 SectionTitle("待确认的创建")
                 Group {
@@ -473,26 +325,34 @@ internal fun CreateSheet(
                         }) else null)
                 }
             }
-            if (machine != null) {
+            if (machine != null && machine.providers.isNotEmpty()) {
                 SectionTitle("AI 工具")
-                Group {
-                    machine.providers.forEachIndexed { index, tool ->
-                        if (index > 0) Rule()
-                        RowItem(tool.displayName, providerStatus(tool.status), active = tool.id == providerSelection,
-                            onClick = if (tool.canStart && !state.busy) ({
-                                if (providerSelection != tool.id) {
-                                    providerSelection = tool.id
-                                    reasoning = null
-                                }
-                            }) else null)
+                val tools = machine.providers
+                TabletListSegments(
+                    options = tools.map { tool ->
+                        val reason = when {
+                            tool.status == "not_installed" -> "没有安装"
+                            tool.requiresSignIn || tool.status == "unauthenticated" -> "要在电脑上登录"
+                            tool.status == "unsupported_version" -> "版本不支持"
+                            else -> "暂时不可用"
+                        }
+                        val label = if (tool.canStart) tool.displayName else "${tool.displayName}（$reason）"
+                        label to (tool.id == providerSelection)
+                    },
+                    optionEnabled = { tools[it].canStart && !state.busy },
+                ) { index ->
+                    val tool = tools[index]
+                    if (providerSelection != tool.id) {
+                        providerSelection = tool.id
+                        reasoning = null
                     }
                 }
             }
             if (provider?.id == "claude-code" && provider.reasoning.isNotEmpty()) {
                 SectionTitle("推理强度")
                 val options = listOf(null to "默认") + provider.reasoning.map { it.id to it.label }
-                Segments(options.map { it.second to (reasoning == it.first) }) {
-                    if (!state.busy) reasoning = options[it].first
+                TabletListSegments(options.map { it.second to (reasoning == it.first) }, optionEnabled = { !state.busy }) {
+                    reasoning = options[it].first
                 }
             }
             InkField(text, { text = it.take(64 * 1024) }, "第一条消息", Modifier.onPreviewKeyEvent { event ->
@@ -508,9 +368,31 @@ internal fun CreateSheet(
                     actions.retryMutation(mutation.actionId)
                 }
             }
-            InkButton("创建会话", Modifier.fillMaxWidth(), enabled, ::send)
         }
     }
+}
+
+@Composable
+private fun CreateSheetHeader(title: String, enabled: Boolean, onDismiss: () -> Unit, onStart: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).background(ink.bar),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier.width(72.dp).heightIn(min = 48.dp).clickable(role = Role.Button, onClick = onDismiss)
+                .semantics { contentDescription = "关闭窗口" },
+            contentAlignment = Alignment.Center,
+        ) { Text("取消", color = ink.text, fontSize = 15.sp) }
+        Text(title, Modifier.weight(1f), color = ink.text, fontWeight = FontWeight.Bold,
+            fontSize = 17.sp, textAlign = TextAlign.Center)
+        Box(
+            Modifier.width(72.dp).heightIn(min = 48.dp).clickable(enabled = enabled, role = Role.Button, onClick = onStart),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("开始", color = if (enabled) ink.text else ink.secondary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+    Rule()
 }
 
 private fun newSubmissionActionId(): String = "act_${UUID.randomUUID().toString().replace("-", "")}"

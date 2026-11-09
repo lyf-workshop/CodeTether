@@ -41,7 +41,7 @@ import org.codetether.app.BuildConfig
 import uniffi.supervisor_mobile.ConnectionMode
 
 @Composable
-internal fun ConnectionCheckHeader(showSidebarToggle: Boolean, toggleSidebar: () -> Unit, backToSettings: () -> Unit) {
+internal fun SettingsBackHeader(showSidebarToggle: Boolean, toggleSidebar: () -> Unit, backToSettings: () -> Unit, backTag: String) {
     Row(
         Modifier.fillMaxWidth().heightIn(min = 52.dp).background(ink.bar).padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -49,7 +49,7 @@ internal fun ConnectionCheckHeader(showSidebarToggle: Boolean, toggleSidebar: ()
         if (showSidebarToggle) IconAction("☰", "侧栏", toggleSidebar)
         val foreground = ink.text
         Column(
-            Modifier.heightIn(min = 48.dp).clip(CircleShape).testTag("connection-settings-back")
+            Modifier.heightIn(min = 48.dp).clip(CircleShape).testTag(backTag)
                 .clickable(role = Role.Button, onClick = backToSettings).padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,

@@ -28,6 +28,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performKeyInput
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.pressKey
 import androidx.test.platform.app.InstrumentationRegistry
@@ -74,6 +75,17 @@ class TabletUiTest {
         ),
     )
     private val project = RemoteProject("fixture-project", local.id, "CodeTether", true, 1)
+    private val buildServer = local.copy(id = "fixture-build-server", name = "build-server", isLocal = false,
+        platform = "Linux · x64", status = "online", providers = listOf(local.providers.first().copy(
+            approvals = false, interrupt = false, diff = false)))
+    private val offlineComputer = PairedComputer(
+        "fixture-mac", "MacBook Pro", "macOS-arm64", true, "2030-01-01T00:00:00Z",
+        "fixture-mac-pairing", "", 1uL, "{}", "{}", "{}",
+    )
+    private val offlineMachine = local.copy(id = "fixture-mac-machine", name = offlineComputer.name,
+        platform = "macOS · arm64", status = "offline", available = false,
+        providers = listOf(local.providers.first(), local.providers[1].copy(status = "misconfigured", canStart = false,
+            requiresSignIn = true)))
     private val summary = RemoteConversation(target, "修复窄窗口的会话标题", "codex", "waiting", "created", false,
         "2026-11-03T12:00:00Z")
     private val pending = RemoteAttention("fixture-attention", target, "approval", "运行命令", "fixture-approval",
@@ -94,7 +106,7 @@ class TabletUiTest {
     private val workspace = RemoteWorkspace(listOf(local), listOf(project), listOf(summary), listOf(pending, completed), true)
     private val initial = TabletState(
         page = TabletPage.Home,
-        profile = AccountProfile("test-account", ""),
+        profile = AccountProfile("test-account", "fixture@example.invalid"),
         computers = listOf(ComputerView(computer, workspace, connection)),
         loaded = listOf(computer.id to summary),
         appearance = Appearance.Light,
@@ -105,13 +117,13 @@ class TabletUiTest {
     private val acted = mutableListOf<String>()
 
     private val actions = object : TabletActions {
-        override fun navigate(page: TabletPage) { state = state.copy(page = page) }
+        override fun navigate(page: TabletPage) { state = state.copy(page = page, lastPairedName = null) }
         override fun requestCode(email: String) { state = state.copy(otpEmail = email) }
         override fun verifyCode(email: String, code: String) { state = state.copy(page = TabletPage.Pair) }
         override fun editEmail() { state = state.copy(otpEmail = null) }
         override fun pair(code: String) { state = state.copy(lastPairedName = computer.name) }
         override fun cancelPairing() { state = state.copy(busy = false, pairingInProgress = false) }
-        override fun removeComputer(computer: PairedComputer) { acted.add("remove") }
+        override fun removeComputer(computer: PairedComputer) { acted.add("remove:${computer.id}") }
         override fun signOut() { state = TabletState() }
         override fun setAppearance(value: Appearance) { state = state.copy(appearance = value) }
         override fun setMode(value: ConnectionMode) { state = state.copy(mode = value) }
@@ -162,7 +174,11 @@ class TabletUiTest {
         provider: RemoteProvider = local.providers.first(),
         history: RemoteHistory = this.history,
         attention: List<RemoteAttention> = listOf(pending),
-    ) = initial.copy(page = convoPage, detail = RemoteConversationDetail(conversation, history, provider, attention, true))
+    ) = initial.copy(
+        page = convoPage,
+        detail = RemoteConversationDetail(conversation, history, provider, attention, true),
+        computers = listOf(ComputerView(computer, workspace.copy(recent = listOf(conversation)), connection)),
+    )
 
     private fun runningHistory(): RemoteHistory {
         val now = Instant.now()
@@ -215,6 +231,26 @@ class TabletUiTest {
             ComputerView(computer, workspace.copy(machines = listOf(local, remote)), connection),
             ComputerView(offline, workspace.copy(machines = listOf(offlineMachine))),
         ))
+    }
+
+    private fun devicePreview(): TabletState {
+        val lists = listPreview()
+        val owner = lists.computers.single()
+        val localWorkspace = requireNotNull(owner.workspace).copy(
+            machines = listOf(local, buildServer),
+            projects = listOf(
+                project.copy(conversationCount = 5),
+                project.copy(id = "fixture-scripts", name = "scripts", conversationCount = 2),
+                project.copy(machineId = buildServer.id, name = "model-eval", conversationCount = 3),
+            ),
+        )
+        val offlineProject = project.copy(machineId = offlineMachine.id, name = "payments-api", conversationCount = 2)
+        val offlineSummary = summary.copy(target = target.copy(machineId = offlineMachine.id, projectId = offlineProject.id),
+            title = "整理支付回调的重试策略", status = "completed", lastActivityAt = Instant.now().minusSeconds(86400).toString())
+        val offlineWorkspace = RemoteWorkspace(listOf(offlineMachine.copy(lastSeenAt = Instant.now().minusSeconds(9000).toString())),
+            listOf(offlineProject), listOf(offlineSummary), emptyList(), true)
+        return lists.copy(computers = listOf(owner.copy(workspace = localWorkspace), ComputerView(offlineComputer, offlineWorkspace,
+            problem = "这台电脑现在连不上")))
     }
 
     @Test
@@ -400,7 +436,7 @@ class TabletUiTest {
     @Test
     fun capturePortraitPrototypeScreens() {
         if (compose.activity.resources.configuration.orientation != Configuration.ORIENTATION_PORTRAIT) return
-        state = detail()
+        state = detail(provider = local.providers.first().copy(interrupt = false))
         compose.setContent { TabletApp(state, actions) }
         compose.onNodeWithContentDescription("变更").assertIsDisplayed()
         capture("05-01-port-conv")
@@ -442,6 +478,58 @@ class TabletUiTest {
     }
 
     @Test
+    fun deviceGroupsKeepProjectScopeAndPairInPlace() {
+        state = devicePreview().copy(page = TabletPage.Devices)
+        compose.setContent { TabletApp(state, actions) }
+        compose.onNodeWithText("5 个会话").assertIsDisplayed()
+        compose.onNodeWithText("3 个会话").assertIsDisplayed()
+        compose.onNodeWithTag("devices-project/${computer.id}/${buildServer.id}/${project.id}").performClick()
+        val routed = state.page as TabletPage.Project
+        assertEquals(computer.id, routed.computerId)
+        assertEquals(buildServer.id, routed.project.machineId)
+        assertEquals(project.id, routed.project.id)
+
+        display(devicePreview().copy(page = TabletPage.Devices))
+        compose.onNodeWithTag("devices-pair").performScrollTo().performClick()
+        compose.onNodeWithTag("removed-pair-code").assertIsDisplayed()
+        assertEquals(TabletPage.Devices, state.page)
+        compose.onNodeWithText("取消").performClick()
+        assertEquals(TabletPage.Devices, state.page)
+        display(devicePreview().copy(page = TabletPage.Device(offlineComputer.id, offlineMachine.id)))
+        compose.onNodeWithText("需要在电脑上登录").performScrollTo().assertIsDisplayed()
+        compose.onNodeWithText("＋ 新建会话").assertDoesNotExist()
+    }
+
+    @Test
+    fun settingsOverviewRoutesAndActsOnTheExactComputer() {
+        state = devicePreview().copy(page = TabletPage.Settings())
+        compose.setContent { TabletApp(state, actions) }
+        compose.onNodeWithText("账号").assertIsDisplayed()
+        compose.onNodeWithText("可以使用的电脑").assertIsDisplayed()
+        compose.onNodeWithTag("settings-remove-${offlineComputer.id}").performScrollTo().performClick()
+        compose.onNodeWithText("移除 ${offlineComputer.name}？").assertIsDisplayed()
+        compose.onNodeWithTag("settings-confirm-remove").performClick()
+        assertEquals(listOf("remove:${offlineComputer.id}"), acted)
+
+        compose.onNodeWithText("输入配对码").performScrollTo().performClick()
+        compose.onNodeWithTag("removed-pair-code").performTextInput("123456")
+        compose.onNodeWithText("连接").performClick()
+        compose.onNodeWithText("完成").performClick()
+        assertEquals(TabletPage.Settings(), state.page)
+
+        compose.onNodeWithText("后续规划").performScrollTo().performClick()
+        assertEquals(TabletPage.Settings(SettingSection.Plans), state.page)
+        compose.onNodeWithText("可以使用的电脑").assertDoesNotExist()
+        compose.onNodeWithText("切换 AI 工具用的服务").assertIsDisplayed()
+        compose.onNodeWithText("手机布局", substring = false).performScrollTo().assertIsDisplayed()
+        compose.onNodeWithTag("roadmap-settings-back").performClick()
+        assertEquals(TabletPage.Settings(), state.page)
+        compose.onNodeWithText("后续规划").performScrollTo().performClick()
+        compose.runOnIdle { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        assertEquals(TabletPage.Settings(), state.page)
+    }
+
+    @Test
     fun captureLandscapePrototypeScreens() {
         if (compose.activity.resources.configuration.orientation != Configuration.ORIENTATION_LANDSCAPE) return
         state = TabletState(appearance = Appearance.Light)
@@ -476,7 +564,9 @@ class TabletUiTest {
         display(detail(summary.copy(target = remoteTarget, status = "running"), restrictedTool,
             history = runningHistory(), attention = emptyList()).copy(
             page = TabletPage.Conversation(computer.id, remoteTarget),
-            computers = listOf(ComputerView(computer, workspace.copy(machines = listOf(local, remote)), connection)),
+            computers = listOf(ComputerView(computer, workspace.copy(machines = listOf(local, remote),
+                projects = listOf(project, project.copy(machineId = remote.id, name = "model-eval")),
+                recent = listOf(summary.copy(target = remoteTarget, status = "running"))), connection)),
         ))
         capture("02-06-running-restricted")
         display(detail(summary.copy(status = "failed"),
@@ -496,6 +586,10 @@ class TabletUiTest {
         compose.onNodeWithTag("new-project-${project.id}").performClick()
         compose.onNodeWithText("Codex").performClick()
         capture("02-10-new-codex")
+        compose.onNodeWithContentDescription("关闭窗口").performClick()
+        display(lists.copy(page = TabletPage.Project(computer.id, project)))
+        compose.onNodeWithText("＋ 新建会话").performClick()
+        compose.onNodeWithTag("new-project-${project.id}").performClick()
         compose.onNodeWithText("Claude Code").performClick()
         capture("02-11-new-claude")
         compose.onNodeWithContentDescription("关闭窗口").performClick()
@@ -504,30 +598,35 @@ class TabletUiTest {
         capture("02-12-search")
         compose.onNodeWithContentDescription("关闭窗口").performClick()
 
-        display(initial.copy(page = TabletPage.Devices))
+        val devices = devicePreview()
+        display(devices.copy(page = TabletPage.Devices))
         capture("03-01-devices")
-        display(initial.copy(page = TabletPage.Device(computer.id, local.id)))
+        compose.onNodeWithTag("devices-pair").performScrollTo().assertIsDisplayed()
+        capture("03-01-devices-pair")
+        display(devices.copy(page = TabletPage.Device(computer.id, local.id)))
         capture("03-02-device")
-        display(state.copy(computers = listOf(ComputerView(computer, workspace, problem = "这台电脑现在连不上"))))
+        display(devices.copy(page = TabletPage.Device(offlineComputer.id, offlineMachine.id)))
         capture("03-03-device-offline")
         display(lists.copy(page = TabletPage.Project(computer.id, project)))
         capture("03-04-project")
         display(state.copy(projectArchived = true, projectRows = lists.loaded.map { it.second }.filter { it.archived }))
         capture("03-05-project-archived")
 
-        display(initial.copy(page = TabletPage.Settings()))
+        display(devices.copy(page = TabletPage.Settings()))
         capture("04-01-settings")
-        display(initial.copy(page = TabletPage.Settings(SettingSection.Computers)))
-        compose.onNodeWithText("移除 Windows 台式机").performClick()
+        compose.onNodeWithTag("settings-remove-${computer.id}").performScrollTo().performClick()
         capture("04-02-unpair")
-        compose.onNodeWithContentDescription("关闭窗口").performClick()
-        display(initial.copy(page = TabletPage.Pair))
+        compose.onNodeWithText("取消").performClick()
+        compose.onNodeWithText("输入配对码").performScrollTo().performClick()
         capture("04-03-pair-more")
+        compose.onNodeWithText("取消").performClick()
         display(connectionPreview())
         compose.onNodeWithText("连接检查").assertIsDisplayed()
         capture("04-04-connection")
-        display(initial.copy(page = TabletPage.Settings(SettingSection.Plans)))
+        display(devices.copy(page = TabletPage.Settings(SettingSection.Plans)))
         capture("04-05-roadmap")
+        compose.onNodeWithText("手机布局", substring = false).performScrollTo().assertIsDisplayed()
+        capture("04-05-roadmap-more")
         display(initial.copy(page = TabletPage.Removed(computer.name), computers = emptyList()))
         capture("04-06-removed")
         compose.onNodeWithText("输入配对码").performClick()
@@ -535,7 +634,7 @@ class TabletUiTest {
         compose.onNodeWithText("取消").performClick()
         display(lists.copy(appearance = Appearance.Dark))
         capture("05-04-dark-home")
-        display(detail().copy(appearance = Appearance.Dark))
+        display(detail(provider = local.providers.first().copy(interrupt = false)).copy(appearance = Appearance.Dark))
         compose.onNodeWithContentDescription("变更").performClick()
         capture("05-05-dark-conv")
     }
@@ -552,7 +651,7 @@ class TabletUiTest {
         }
         assertTrue("Emulator did not commit the frame for $name", frame.await(5, TimeUnit.SECONDS))
         // A committed frame may still be waiting for the display compositor.
-        SystemClock.sleep(200)
+        SystemClock.sleep(300)
         val directory = requireNotNull(instrumentation.targetContext.getExternalFilesDir("t1a-shots"))
         val image = requireNotNull(instrumentation.uiAutomation.takeScreenshot())
         try {

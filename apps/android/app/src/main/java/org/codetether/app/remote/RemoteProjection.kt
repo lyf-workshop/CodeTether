@@ -56,8 +56,9 @@ internal fun JSONObject.machine(detail: JSONObject? = null): RemoteMachine {
 private fun JSONObject.provider(canExecute: Boolean): RemoteProvider {
     val capabilities = obj("capabilities")
     val availability = text("availability")
+    val executionHealth = optJSONObject("executionHealth")
     val executable = canExecute && availability == "available" &&
-        optJSONObject("executionHealth")?.optionalText("state") != "unavailable"
+        executionHealth?.optionalText("state") != "unavailable"
     return RemoteProvider(
         id = text("provider"),
         displayName = text("displayName"),
@@ -71,6 +72,7 @@ private fun JSONObject.provider(canExecute: Boolean): RemoteProvider {
         approvals = capabilities.flag("approvals"),
         interrupt = capabilities.flag("interrupt"),
         diff = capabilities.flag("diff"),
+        requiresSignIn = executionHealth?.optJSONObject("failure")?.optionalText("category") == "authentication",
     )
 }
 

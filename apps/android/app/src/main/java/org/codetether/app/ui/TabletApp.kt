@@ -157,6 +157,7 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
     BoxWithConstraints(modifier) {
         val landscape = maxWidth >= 900.dp && maxWidth > maxHeight
         val removedHome = state.page is TabletPage.Removed
+        val settingsDetail = state.page is TabletPage.Settings && state.page != TabletPage.Settings()
         val sidebarOpen = if (landscape) wideSidebarOpen else narrowSidebarOpen
         fun setSidebar(open: Boolean) {
             if (landscape) wideSidebarOpen = open else narrowSidebarOpen = open
@@ -169,12 +170,13 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             if (!landscape) setSidebar(false)
             actions.navigate(page)
         }
+        fun openPair() { sheet = Sheet.Pair }
         fun dismiss() {
             when {
                 sheet != null -> sheet = null
                 changesPanel.open -> changesPanel.open = false
                 sidebarOpen && !landscape -> setSidebar(false)
-                state.page == TabletPage.Settings(SettingSection.Connection) -> go(TabletPage.Settings())
+                settingsDetail -> go(TabletPage.Settings())
                 state.page != TabletPage.Home -> go(TabletPage.Home)
             }
         }
@@ -222,7 +224,7 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
                         Header(
                             state = state,
                             toggleSidebar = { setSidebar(!sidebarOpen) },
-                            connectionSidebarToggle = !landscape || !sidebarOpen,
+                            settingsSidebarToggle = !landscape || !sidebarOpen,
                             backToSettings = { go(TabletPage.Settings()) },
                             newConversation = { sheet = Sheet.Create },
                             changes = if (allowChanges) ({
@@ -246,15 +248,15 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
                     when (val page = state.page) {
                         TabletPage.Home -> HomePage(state, ::go)
                         is TabletPage.Removed -> RemovedHomePage(page.computerName,
-                            openPair = { sheet = Sheet.Pair }, seeComputers = { go(TabletPage.Devices) })
+                            openPair = ::openPair, seeComputers = { go(TabletPage.Devices) })
                         TabletPage.Inbox -> InboxPage(state, actions, ::go)
-                        TabletPage.Devices -> DevicesPage(state, ::go)
+                        TabletPage.Devices -> DevicesPage(state, ::go, ::openPair)
                         is TabletPage.Device -> DevicePage(state, page, ::go)
                         is TabletPage.Project -> ProjectPage(state, page, actions, ::go)
                         is TabletPage.Conversation -> conversationDrafts.SaveableStateProvider(
                             listOf(page.computerId, page.target.machineId, page.target.projectId, page.target.conversationId).joinToString("/"),
                         ) { ConversationPage(state, page, actions) }
-                        is TabletPage.Settings -> SettingsPage(state, page, actions, ::go)
+                        is TabletPage.Settings -> SettingsPage(state, page, actions, ::go, ::openPair)
                         else -> Unit
                     }
                 }
@@ -278,7 +280,9 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             }
         }
         when (sheet) {
-            Sheet.Pair -> RemovedPairSheet(state, actions, onDismiss = { sheet = null }, onConnected = { go(TabletPage.Home) })
+            Sheet.Pair -> PairCodeSheet(state, actions, onDismiss = { sheet = null }, onConnected = {
+                go(if (removedHome) TabletPage.Home else state.page)
+            })
             Sheet.Search -> SearchSheet(state, onDismiss = { sheet = null }) { computer, row ->
                 go(TabletPage.Conversation(computer, row.target))
             }
@@ -302,15 +306,16 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
 private fun Header(
     state: TabletState,
     toggleSidebar: () -> Unit,
-    connectionSidebarToggle: Boolean,
+    settingsSidebarToggle: Boolean,
     backToSettings: () -> Unit,
     newConversation: () -> Unit,
     changes: (() -> Unit)?,
     archive: (() -> Unit)?,
 ) {
     val page = state.page
-    if (page == TabletPage.Settings(SettingSection.Connection)) {
-        ConnectionCheckHeader(connectionSidebarToggle, toggleSidebar, backToSettings)
+    if (page is TabletPage.Settings && page != TabletPage.Settings()) {
+        SettingsBackHeader(settingsSidebarToggle, toggleSidebar, backToSettings,
+            if (page.section == SettingSection.Plans) "roadmap-settings-back" else "connection-settings-back")
         return
     }
     var menuOpen by remember(page) { mutableStateOf(false) }
@@ -342,11 +347,28 @@ private fun Header(
                     })
                 }
             }
-        } else if (state.computers.any { it.workspace?.canControl == true && it.connection != null }) {
+        } else if (state.canShowNewConversation()) {
             InkButton("＋ 新建会话", enabled = !state.busy, onClick = newConversation)
         }
     }
     Rule()
+}
+
+private fun TabletState.canShowNewConversation(): Boolean {
+    fun canControl(entry: ComputerView?) = entry?.connection != null && entry.workspace?.canControl == true
+    fun canUseMachine(computerId: String, machineId: String): Boolean =
+        canControl(computer(computerId)) && machine(computerId, machineId)?.let {
+            it.available && (it.isLocal || it.status == "online")
+        } == true
+    return when (val current = page) {
+        TabletPage.Home -> computers.any(::canControl)
+        is TabletPage.Project -> canUseMachine(current.computerId, current.project.machineId) &&
+            computer(current.computerId)?.workspace?.projects?.any {
+                it.id == current.project.id && it.machineId == current.project.machineId && it.available
+            } == true
+        is TabletPage.Device -> canUseMachine(current.computerId, current.machineId)
+        else -> false
+    }
 }
 
 internal fun providerLabel(id: String): String = when (id) {

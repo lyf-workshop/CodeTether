@@ -42,10 +42,13 @@ test('Relay safe errors use the same local-controller noun and preserve trust wa
   )
 })
 
-test('device detail grid uses one named central token with identical columns and breakpoint', async () => {
-  const [globals, detail] = await Promise.all([
+test('computer detail presents four sections in order with responsive project cards', async () => {
+  const [projects, detail] = await Promise.all([
     readFile(
-      new URL('../../../packages/ui/src/styles/globals.css', import.meta.url),
+      new URL(
+        '../src/components/machines/machine-projects-section.tsx',
+        import.meta.url,
+      ),
       'utf8',
     ),
     readFile(
@@ -56,19 +59,16 @@ test('device detail grid uses one named central token with identical columns and
       'utf8',
     ),
   ])
-  assert.equal(
-    (globals.match(/--layout-device-detail-columns:/gu) ?? []).length,
-    1,
-  )
-  assert.match(
-    globals,
-    /--layout-device-detail-columns: minmax\(0, 1\.65fr\) minmax\(17\.5rem, 1fr\);/u,
-  )
-  assert.ok(
-    detail.includes(
-      'expanded-workspace:grid-cols-[var(--layout-device-detail-columns)]',
-    ),
-  )
-  assert.ok(!detail.includes('minmax(0,1.65fr)_minmax(17.5rem,1fr)'))
+  assert.match(detail, /className="min-w-0 space-y-9"/u)
+  const sections = [
+    '<MachineProjectsSection',
+    '<MachineConversationsSection',
+    '<MachineProvidersSection',
+    '<MachineConnectionSection',
+  ]
+  const positions = sections.map((section) => detail.indexOf(section))
+  assert.ok(positions.every((position) => position >= 0))
+  assert.deepEqual(positions, [...positions].sort((a, b) => a - b))
+  assert.match(projects, /sm:grid-cols-2 desktop:grid-cols-3/u)
   assert.doesNotMatch(detail, /style=\{/u)
 })

@@ -7,10 +7,7 @@ import {
   nextProjectCreationStep,
   projectCreationMachines,
 } from '../.tmp/test-dist/components/projects/add-project-model.js'
-import {
-  fixedProjectCreationMachineExplanation,
-  selectFixedProjectCreationMachine,
-} from '../.tmp/test-dist/components/projects/project-creation-machine.js'
+import { selectFixedProjectCreationMachine } from '../.tmp/test-dist/components/projects/project-creation-machine.js'
 
 const local = machine('machine_local01', 'local')
 const remote = machine('machine_remote01', 'remote')
@@ -27,15 +24,15 @@ test('device choices show this computer first without removing unavailable devic
   assert.equal(original[0], offline)
 })
 
-test('initial selection prefers the eligible local device and then an eligible paired device', () => {
+test('initial selection prefers a project-accessible local device even without provider execution', () => {
   assert.equal(chooseInitialProjectMachineId([remote, local]), local.machineId)
-  const unavailableLocal = {
+  const noExecutionLocal = {
     ...local,
     capabilities: { ...local.capabilities, providerExecution: false },
   }
   assert.equal(
-    chooseInitialProjectMachineId([unavailableLocal, remote]),
-    remote.machineId,
+    chooseInitialProjectMachineId([noExecutionLocal, remote]),
+    local.machineId,
   )
   assert.equal(chooseInitialProjectMachineId([]), undefined)
 })
@@ -61,7 +58,7 @@ test('an explicit missing, offline or incompatible device never falls back to an
   }
 })
 
-test('adding a project requires real project access and execution capabilities separately', () => {
+test('adding a project requires project access but allows unavailable provider execution', () => {
   const noAccess = {
     ...remote,
     capabilities: { ...remote.capabilities, projectAccess: false },
@@ -76,11 +73,7 @@ test('adding a project requires real project access and execution capabilities s
   )
   assert.equal(
     selectFixedProjectCreationMachine([noExecution], remote.machineId).state,
-    'execution_unavailable',
-  )
-  assert.match(
-    fixedProjectCreationMachineExplanation('execution_unavailable'),
-    /不能运行 AI 工具/u,
+    'ready',
   )
 })
 
@@ -107,9 +100,13 @@ test('a local project uses only the canonical local creation action', async () =
   assert.equal(response.data.created, true)
 })
 
-test('a paired project uses only the exact remote creation action and complete input path', async () => {
+test('a paired project without provider execution uses the exact remote creation action', async () => {
   const calls = []
-  await createProjectForMachine(actions(calls), remote, {
+  const remoteWithoutExecution = {
+    ...remote,
+    capabilities: { ...remote.capabilities, providerExecution: false },
+  }
+  await createProjectForMachine(actions(calls), remoteWithoutExecution, {
     path: '/home/test/有 空格',
   })
   assert.deepEqual(calls, [

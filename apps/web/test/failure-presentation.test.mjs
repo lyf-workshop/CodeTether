@@ -142,7 +142,7 @@ test('canonical failure cards cover required user-facing categories without pars
     ['reconnecting', '正在重新连接'],
     ['relay_channel_open_failed', 'Internet Relay 通道无法建立'],
     ['relay_channel_lost', 'Internet Relay 执行通道已中断'],
-    ['relay_peer_offline', '远程 Node 未连接到 Internet Relay'],
+    ['relay_peer_offline', '远程电脑未连接到 Internet Relay'],
     ['relay_transport_capacity_reached', 'Internet Relay 执行通道已满'],
     ['relay_protocol_error', 'Internet Relay 执行协议异常'],
     ['execution_capacity_reached', '执行容量已满'],
@@ -270,11 +270,11 @@ test('Relay execution failures use controlled copy and never trust transport dia
   const cases = [
     [
       'relay_channel_open_failed',
-      '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
+      '请等待 Relay 与远程电脑恢复后，再开始新的请求。',
     ],
-    ['relay_peer_offline', '请等待 Node 重新连接；会话历史仍可查看。'],
+    ['relay_peer_offline', '请等待远程电脑重新连接；会话历史仍可查看。'],
     ['relay_transport_capacity_reached', '请等待其他远程任务结束后再试。'],
-    ['relay_protocol_error', '请检查 Relay、Desktop 与 Node 版本后再试。'],
+    ['relay_protocol_error', '请检查 Relay、桌面应用与远程服务版本后再试。'],
   ]
 
   for (const [reason, guidance] of cases) {
@@ -381,7 +381,7 @@ test('Relay failure ordinary copy uses device nouns while technical facts stay e
     ['relay_authentication_failed', '请在设备详情中检查注册状态'],
     ['relay_revoked', '设备信任未被修改'],
     ['relay_channel_open_failed', '这台受信任的设备建立执行通道'],
-    ['relay_peer_offline', '这台受信任设备的 Node'],
+    ['relay_peer_offline', '这台受信任的电脑'],
     ['relay_transport_capacity_reached', 'Relay 设备通道已达到有界容量'],
     ['relay_protocol_error', 'Relay 设备通道数据'],
   ]) {

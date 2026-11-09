@@ -227,7 +227,7 @@ for (const platform of ['linux', 'macos']) {
       assert.match(html, /aria-label="复制一次性配对命令"/u)
       assert.match(html, /aria-label="复制恢复后台服务命令"/u)
       assert.match(html, /原服务实际使用的同一目录/u)
-      assert.match(html, /Windows 暂时不能作为配对设备/u)
+      assert.match(html, /Windows 暂时不能作为被配对电脑/u)
       assert.doesNotMatch(
         html,
         /service install|\.bashrc|\.zshrc|--bind 0\.0\.0\.0/u,

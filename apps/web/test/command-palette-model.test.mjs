@@ -104,6 +104,10 @@ test('device group is local-first while cached input and records remain untouche
     devices.entries.map((entry) => entry.target.machineId),
     [localId, remoteId],
   )
+  assert.deepEqual(
+    devices.entries.map((entry) => entry.description),
+    ['Windows · x64 · 在线', 'Linux · x64 · 在线'],
+  )
   assert.equal(data.machines[0].machineId, remoteId)
 })
 
@@ -258,6 +262,8 @@ function machine(machineId, displayName) {
     machineId,
     kind: machineId === localId ? 'local' : 'remote',
     connectionState: machineId === localId ? 'local' : 'online',
+    platform: machineId === localId ? 'windows' : 'linux',
+    architecture: 'x64',
     displayName: displayName ?? (machineId === localId ? '本机' : '构建节点'),
   }
 }

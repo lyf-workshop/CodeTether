@@ -20,6 +20,7 @@ export function metadataUiFixture({
     candidates,
     projectsFailed: false,
     projectsUnknown: false,
+    machineDetailsFailed: false,
     mutationError: undefined,
   }
   const reads = [],
@@ -46,7 +47,7 @@ export function metadataUiFixture({
     },
     getMachine: async (id) => {
       requests.push(['detail', id])
-      throw new Error('Unexpected per-device detail read')
+      return machineDetail(id)
     },
     createProject: async (...args) => {
       requests.push(['create-local', ...args])
@@ -104,7 +105,13 @@ export function metadataUiFixture({
         useQuery: (options) => {
           reads.push(options)
           const [, kind, scope] = options.queryKey
-          if (kind === 'machines') return result(state.machines)
+          if (kind === 'machines')
+            return result(
+              scope === 'detail'
+                ? machineDetail(options.queryKey[3])
+                : state.machines,
+              scope === 'detail' && state.machineDetailsFailed,
+            )
           if (kind === 'projects')
             return result(
               state.projectsUnknown ? undefined : state.projects,
@@ -186,6 +193,22 @@ export function metadataUiFixture({
     ['../../runtime/account/supabase-account.js', {}],
     ['../../runtime/native/native-capabilities.js', {}],
   ])
+  function machineDetail(id) {
+    const machine = state.machines.find(
+      (candidate) => candidate.machineId === id,
+    )
+    if (machine === undefined) return undefined
+    return {
+      machine,
+      providers: machine.providers ?? [],
+      providerLifecycles: machine.providerLifecycles ?? [],
+      providerDiscovery: machine.providerDiscovery,
+      projects: state.projects,
+      conversations: state.conversations.filter(
+        (conversation) => conversation.machineId === id,
+      ),
+    }
+  }
   return {
     state,
     runtime,

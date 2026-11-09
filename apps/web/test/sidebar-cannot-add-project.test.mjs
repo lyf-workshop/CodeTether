@@ -10,7 +10,7 @@ const machine = {
   availability: 'available',
   capabilities: { projectAccess: true, providerExecution: true },
 }
-const reason = '设备恢复在线并可以运行 AI 工具后，即可添加项目。'
+const reason = '电脑恢复在线并允许访问项目文件夹后，即可添加项目。'
 
 function renderDevice(value) {
   const fixture = metadataUiFixture({ machines: [value] })
@@ -38,15 +38,11 @@ function renderDevice(value) {
   }
 }
 
-test('online devices explain each missing add-project capability in both sidebar and device page', () => {
+test('online computers require project access and availability to add a project', () => {
   for (const unavailable of [
     {
       ...machine,
       capabilities: { ...machine.capabilities, projectAccess: false },
-    },
-    {
-      ...machine,
-      capabilities: { ...machine.capabilities, providerExecution: false },
     },
     { ...machine, availability: 'unavailable' },
   ]) {
@@ -58,6 +54,16 @@ test('online devices explain each missing add-project capability in both sidebar
     assert.doesNotMatch(page, /data-slot="add-project-card"/u)
     assert.equal(fixture.requests.length, 0)
   }
+})
+
+test('project access allows registration even when an AI tool cannot run yet', () => {
+  const withoutExecution = {
+    ...machine,
+    capabilities: { ...machine.capabilities, providerExecution: false },
+  }
+  const { sidebar, page } = renderDevice(withoutExecution)
+  assert.match(sidebar, /aria-label="在 测试设备 上添加项目"/u)
+  assert.doesNotMatch(page, /电脑恢复在线并允许访问项目文件夹后/u)
 })
 
 test('capable devices retain the add action without a cannot-add warning', () => {

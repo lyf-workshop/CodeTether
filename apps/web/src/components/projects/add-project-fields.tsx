@@ -135,7 +135,7 @@ export function AddProjectFields({
           id="add-project-machine-description"
           className="text-xs text-text-muted"
         >
-          离线的设备恢复在线后才能添加项目；设备也需要能够运行 AI 工具。
+          离线的电脑恢复在线后才能添加项目；电脑需要允许访问项目文件夹。
         </p>
       </div>
 

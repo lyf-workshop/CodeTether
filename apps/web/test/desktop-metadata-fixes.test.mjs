@@ -56,7 +56,7 @@ const conversation = {
   lastActivityAt: at,
 }
 
-test('device overview reads one project index and zero per-machine details, preserving exact location cards', async () => {
+test('computer overview reads one project index and bounded per-card Provider status', async () => {
   const f = metadataUiFixture({
     machines: [remote, local],
     projects: [project],
@@ -70,12 +70,17 @@ test('device overview reads one project index and zero per-machine details, pres
   )
   assert.equal(index.length, 1)
   await index[0].queryFn({ signal: undefined })
+  const detail = f.reads.filter(
+    (read) => read.enabled && read.queryKey[2] === 'detail',
+  )
+  assert.equal(detail.length, 2)
+  for (const read of detail) await read.queryFn({ signal: undefined })
   assert.equal(f.requests.filter(([kind]) => kind === 'projects').length, 1)
-  assert.equal(f.requests.filter(([kind]) => kind === 'detail').length, 0)
+  assert.equal(f.requests.filter(([kind]) => kind === 'detail').length, 2)
   assert.ok(html.indexOf('这台电脑') < html.indexOf('远程服务器'))
-  assert.ok(html.includes('D:\\共享项目'))
-  assert.ok(html.includes('/home/test/共享项目'))
-  assert.match(html, /Node 配对/u)
+  assert.equal((html.match(/1 个项目/gu) ?? []).length, 2)
+  assert.match(html, /Windows · x64 · 在线/u)
+  assert.match(html, /Linux · x64 · 在线/u)
   assert.doesNotMatch(html, /通过 Relay|局域网直连/u)
 })
 

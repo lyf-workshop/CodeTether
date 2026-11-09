@@ -368,9 +368,12 @@ for (const movedFocus of [false, true]) {
   )
 }
 
-test('real composer preserves session draft after rejected submission without replay', async () => {
+test('real composer saves a rejected submission as a local draft without replay', async () => {
   const dom = await createDom()
   const { Composer } = loadWebComponent('components/conversation/composer.tsx')
+  const { conversationDrafts } = loadWebComponent(
+    'components/conversation/conversation-drafts.ts',
+  )
   let calls = 0
   try {
     await dom.render(
@@ -400,12 +403,16 @@ test('real composer preserves session draft after rejected submission without re
     assert.equal(editor.value, 'synthetic retained draft')
     assert.match(dom.container.textContent, /项目状态已经变化/u)
     assert.equal(
-      dom.window.sessionStorage.getItem(
-        'codetether.conversation-draft.conv_rejected',
-      ),
+      conversationDrafts.read('conv_rejected'),
+      'synthetic retained draft',
+    )
+    await new Promise((resolve) => setTimeout(resolve, 550))
+    assert.equal(
+      dom.window.localStorage.getItem('composer-draft-conv_rejected'),
       'synthetic retained draft',
     )
   } finally {
+    conversationDrafts.clear('conv_rejected')
     await dom.close()
   }
 })

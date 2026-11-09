@@ -50,6 +50,7 @@ import {
 interface ProjectConversationCollectionProps {
   projectId: ProjectId
   machineId: MachineId
+  machineName?: string
   projectName: string
   search: ProjectWorkspaceSearch
   searchPage: boolean
@@ -69,6 +70,7 @@ const statusOptions: readonly {
 export function ProjectConversationCollection({
   projectId,
   machineId,
+  machineName,
   projectName,
   search,
   searchPage,
@@ -284,6 +286,7 @@ export function ProjectConversationCollection({
               ) : null}
               <ConversationSearchResults
                 archiveView={archiveView}
+                machineName={machineName}
                 results={results}
                 hasNextPage={durableSearchQuery.hasNextPage === true}
                 isFetchingNextPage={durableSearchQuery.isFetchingNextPage}
@@ -337,6 +340,7 @@ export function ProjectConversationCollection({
           {conversations.length > 0 ? (
             <ConversationRows
               archiveView={archiveView}
+              machineName={machineName}
               conversations={conversations}
             />
           ) : (

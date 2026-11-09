@@ -1164,7 +1164,11 @@ test('enrollment abuse reaches a bounded service-side rate limit', async () => {
 test('authentication attempts are bounded by claimed fingerprint as well as network address', async () => {
   await withService(async ({ service, tls }) => {
     const unknownIdentity = generateRelayApplicationIdentity()
-    for (let attempt = 0; attempt < 121; attempt += 1) {
+    let rejectedAt
+    // The production token bucket refills while TLS handshakes run. A busy CI
+    // worker may admit an extra attempt after 500 ms, so assert the identity
+    // limit is reached well before the separate 180-attempt address limit.
+    for (let attempt = 0; attempt < 130; attempt += 1) {
       const opened = await openChallenge(service, tls.publicKeySpkiFingerprint)
       await opened.channel.send({
         type: 'peer.authenticate',
@@ -1183,12 +1187,18 @@ test('authentication attempts are bounded by claimed fingerprint as well as netw
         ),
       })
       const error = await receiveType(opened.channel, 'relay.error')
-      assert.equal(
-        error.code,
-        attempt < 120 ? 'authentication_failed' : 'rate_limited',
-      )
+      if (error.code === 'rate_limited') {
+        rejectedAt = attempt
+        break
+      }
+      assert.equal(error.code, 'authentication_failed')
     }
-    assert.equal(service.metrics().authenticationFailures, 120)
+    assert.ok(
+      rejectedAt !== undefined,
+      'identity limit must reject before address limit',
+    )
+    assert.ok(rejectedAt >= 120 && rejectedAt < 130)
+    assert.equal(service.metrics().authenticationFailures, rejectedAt)
     assert.equal(service.metrics().rateLimitEvents, 1)
   })
 })

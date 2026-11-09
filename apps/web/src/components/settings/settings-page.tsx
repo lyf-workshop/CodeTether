@@ -2,6 +2,7 @@ import { Link, useLocation, useSearch } from '@tanstack/react-router'
 import { Bell, CircleUserRound, Info, Power, Sun } from 'lucide-react'
 
 import { cn } from '@codetether/ui'
+import { useDesktopUpdateState } from '../../runtime/native/use-desktop-update-state'
 import { AboutSettings } from './about-settings'
 import { AccountSettings } from './account-settings'
 import { AppearanceSettings } from './appearance-settings'
@@ -32,6 +33,10 @@ export function SettingsPage({
   section?: SettingsSection
 }) {
   const search = parseSettingsSearch(useSearch({ strict: false }))
+  const updateQuery = useDesktopUpdateState()
+  const updateReady =
+    updateQuery.data?.status === 'available' ||
+    updateQuery.data?.status === 'downloaded'
   return (
     <div className="mx-auto grid w-full min-w-0 max-w-(--layout-settings-width) grid-cols-[var(--layout-settings-navigation-width)_minmax(0,1fr)] gap-[var(--s10)] px-8 pt-6 pb-12 compact-workspace:grid-cols-[var(--layout-settings-navigation-compact-width)_minmax(0,1fr)] compact-workspace:gap-6 phone:grid-cols-1 phone:px-4 phone:pt-4 phone:pb-8">
       <div>
@@ -53,6 +58,15 @@ export function SettingsPage({
             >
               <Icon aria-hidden="true" className="size-4" />
               {label}
+              {id === 'about' && updateReady ? (
+                <>
+                  <span
+                    className="size-2 rounded-full bg-primary-action"
+                    aria-hidden="true"
+                  />
+                  <span className="sr-only">有可安装的更新</span>
+                </>
+              ) : null}
             </Link>
           ))}
         </nav>
@@ -75,6 +89,15 @@ export function SettingsPage({
               )}
             >
               {shortLabel}
+              {id === 'about' && updateReady ? (
+                <>
+                  <span
+                    className="ml-1 inline-block size-2 rounded-full bg-primary-action"
+                    aria-hidden="true"
+                  />
+                  <span className="sr-only">有可安装的更新</span>
+                </>
+              ) : null}
             </Link>
           ))}
         </nav>
@@ -89,7 +112,11 @@ export function SettingsPage({
         ) : section === 'background' ? (
           <BackgroundSettings />
         ) : (
-          <AboutSettings />
+          <AboutSettings
+            updateSnapshot={updateQuery.data}
+            updateReadFailed={updateQuery.isError}
+            refreshUpdateState={() => void updateQuery.refetch()}
+          />
         )}
       </div>
     </div>

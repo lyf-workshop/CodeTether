@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-desktop-update"
+description = "Allows the main CodeTether window to read update state and request the fixed signed update flow."
+commands.allow = ["update_state", "update_check", "update_download", "update_install"]

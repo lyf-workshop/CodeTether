@@ -2,15 +2,25 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { RefreshCw } from 'lucide-react'
 
-import { Button, CodeTetherMark, Notice, SettingsRow } from '@codetether/ui'
+import { Button, Notice, SettingsRow } from '@codetether/ui'
 import {
   useHostConnectionState,
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
+import type { DesktopUpdateSnapshot } from '../../runtime/native/native-capabilities'
 import { DoctorPage } from '../doctor'
+import { DesktopUpdateSettings } from './desktop-update-settings'
 
-export function AboutSettings() {
+export function AboutSettings({
+  updateSnapshot,
+  updateReadFailed = false,
+  refreshUpdateState = () => undefined,
+}: {
+  updateSnapshot?: DesktopUpdateSnapshot
+  updateReadFailed?: boolean
+  refreshUpdateState?: () => void
+}) {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const navigate = useNavigate()
@@ -31,14 +41,14 @@ export function AboutSettings() {
     <>
       <h2 className="mb-5 text-xl font-semibold">关于与检查</h2>
       <div className="mb-6 overflow-hidden rounded-lg border border-border bg-surface">
+        <DesktopUpdateSettings
+          snapshot={updateSnapshot}
+          readFailed={updateReadFailed}
+          refresh={refreshUpdateState}
+        />
         <SettingsRow
-          title={
-            <span className="flex items-center gap-3">
-              <CodeTetherMark className="size-11 rounded-xl [&_svg]:size-6" />
-              CodeTether
-            </span>
-          }
-          description="简体中文 · 本机和配对设备的 AI 编程工作区"
+          title="重新运行设置"
+          description="需要重新检查本机配置或添加项目时，可以重新打开引导。"
           control={
             <Button
               variant="secondary"

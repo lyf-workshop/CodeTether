@@ -3,10 +3,11 @@ import type {
   ProductDeviceIdentityCapability,
   ProductDeviceKeyDescription,
 } from '../native/native-capabilities.js'
+import { productVersion } from '../product-version.js'
 
 const DEVICE_PROOF_HEADER = 'x-codetether-device-proof'
 const EMPTY_BODY_DIGEST = 'sha256:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU'
-const PRODUCT_VERSION = '0.1.0-alpha.0'
+const PRODUCT_VERSION = productVersion
 const REGISTRATION_HEADER = {
   alg: 'ES256',
   typ: 'codetether-device-registration+jws',

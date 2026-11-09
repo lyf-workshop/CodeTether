@@ -8,6 +8,10 @@ const BROWSER_DEVELOPMENT_ORIGINS = [
 ] as const
 
 declare const __CODETETHER_HOST_VERSION__: string | undefined
+declare const __CODETETHER_PRODUCT_VERSION__: string | undefined
+
+const PRODUCT_VERSION_PATTERN =
+  /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u
 
 export interface ServeArguments {
   readonly workspaces: readonly string[]
@@ -19,6 +23,45 @@ export interface HostVersionOptions {
   readonly env?: NodeJS.ProcessEnv
   readonly packageJsonUrl?: URL
   readonly injectedVersion?: string
+}
+
+export interface ProductVersionOptions {
+  readonly packageJsonUrl?: URL
+  readonly injectedVersion?: string
+}
+
+/** The desktop bundle embeds the root package version; source runs read it. */
+export async function resolveProductVersion(
+  options: ProductVersionOptions = {},
+): Promise<string> {
+  const bundledVersion =
+    typeof __CODETETHER_PRODUCT_VERSION__ === 'string'
+      ? __CODETETHER_PRODUCT_VERSION__
+      : undefined
+  const configured = options.injectedVersion ?? bundledVersion
+  if (configured !== undefined) return validateProductVersion(configured)
+
+  const text = await readFile(
+    options.packageJsonUrl ?? new URL('../../../package.json', import.meta.url),
+    'utf8',
+  )
+  const value = JSON.parse(text) as unknown
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    !('version' in value) ||
+    typeof value.version !== 'string'
+  ) {
+    throw new Error('Root package version is invalid')
+  }
+  return validateProductVersion(value.version)
+}
+
+function validateProductVersion(value: string): string {
+  if (!PRODUCT_VERSION_PATTERN.test(value)) {
+    throw new Error('Host product version must be a semantic version')
+  }
+  return value
 }
 
 export function isDesktopManaged(

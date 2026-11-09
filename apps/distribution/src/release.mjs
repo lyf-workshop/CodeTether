@@ -3,12 +3,12 @@ import { createReadStream } from 'node:fs'
 import { lstat, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { buildIdentity } from './identity.mjs'
+import { buildIdentity, validProductVersion } from './identity.mjs'
 
 const platforms = ['windows', 'macos', 'linux']
 const architectures = ['x64', 'arm64']
 const components = ['desktop', 'node']
-const types = ['exe', 'dmg', 'tar.gz', 'deb', 'AppImage']
+const types = ['exe', 'dmg', 'tar.gz', 'app.tar.gz', 'deb', 'AppImage']
 const signing = ['signed', 'unsigned', 'ad-hoc', 'notarized', 'not-observed']
 
 export function artifactFilename(
@@ -20,11 +20,16 @@ export function artifactFilename(
     !platforms.includes(platform) ||
     !architectures.includes(architecture) ||
     !types.includes(artifactType) ||
-    !/^\d+\.\d+\.\d+(?:-[a-z0-9.]+)?$/u.test(version)
+    !validProductVersion(version)
   )
     throw new Error('Invalid artifact identity')
   if (component === 'node' && artifactType !== 'tar.gz')
     throw new Error('Node distribution requires a portable archive')
+  if (
+    artifactType === 'app.tar.gz' &&
+    (component !== 'desktop' || platform !== 'macos')
+  )
+    throw new Error('Mac Desktop updater requires an app archive')
   if (
     (artifactType === 'exe' && platform !== 'windows') ||
     (artifactType === 'dmg' && platform !== 'macos') ||

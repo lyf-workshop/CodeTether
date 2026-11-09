@@ -10,10 +10,14 @@ import {
   isDesktopManaged,
   parseServeArguments,
   resolveHostVersion,
+  resolveProductVersion,
   resolveRemoteMachineTransportPolicy,
 } from './serve-config.js'
+import { UnsupportedSqliteSchemaMigrationError } from './persistence/migrations.js'
 
-declare const __CODETETHER_PRODUCT_VERSION__: string | undefined
+export const UNSUPPORTED_SCHEMA_EXIT_CODE = 42
+export const UNSUPPORTED_SCHEMA_STDERR =
+  '[codetether:host] UNSUPPORTED_SQLITE_SCHEMA_MIGRATION\n'
 
 async function main(): Promise<void> {
   const startupTimeline = new HostStartupTimeline((phase, elapsedMs) => {
@@ -27,10 +31,7 @@ async function main(): Promise<void> {
       `${JSON.stringify({
         product: 'CodeTether',
         component: 'host',
-        version:
-          typeof __CODETETHER_PRODUCT_VERSION__ === 'string'
-            ? __CODETETHER_PRODUCT_VERSION__
-            : 'development',
+        version: await resolveProductVersion(),
         build: await resolveHostVersion(),
         platform: process.platform,
         architecture: process.arch,
@@ -57,10 +58,12 @@ async function main(): Promise<void> {
       desktopManaged,
     })
     const hostVersion = await resolveHostVersion()
+    const productVersion = await resolveProductVersion()
     host = await startLocalCodexHost({
       allowedWorkspaceRoots: arguments_.workspaces,
       allowedOrigins: arguments_.origins,
       hostVersion,
+      productVersion,
       startupTimeline,
       port: arguments_.port,
       desktopManaged,
@@ -105,6 +108,11 @@ async function main(): Promise<void> {
 }
 
 await main().catch((error: unknown) => {
+  if (error instanceof UnsupportedSqliteSchemaMigrationError) {
+    process.stderr.write(UNSUPPORTED_SCHEMA_STDERR)
+    process.exitCode = UNSUPPORTED_SCHEMA_EXIT_CODE
+    return
+  }
   const message = error instanceof Error ? error.message : String(error)
   process.stderr.write(`[codetether:host] ${message}\n`)
   process.exitCode = 1

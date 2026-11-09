@@ -101,7 +101,15 @@ import {
   normalizeConversationSearchText,
   type ConversationSearchCursorContext,
 } from './conversation-search.js'
-import { currentSchemaVersion, migrateDatabase } from './migrations.js'
+import {
+  currentSchemaVersion,
+  migrateDatabase,
+  UnsupportedSqliteSchemaMigrationError,
+} from './migrations.js'
+import {
+  prepareProductVersionBackup,
+  type ProductVersionBackupHooksForTests,
+} from './product-version-backup.js'
 
 const DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
@@ -551,6 +559,9 @@ export interface CreateDurableTurnForStartAction {
 export interface ConversationStoreOptions extends DataDirectoryOptions {
   readonly busyTimeoutMs?: number
   readonly databasePath?: string
+  /** Present for the runnable Host; test stores may omit version tracking. */
+  readonly productVersion?: string
+  readonly productVersionBackupHooksForTests?: ProductVersionBackupHooksForTests
 }
 
 export class ConversationStore {
@@ -581,6 +592,14 @@ export class ConversationStore {
     }
 
     mkdirSync(dirname(databasePath), { recursive: true })
+    const productVersionBackup =
+      options.productVersion === undefined
+        ? undefined
+        : prepareProductVersionBackup(
+            databasePath,
+            options.productVersion,
+            options.productVersionBackupHooksForTests,
+          )
     let database: DatabaseSync | undefined
     try {
       database = new DatabaseSync(databasePath)
@@ -599,12 +618,21 @@ export class ConversationStore {
       )
       migrateDatabase(database)
       assertDatabaseIntegrity(database)
+      productVersionBackup?.complete()
       return new ConversationStore(database, databasePath)
     } catch (error) {
       try {
         database?.close()
       } catch {
         // Preserve the open, configuration, migration, or integrity failure.
+      }
+      if (error instanceof UnsupportedSqliteSchemaMigrationError) {
+        try {
+          productVersionBackup?.discard()
+        } catch {
+          // Keep the dedicated newer-schema exit classification even if this
+          // attempt's redundant copy cannot be removed.
+        }
       }
       throw error
     }

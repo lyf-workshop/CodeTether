@@ -174,6 +174,44 @@ Desktop does not create a second persistence boundary. The sidecar uses the exis
 
 An absolute `CODETETHER_DATA_DIR` is inherited for isolated development and smoke tests. Do not point it at the CodeTether repository.
 
+## Desktop Updates and Database Recovery
+
+Settings › 关于与检查 checks the `alpha` update channel. An ordinary `pnpm desktop:build` has no updater settings; a release build embeds the public update address and verification key only when all four release variables below are present. The updater downloads a signed Windows NSIS installer or macOS app archive. It waits for every local `running` or `waiting` conversation to finish before closing the owned Host and installing. A Turn that starts in the narrow gap before Host shutdown follows the normal `host_restart` recovery path on the next launch.
+
+Before the Host opens an existing database under a different product version, it copies `codetether.sqlite3` and any existing `codetether.sqlite3-wal` and `codetether.sqlite3-shm` files into `backups/<UTC timestamp>-<old version>/` in the same data directory. It keeps the newest three backup directories. `machine-credentials` and other credentials are never copied into those backups.
+
+Versions installed before this feature did not write `host-product-version`, so their first backup is labeled `unversioned`. For a first upgrade from alpha.2, select that backup when restoring alpha.2 data.
+
+If an older CodeTether reports that the local data came from a newer version:
+
+1. Quit CodeTether completely, including its tray process. Confirm `codetether-host` is no longer running before touching the database files.
+2. In the data directory above, find the `backups/<UTC timestamp>-<old version>/` directory made before the upgrade. Copy that backup to a safe location outside the CodeTether data directory first.
+3. Move the current `codetether.sqlite3`, `codetether.sqlite3-wal`, and `codetether.sqlite3-shm` files aside together. Copy the files present in the chosen backup back into the data directory. Do not leave newer `-wal` or `-shm` files beside a restored database.
+4. Start the matching older CodeTether version. Projects and conversations return to the backup's point in time; activity after that backup is not in the restored database. Leave `machine-credentials` and other credential files untouched.
+
+Do not restore by copying only the main SQLite file while a newer WAL file remains. If a backup operation fails, the Host does not open or migrate the existing database; resolve the reported storage problem before starting it again.
+
+The pinned Tauri CLI 2.11.4 NSIS template installs `currentUser` builds in `%LOCALAPPDATA%\CodeTether`. Its normal update writes the bundled executables and resources in place. Its uninstaller names those bundled files individually, then removes the installation directory only if it is empty. The optional “Delete application data” checkbox targets `%APPDATA%\com.codetether.desktop` and `%LOCALAPPDATA%\com.codetether.desktop`; it does not target `%LOCALAPPDATA%\CodeTether`. This source-level review supports preserving the database, backups, and `machine-credentials` during updates, and still needs installed Windows validation. See the [pinned NSIS template](https://github.com/tauri-apps/tauri/blob/tauri-cli-v2.11.4/crates/tauri-bundler/src/bundle/windows/nsis/installer.nsi).
+
+## Signed Alpha Release Files
+
+First set the root product version with `pnpm version:set <semantic-version>` and verify it with `pnpm version:check`. The root `package.json` drives the Desktop package and both local Cargo package versions. Commit the version change before release builds because distribution requires a clean HEAD.
+
+The owner generates and stores the long-lived Tauri update signing key outside this repository. On the native Windows x64 and Apple Silicon macOS build machines, set all four variables below in the process environment. The private key and password must never be placed in source, build logs, or release manifests.
+
+```text
+TAURI_SIGNING_PRIVATE_KEY
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+CODETETHER_UPDATE_BASE_URL=https://codetether.org/updates
+CODETETHER_UPDATE_PUBKEY
+```
+
+Then run `pnpm release:desktop:windows-x64` on Windows and `pnpm release:desktop:macos-arm64` on macOS. The release script generates the normal first-install package, the signed updater payload and its `.sig` file, and one `update-<platform>.json` fragment. `CODETETHER_UPDATE_NOTES` may set a plain-text release note of at most 2000 characters. With none of the four variables, the same command builds only the ordinary installer; a partial set is rejected.
+
+Copy both platform fragments and their versioned payload directories into one `output/release/<commit>/alpha/` staging directory. Run `pnpm release:update-manifest output/release/<commit>/alpha` to combine the available fragments into `latest.json`. One available platform is valid. Publish `latest.json` at `<base>/alpha/latest.json` and the signed payloads at `<base>/alpha/<version>/`. The `.sig` text is embedded in the JSON entry, while the `.sig` file remains alongside the payload for audit. The macOS DMG in the version directory is for manual first installation; `.app.tar.gz` is the updater payload. Do not publish a new `latest.json` until the referenced payloads have been uploaded.
+
+Versions already installed before alpha.3 have no updater and require one manual alpha.3 installation. A full one-click update needs a later alpha.4 release and physical Windows and Mac acceptance checks.
+
 ## Origin and CSP
 
 The fixed business endpoint remains:
@@ -300,7 +338,7 @@ Phase 4G.2 is implemented and its evidence is deliberately classified. Real raw-
 - A running external CodeTether Host is reported rather than adopted.
 - Host crash or a failed resume identity check is visible but never automatically retried.
 - Native decorations are retained; custom Desktop chrome is future polish.
-- Builds/installers are unsigned local Alpha artifacts. Signing, updater, and release channels are not implemented.
+- Ordinary local builds are unsigned and have no updater configuration. Signed updater artifacts require the four release variables; Windows code signing and macOS notarization remain future distribution work.
 - The current application icon is a minimal Alpha asset; final brand artwork is still pending.
 - Notification click activation exists while the Desktop process is running, including hidden-to-tray state. Delivery after explicit Quit, notification history, push, custom sounds, and quiet-hour rules are not implemented.
 - Start with Windows, tray Attention badges/counts, recent-item tray menus, a close-behavior preference, automatic Host restart, and macOS/Linux tray or session-lifecycle validation are not implemented.

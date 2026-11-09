@@ -126,6 +126,7 @@ export interface ConversationHistoryReadModel {
 
 export interface ConversationReadModel {
   readonly id: string
+  readonly machineId: string
   /** Available for hot runtime snapshots only; durable product reads keep paths private. */
   readonly cwd?: string
   readonly title: string
@@ -834,6 +835,7 @@ function projectConversationRecord(
 
   return {
     id: String(record.conversationId),
+    machineId: String(record.machineId),
     ...(record.cwd === undefined ? {} : { cwd: record.cwd }),
     title: record.title ?? titleFromCwd(record.cwd ?? ''),
     titleSource: record.titleSource ?? 'generated',
@@ -865,6 +867,7 @@ function mergeConversationSummary(
 ): ConversationReadModel {
   const next: ConversationReadModel = {
     ...conversation,
+    machineId: String(summary.machineId),
     title: summary.title,
     titleSource: summary.titleSource,
     ...(summary.pinnedAt === undefined ? {} : { pinnedAt: summary.pinnedAt }),
@@ -896,6 +899,7 @@ function sameConversationMetadata(
   right: ConversationReadModel,
 ): boolean {
   return (
+    left.machineId === right.machineId &&
     left.title === right.title &&
     left.titleSource === right.titleSource &&
     left.pinnedAt === right.pinnedAt &&

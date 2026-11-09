@@ -155,6 +155,10 @@ import {
   type ProviderExecutionHealth,
   type RenameConversationRequest,
   type RenameConversationResponse,
+  RefreshConversationModelsResponseSchema,
+  type RefreshConversationModelsResponse,
+  type UpdateConversationModelRequest,
+  type UpdateConversationModelResponse,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type ResolveAttentionRequest,
@@ -3105,6 +3109,265 @@ export class HostService {
     )
   }
 
+  async updateConversationModel(
+    conversationId: ConversationId,
+    request: UpdateConversationModelRequest,
+  ): Promise<UpdateConversationModelResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.updateModel:${id}`,
+      { conversationId: id, request },
+      async () => {
+        const store = this.#requireConversationOrganizationStore()
+        const existing = store.getConversation(id)
+        if (existing === undefined || existing.status === 'creating') {
+          throw new HostServiceError('not_found', 'Conversation was not found', 404)
+        }
+        if (existing.archivedAt !== undefined) {
+          throw archivedConversationControlError()
+        }
+        const hydrated = this.#conversations.get(id)
+        if (
+          existing.status === 'running' ||
+          existing.status === 'waiting' ||
+          hydrated?.startingTurn === true ||
+          hydrated?.record.activeTurnId !== undefined
+        ) {
+          throw new HostServiceError(
+            'conflict',
+            'Wait for the active Turn to finish before changing model settings',
+            409,
+          )
+        }
+        let machine: MachineSummary
+        try {
+          machine = this.#machines.get(existing.machineId)
+          if (
+            machine.availability !== 'available' ||
+            (machine.kind === 'remote' && machine.connectionState !== 'online')
+          ) {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
+        } catch (error) {
+          throw machineServiceError(error)
+        }
+        if (machine.kind === 'remote') {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'Remote model switching is unavailable until Node session control is supported',
+            409,
+          )
+        }
+        let refreshedModels:
+          | Awaited<ReturnType<NonNullable<AgentHostRuntime['refreshAvailableModels']>>>
+          | undefined
+        if (
+          machine.kind === 'local' &&
+          existing.provider === 'codex' &&
+          (request.model !== undefined || request.reasoning !== undefined)
+        ) {
+          const runtime = this.#providers.get('codex')
+          const refresh = runtime?.refreshAvailableModels
+          if (refresh === undefined) {
+            throw new HostServiceError(
+              'operation_not_allowed',
+              'Codex model switching is unavailable',
+              409,
+            )
+          }
+          try {
+            refreshedModels = await refresh.call(runtime)
+          } catch {
+            throw new HostServiceError(
+              'operation_not_allowed',
+              'Codex model list is unavailable',
+              409,
+            )
+          }
+        }
+        const descriptor = this.#providerDescriptorForMachine(
+          existing.machineId,
+          existing.provider,
+        )
+        if (
+          descriptor?.availability !== 'available' ||
+          !this.#machineRuntimeAvailable(existing.machineId, existing.provider)
+        ) {
+          throw providerUnavailableError(existing.provider, descriptor)
+        }
+        if (
+          (request.model !== undefined &&
+            descriptor.capabilities.modelSelection !== true) ||
+          (request.reasoning !== undefined &&
+            descriptor.capabilities.reasoningControl !== true)
+        ) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not support changing this Conversation setting',
+            409,
+          )
+        }
+        const modelIds =
+          refreshedModels?.map((model) => model.id) ??
+          descriptor.availableModels?.map((model) => model.id) ??
+          descriptor.models?.map((model) => model.id)
+        if (request.model !== undefined && modelIds === undefined) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not provide a selectable model list',
+            409,
+          )
+        }
+        if (
+          request.model !== undefined &&
+          !modelIds?.includes(request.model)
+        ) {
+          throw new HostServiceError(
+            'invalid_request',
+            'The selected model is unavailable for this Agent',
+            400,
+          )
+        }
+        const reasoningOptions =
+          existing.provider === 'codex' && machine.kind === 'local'
+            ? refreshedModels?.find(
+                (model) =>
+                  model.id ===
+                  (request.model ?? existing.currentModel ?? existing.model),
+              )?.reasoningOptions
+            : descriptor.reasoningOptions?.map((option) => option.id)
+        const effectiveReasoning =
+          request.reasoning ?? existing.currentReasoning ?? existing.reasoning
+        if (request.reasoning !== undefined && reasoningOptions === undefined) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not provide reasoning options for the selected model',
+            409,
+          )
+        }
+        const incompatibleReasoning =
+          effectiveReasoning !== undefined &&
+          (request.reasoning !== undefined || request.model !== undefined) &&
+          reasoningOptions !== undefined &&
+          !reasoningOptions.includes(effectiveReasoning)
+        if (incompatibleReasoning && request.reasoning !== undefined) {
+          throw new HostServiceError(
+            'invalid_request',
+            'The selected reasoning option is unavailable for this Agent',
+            400,
+          )
+        }
+        const update =
+          request.model !== undefined &&
+          request.reasoning === undefined &&
+          (incompatibleReasoning ||
+            (effectiveReasoning !== undefined && reasoningOptions === undefined))
+            ? { model: request.model, reasoning: null }
+            : request
+        let result: DurableConversationMutationResult
+        try {
+          result = store.updateConversationModel(
+            id,
+            update,
+            TimestampSchema.parse(this.#timestamp()),
+          )
+        } catch (error) {
+          this.#handlePersistenceFailure(toError(error))
+          throw runtimeUnavailableError('Conversation durability is unavailable')
+        }
+        this.#syncRuntimeModel(result.conversation)
+        const summary = conversationSummary(result.conversation)
+        if (result.changed) this.#publishConversationUpdated(summary)
+        return {
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed',
+          data: { conversation: summary },
+        }
+      },
+      false,
+    )
+  }
+
+  async refreshConversationModels(
+    conversationId: ConversationId,
+  ): Promise<RefreshConversationModelsResponse> {
+    this.#assertAcceptingActions()
+    const id = ConversationIdSchema.parse(conversationId)
+    const existing = this.#requireConversationOrganizationStore().getConversation(id)
+    if (existing === undefined || existing.status === 'creating') {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    if (existing.archivedAt !== undefined) {
+      throw archivedConversationControlError()
+    }
+    let machine: MachineSummary
+    try {
+      machine = this.#machines.get(existing.machineId)
+      if (
+        machine.availability !== 'available' ||
+        (machine.kind === 'remote' && machine.connectionState !== 'online')
+      ) {
+        throw machineUnavailableError(machine, this.#timestamp())
+      }
+    } catch (error) {
+      throw machineServiceError(error)
+    }
+    if (machine.kind === 'remote') {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'Remote model discovery is unavailable until Node session control is supported',
+        409,
+      )
+    }
+    if (!this.#machineRuntimeAvailable(existing.machineId, existing.provider)) {
+      throw providerUnavailableError(
+        existing.provider,
+        this.#providerDescriptorForMachine(existing.machineId, existing.provider),
+      )
+    }
+    if (machine.kind === 'local' && existing.provider === 'codex') {
+      const runtime = this.#providers.get('codex')
+      const refresh = runtime?.refreshAvailableModels
+      if (refresh === undefined) {
+        throw new HostServiceError(
+          'operation_not_allowed',
+          'Codex model discovery is unavailable',
+          409,
+        )
+      }
+      try {
+        await refresh.call(runtime)
+      } catch {
+        throw new HostServiceError(
+          'operation_not_allowed',
+          'Codex model list is unavailable',
+          409,
+        )
+      }
+    }
+    const descriptor = this.#providerDescriptorForMachine(
+      existing.machineId,
+      existing.provider,
+    )
+    if (
+      descriptor?.availability !== 'available' ||
+      descriptor.capabilities.modelSelection !== true ||
+      (descriptor.availableModels?.length ?? descriptor.models?.length ?? 0) === 0
+    ) {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'This Agent does not provide selectable models',
+        409,
+      )
+    }
+    return RefreshConversationModelsResponseSchema.parse({
+      protocolVersion,
+      provider: descriptor,
+    })
+  }
+
   async pinConversation(
     conversationId: ConversationId,
     request: PinConversationRequest,
@@ -3423,6 +3686,12 @@ export class HostService {
                   ...(request.reasoning === undefined
                     ? {}
                     : { reasoning: request.reasoning }),
+                  ...(machine.kind !== 'local' || request.model === undefined
+                    ? {}
+                    : { currentModel: request.model }),
+                  ...(machine.kind !== 'local' || request.reasoning === undefined
+                    ? {}
+                    : { currentReasoning: request.reasoning }),
                   status: 'creating',
                   createdAt: timestamp,
                   updatedAt: timestamp,
@@ -3589,6 +3858,13 @@ export class HostService {
                       ...(request.reasoning === undefined
                         ? {}
                         : { reasoning: request.reasoning }),
+                      ...(provider.model === undefined &&
+                      request.model === undefined
+                        ? {}
+                        : { currentModel: provider.model ?? request.model }),
+                      ...(request.reasoning === undefined
+                        ? {}
+                        : { currentReasoning: request.reasoning }),
                       status: 'idle',
                       createdAt: timestamp,
                       updatedAt: timestamp,
@@ -5415,6 +5691,10 @@ export class HostService {
         conversation.record = {
           ...conversation.record,
           model: resumed.model,
+          ...(conversation.record.machineId === this.#machines.localMachineId() ||
+          conversation.record.currentModel !== undefined
+            ? { currentModel: resumed.model }
+            : {}),
           updatedAt: this.#timestamp(),
         }
       }
@@ -5838,6 +6118,12 @@ export class HostService {
       ...(conversation.record.reasoning === undefined
         ? {}
         : { reasoning: conversation.record.reasoning }),
+      ...(conversation.record.currentModel === undefined
+        ? {}
+        : { currentModel: conversation.record.currentModel }),
+      ...(conversation.record.currentReasoning === undefined
+        ? {}
+        : { currentReasoning: conversation.record.currentReasoning }),
       status: conversation.record.status,
       createdAt: conversation.record.createdAt,
       updatedAt: conversation.record.updatedAt,
@@ -5895,6 +6181,25 @@ export class HostService {
     else record.pinnedAt = durable.pinnedAt
     if (durable.archivedAt === undefined) delete record.archivedAt
     else record.archivedAt = durable.archivedAt
+    runtime.record = ConversationRecordSchema.parse(record)
+  }
+
+  #syncRuntimeModel(durable: DurableConversation): void {
+    const runtime = this.#conversations.get(durable.conversationId)
+    if (runtime === undefined) return
+    const record: Record<string, unknown> = {
+      ...runtime.record,
+      updatedAt: durable.updatedAt,
+    }
+    for (const field of [
+      'model',
+      'reasoning',
+      'currentModel',
+      'currentReasoning',
+    ] as const) {
+      if (durable[field] === undefined) delete record[field]
+      else record[field] = durable[field]
+    }
     runtime.record = ConversationRecordSchema.parse(record)
   }
 
@@ -8488,6 +8793,12 @@ function conversationSummary(
     provider: record.provider,
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
+    ...(record.currentModel === undefined
+      ? {}
+      : { currentModel: record.currentModel }),
+    ...(record.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: record.currentReasoning }),
     status: record.status,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -9153,6 +9464,12 @@ function conversationRecordFromDurable(
     ...(conversation.reasoning === undefined
       ? {}
       : { reasoning: conversation.reasoning }),
+    ...(conversation.currentModel === undefined
+      ? {}
+      : { currentModel: conversation.currentModel }),
+    ...(conversation.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: conversation.currentReasoning }),
     status: conversation.status,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,

@@ -163,6 +163,55 @@ test('bridges a cold Claude session into canonical streaming Host events', async
   }
 })
 
+test('passes selected Claude model and effort to the native turn', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-model-'))
+  const capturePath = join(cwd, 'capture.jsonl')
+  const runtime = createRuntime('--fixture-capture=capture.jsonl')
+  try {
+    assert.deepEqual(
+      runtime.descriptor.availableModels.map(({ id }) => id),
+      ['opus', 'sonnet', 'haiku'],
+    )
+    assert.equal(runtime.descriptor.capabilities.modelSelection, true)
+    const session = await runtime.startConversation({ cwd, model: 'opus' })
+    const run = async (model, reasoning) => {
+      const completed = new Promise((resolve, reject) => {
+        const unsubscribe = runtime.subscribeEvents((event) => {
+          if (event.type === 'turn.completed' || event.type === 'turn.failed') {
+            unsubscribe()
+            if (event.type === 'turn.failed')
+              reject(new Error(JSON.stringify(event.error)))
+            else resolve(event)
+          }
+        })
+      })
+      await runtime.startTurn({
+        providerThreadId: session.providerThreadId,
+        cwd,
+        input: 'model switch fixture',
+        model,
+        reasoning,
+      })
+      await completed
+    }
+    await run('sonnet', 'high')
+    const captures = (await readFile(capturePath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    assert.deepEqual(
+      captures.map(({ arguments: args }) => [
+        args[args.indexOf('--model') + 1],
+        args[args.indexOf('--effort') + 1],
+      ]),
+      [['sonnet', 'high']],
+    )
+  } finally {
+    await runtime.close()
+    await rm(cwd, { recursive: true, force: true })
+  }
+})
+
 test('Host runtime preserves a typed Claude session cleanup barrier across close attempts', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'codetether-claude-host-cleanup-'))
   const runtime = createRuntime()

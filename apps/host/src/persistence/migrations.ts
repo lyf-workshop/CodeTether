@@ -215,6 +215,18 @@ const migrations: readonly Migration[] = [
         WHERE previous_authorization_id IS NOT NULL AND abandoned_at IS NULL;
     `),
   },
+  {
+    version: 26,
+    name: 'conversation_model_switching',
+    up: (database) =>
+      database.exec(`
+      ALTER TABLE conversations ADD COLUMN current_model TEXT;
+      ALTER TABLE conversations ADD COLUMN current_reasoning TEXT;
+      UPDATE conversations
+      SET current_model = model, current_reasoning = reasoning
+      WHERE machine_id IN (SELECT machine_id FROM machines WHERE kind = 'local');
+    `),
+  },
 ]
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0

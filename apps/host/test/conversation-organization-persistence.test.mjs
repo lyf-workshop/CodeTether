@@ -18,6 +18,61 @@ import { downgradeMachineFoundationToVersionSeven } from './fixtures/machine-fou
 const projectId = 'proj_organization01'
 const baseTime = '2026-08-28T12:00:00.000Z'
 
+test('migration 026 backfills only known local model settings', () => {
+  withFixture(({ databasePath, store, workspace }) => {
+    const created = seedConversation(store, workspace, 701)
+    store.close()
+    const oldDatabase = new DatabaseSync(databasePath)
+    try {
+      oldDatabase.exec(`
+        ALTER TABLE conversations DROP COLUMN current_reasoning;
+        ALTER TABLE conversations DROP COLUMN current_model;
+        DELETE FROM schema_migrations WHERE version = 26;
+      `)
+    } finally {
+      oldDatabase.close()
+    }
+    const migrated = ConversationStore.open({ databasePath })
+    try {
+      assert.equal(migrated.schemaVersion, 26)
+      const conversation = migrated.getConversation(created.conversationId)
+      assert.equal(conversation.currentModel, created.model)
+      assert.equal(conversation.currentReasoning, created.reasoning)
+    } finally {
+      migrated.close()
+    }
+  })
+})
+
+test('model settings persist without changing prior Turns or activity order', () => {
+  withFixture(({ store, workspace }) => {
+    const created = seedConversation(store, workspace, 702)
+    const priorTurn = turn(created.conversationId)
+    store.createTurn(priorTurn)
+    const changed = store.updateConversationModel(
+      created.conversationId,
+      { model: 'gpt-next', reasoning: 'high' },
+      timeAt(703),
+    )
+    assert.equal(changed.changed, true)
+    assert.equal(changed.conversation.currentModel, 'gpt-next')
+    assert.equal(changed.conversation.currentReasoning, 'high')
+    assert.equal(changed.conversation.lastActivityAt, created.lastActivityAt)
+    assert.deepEqual(store.getTurn(priorTurn.turnId), priorTurn)
+    const summary = store.listProjectConversations(projectId, { limit: 10 })[0]
+    assert.equal(summary.currentModel, 'gpt-next')
+    assert.equal(summary.currentReasoning, 'high')
+    assert.equal(
+      store.updateConversationModel(
+        created.conversationId,
+        { model: 'gpt-next', reasoning: 'high' },
+        timeAt(704),
+      ).changed,
+      false,
+    )
+  })
+})
+
 test('migration 005 backfills generated organization metadata and preserves the durable graph', () => {
   withFixture(({ databasePath, store, workspace }) => {
     const created = seedConversation(store, workspace, 1, {
@@ -33,14 +88,16 @@ test('migration 005 backfills generated organization metadata and preserves the 
 
     const migrated = ConversationStore.open({ databasePath })
     const migratedMachineId = migrated.listMachines()[0].machineId
-    assert.equal(currentSchemaVersion, 25)
-    assert.equal(migrated.schemaVersion, 25)
+    assert.equal(currentSchemaVersion, 26)
+    assert.equal(migrated.schemaVersion, 26)
     assert.deepEqual(migrated.getConversation(created.conversationId), {
       ...created,
       machineId: migratedMachineId,
       titleSource: 'generated',
       origin: 'codetether',
       providerSessionMaterialized: true,
+      currentModel: created.model,
+      currentReasoning: created.reasoning,
     })
     assert.equal(migrated.countTurns(created.conversationId), 1)
     assert.equal(

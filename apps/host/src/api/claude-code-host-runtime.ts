@@ -9,11 +9,13 @@ import {
 import {
   CLAUDE_CODE_CAPABILITIES,
   CLAUDE_CODE_EFFORT_LEVELS,
+  CLAUDE_CODE_MODELS,
   CLAUDE_CODE_TESTED_VERSION,
   ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
   type ClaudeCodeAvailableDetection,
   type ClaudeCodeEffort,
+  type ClaudeCodeModel,
 } from '@codetether/adapter-claude'
 import type {
   ProviderDescriptor,
@@ -74,9 +76,11 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
       provider: this.provider,
       displayName: 'Claude Code',
       availability: 'available',
-      capabilities: CLAUDE_CODE_CAPABILITIES,
+      capabilities: { ...CLAUDE_CODE_CAPABILITIES, modelSelection: true },
       version: detection.version,
       testedVersion: CLAUDE_CODE_TESTED_VERSION,
+      models: CLAUDE_CODE_MODELS.map(({ id, name }) => ({ id, label: name })),
+      availableModels: CLAUDE_CODE_MODELS.map(({ id, name }) => ({ id, name })),
       reasoningLabel: CLAUDE_CODE_REASONING_LABEL,
       reasoningOptions: claudeCodeReasoningOptions(),
     }
@@ -104,7 +108,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderConversationResult> {
     this.#assertOpen()
-    assertModelUnsupported(options.model)
+    parseClaudeModel(options.model)
     parseClaudeEffort(options.reasoning)
     const session = ClaudeCodeSessionRuntime.createSession({
       launcher: this.#detection.launcher,
@@ -163,7 +167,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderTurnResult> {
     this.#assertOpen()
-    assertModelUnsupported(options.model)
+    const model = parseClaudeModel(options.model)
     const effort = parseClaudeEffort(options.reasoning)
     const session = this.#sessions.get(options.providerThreadId)
     if (session === undefined || session.cwd !== options.cwd) {
@@ -177,6 +181,7 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
       turnId: providerTurnId,
       prompt: options.input,
       ...(effort === undefined ? {} : { effort }),
+      ...(model === undefined ? {} : { model }),
     })
     void completion
       .catch((error: unknown) => {
@@ -282,10 +287,14 @@ export class ClaudeCodeHostRuntime implements AgentHostRuntime {
   }
 }
 
-function assertModelUnsupported(model: string | undefined): void {
-  if (model !== undefined) {
-    throw new TypeError('Claude Code model selection is unavailable.')
+function parseClaudeModel(
+  model: string | undefined,
+): ClaudeCodeModel | undefined {
+  if (model === undefined) return undefined
+  if (!CLAUDE_CODE_MODELS.some(({ id }) => id === model)) {
+    throw new TypeError('Claude Code model is unsupported.')
   }
+  return model as ClaudeCodeModel
 }
 
 function parseClaudeEffort(

@@ -436,6 +436,27 @@ export type RenameConversationRequest = z.infer<
   typeof RenameConversationRequestSchema
 >
 
+/** Changes only the next Turn configuration of this Conversation. */
+export const UpdateConversationModelRequestSchema = z
+  .object({
+    actionId: ActionIdSchema,
+    model: z.string().trim().min(1).max(240).optional(),
+    reasoning: z.string().trim().min(1).max(120).optional(),
+  })
+  .strict()
+  .refine((request) => request.model !== undefined || request.reasoning !== undefined, {
+    message: 'A model or reasoning update is required',
+  })
+export type UpdateConversationModelRequest = z.infer<
+  typeof UpdateConversationModelRequestSchema
+>
+
+/** Explicit picker-open request. Its empty body keeps discovery read-only. */
+export const RefreshConversationModelsRequestSchema = z.object({}).strict()
+export type RefreshConversationModelsRequest = z.infer<
+  typeof RefreshConversationModelsRequestSchema
+>
+
 export const PinConversationRequestSchema = z
   .object({ actionId: ActionIdSchema })
   .strict()
@@ -936,6 +957,23 @@ export const RenameConversationResponseSchema = mutationResponseSchema(
 )
 export type RenameConversationResponse = z.infer<
   typeof RenameConversationResponseSchema
+>
+
+export const UpdateConversationModelResponseSchema = mutationResponseSchema(
+  ConversationOrganizationDataSchema,
+)
+export type UpdateConversationModelResponse = z.infer<
+  typeof UpdateConversationModelResponseSchema
+>
+
+export const RefreshConversationModelsResponseSchema = z
+  .object({
+    protocolVersion: ProtocolVersionSchema,
+    provider: ProviderDescriptorSchema,
+  })
+  .strict()
+export type RefreshConversationModelsResponse = z.infer<
+  typeof RefreshConversationModelsResponseSchema
 >
 
 export const PinConversationResponseSchema = mutationResponseSchema(

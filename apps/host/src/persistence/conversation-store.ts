@@ -426,6 +426,8 @@ export interface DurableConversation {
   readonly cwd: string
   readonly model?: string
   readonly reasoning?: string
+  readonly currentModel?: string
+  readonly currentReasoning?: string
   readonly status: DurableConversationStatus
   readonly createdAt: Timestamp
   readonly updatedAt: Timestamp
@@ -2866,8 +2868,9 @@ export class ConversationStore {
         conversation_id, project_id, machine_id, title, title_source,
         pinned_at, archived_at, provider, provider_thread_id, origin,
         provider_session_materialized, cwd, model, reasoning, status,
-        created_at, updated_at, last_activity_at, native_transcript_boundary
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        created_at, updated_at, last_activity_at, native_transcript_boundary,
+        current_model, current_reasoning
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       value.conversationId,
       value.projectId,
@@ -2888,6 +2891,8 @@ export class ConversationStore {
       value.updatedAt,
       value.lastActivityAt,
       value.nativeTranscriptBoundary ?? null,
+      value.currentModel ?? null,
+      value.currentReasoning ?? null,
     )
     if (value.providerInstallationId !== undefined) {
       this.#insertConversationProviderInstallationBinding(
@@ -3023,8 +3028,8 @@ export class ConversationStore {
       `UPDATE conversations SET
         title = ?, title_source = ?, pinned_at = ?, archived_at = ?,
         provider_thread_id = ?, provider_session_materialized = ?, model = ?,
-        reasoning = ?, status = ?, created_at = ?, updated_at = ?,
-        last_activity_at = ?
+        reasoning = ?, current_model = ?, current_reasoning = ?, status = ?,
+        created_at = ?, updated_at = ?, last_activity_at = ?
       WHERE conversation_id = ?`,
     ).run(
       value.title,
@@ -3035,6 +3040,8 @@ export class ConversationStore {
       value.providerSessionMaterialized ? 1 : 0,
       value.model ?? null,
       value.reasoning ?? null,
+      value.currentModel ?? null,
+      value.currentReasoning ?? null,
       value.status,
       value.createdAt,
       value.updatedAt,
@@ -3174,6 +3181,58 @@ export class ConversationStore {
            title = ?, title_source = 'manual', updated_at = ?
          WHERE conversation_id = ?`,
       ).run(normalizedTitle, timestamp, id).changes,
+      'Conversation',
+      id,
+    )
+    return {
+      conversation: requireConversation(this.getConversation(id), id),
+      changed: true,
+    }
+  }
+
+  updateConversationModel(
+    conversationId: ConversationId,
+    update: { readonly model?: string; readonly reasoning?: string | null },
+    updatedAt: Timestamp,
+  ): DurableConversationMutationResult {
+    const id = ConversationIdSchema.parse(conversationId)
+    const timestamp = TimestampSchema.parse(updatedAt)
+    const existing = requireConversation(this.getConversation(id), id)
+    const model =
+      update.model === undefined
+        ? existing.model
+        : parseBoundedText(update.model, 'Current model', 240)
+    const reasoning =
+      update.reasoning === undefined
+        ? existing.reasoning
+        : update.reasoning === null
+          ? undefined
+          : parseBoundedText(update.reasoning, 'Current reasoning', 120)
+    const currentModel = model ?? existing.currentModel
+    const currentReasoning =
+      update.reasoning === null ? undefined : (reasoning ?? existing.currentReasoning)
+    if (
+      existing.model === model &&
+      existing.reasoning === reasoning &&
+      existing.currentModel === currentModel &&
+      existing.currentReasoning === currentReasoning
+    ) {
+      return { conversation: existing, changed: false }
+    }
+    assertChanged(
+      this.#statement(
+        `UPDATE conversations SET
+           model = ?, reasoning = ?, current_model = ?,
+           current_reasoning = ?, updated_at = ?
+         WHERE conversation_id = ?`,
+      ).run(
+        model ?? null,
+        reasoning ?? null,
+        currentModel ?? null,
+        currentReasoning ?? null,
+        timestamp,
+        id,
+      ).changes,
       'Conversation',
       id,
     )
@@ -3390,7 +3449,8 @@ export class ConversationStore {
     const rows = this.#statement(
       `SELECT
          conversation_id, project_id, machine_id, title, title_source, pinned_at,
-         archived_at, provider, model, reasoning, status, created_at,
+         archived_at, provider, model, reasoning, current_model,
+         current_reasoning, status, created_at,
          updated_at, last_activity_at
        FROM conversations
        WHERE ${filters.join(' AND ')}
@@ -3536,7 +3596,8 @@ export class ConversationStore {
     const rows = this.#statement(
       `SELECT
          conversation_id, project_id, machine_id, title, title_source,
-         pinned_at, archived_at, provider, model, reasoning, status,
+         pinned_at, archived_at, provider, model, reasoning,
+         current_model, current_reasoning, status,
          created_at, updated_at, last_activity_at
        FROM conversations
        WHERE machine_id = ? AND status <> 'creating'
@@ -3655,6 +3716,8 @@ export class ConversationStore {
             c.provider,
             c.model,
             c.reasoning,
+            c.current_model,
+            c.current_reasoning,
             c.status,
             c.created_at,
             c.updated_at,
@@ -4567,6 +4630,8 @@ interface ConversationRow {
   readonly cwd: string
   readonly model: string | null
   readonly reasoning: string | null
+  readonly current_model: string | null
+  readonly current_reasoning: string | null
   readonly status: string
   readonly created_at: string
   readonly updated_at: string
@@ -4584,6 +4649,8 @@ interface ConversationSummaryRow {
   readonly provider: string
   readonly model: string | null
   readonly reasoning: string | null
+  readonly current_model: string | null
+  readonly current_reasoning: string | null
   readonly status: string
   readonly created_at: string
   readonly updated_at: string
@@ -5859,6 +5926,18 @@ function parseConversation(
     ...(value.reasoning === undefined
       ? {}
       : { reasoning: value.reasoning.trim() }),
+    ...(value.currentModel === undefined
+      ? {}
+      : { currentModel: parseBoundedText(value.currentModel, 'Current model', 240) }),
+    ...(value.currentReasoning === undefined
+      ? {}
+      : {
+          currentReasoning: parseBoundedText(
+            value.currentReasoning,
+            'Current reasoning',
+            120,
+          ),
+        }),
     status: value.status,
     createdAt: TimestampSchema.parse(value.createdAt),
     updatedAt: TimestampSchema.parse(value.updatedAt),
@@ -6051,6 +6130,10 @@ function conversationFromRow(row: ConversationRow): DurableConversation {
     cwd: row.cwd,
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.reasoning === null ? {} : { reasoning: row.reasoning }),
+    ...(row.current_model === null ? {} : { currentModel: row.current_model }),
+    ...(row.current_reasoning === null
+      ? {}
+      : { currentReasoning: row.current_reasoning }),
     status: parseConversationStatus(row.status),
     createdAt: TimestampSchema.parse(row.created_at),
     updatedAt: TimestampSchema.parse(row.updated_at),
@@ -6072,6 +6155,10 @@ function conversationSummaryFromRow(
     provider: parseProvider(row.provider),
     ...(row.model === null ? {} : { model: row.model }),
     ...(row.reasoning === null ? {} : { reasoning: row.reasoning }),
+    ...(row.current_model === null ? {} : { currentModel: row.current_model }),
+    ...(row.current_reasoning === null
+      ? {}
+      : { currentReasoning: row.current_reasoning }),
     status: parseConversationStatus(row.status),
     createdAt: row.created_at,
     updatedAt: row.updated_at,

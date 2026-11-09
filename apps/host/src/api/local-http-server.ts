@@ -81,6 +81,10 @@ import {
   ReadRemoteConversationLiveQuerySchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
+  RefreshConversationModelsRequestSchema,
+  RefreshConversationModelsResponseSchema,
+  UpdateConversationModelRequestSchema,
+  UpdateConversationModelResponseSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
@@ -1821,6 +1825,60 @@ export class LocalHttpServer {
           )
           return
         }
+      }
+
+      const conversationModelRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/model$/u,
+      )
+      if (request.method === 'PATCH' && conversationModelRoute !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationModelRoute[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateConversationModelRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UpdateConversationModelResponseSchema.parse(
+            await this.#service.updateConversationModel(conversationId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationModelsRefreshRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/models\/refresh$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        conversationModelsRefreshRoute !== undefined
+      ) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationModelsRefreshRoute[0],
+          'conversationId',
+        )
+        await this.#http.readValidatedBody(
+          request,
+          RefreshConversationModelsRequestSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          RefreshConversationModelsResponseSchema.parse(
+            await this.#service.refreshConversationModels(conversationId),
+          ),
+          context.allowedOrigin,
+        )
+        return
       }
 
       const conversationPin = this.#http.matchPath(

@@ -1559,6 +1559,38 @@ test('native-resume loss permits a genuinely uninitialized remote Conversation t
   )
 })
 
+test('remote model controls fail closed before Node session control exists', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t)
+  const created = await fixture.service.createConversation({
+    actionId: 'act_phase8b_remote_model_guard_create',
+    projectId: fixture.projectId,
+    machineId: remoteMachineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  const before = fixture.persistence.getConversation(conversationId)
+  for (const request of [
+    { actionId: 'act_phase8b_remote_model_guard_model', model: 'gpt-new' },
+    { actionId: 'act_phase8b_remote_model_guard_effort', reasoning: 'high' },
+  ]) {
+    await assert.rejects(
+      fixture.service.updateConversationModel(conversationId, request),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.code === 'operation_not_allowed',
+    )
+  }
+  await assert.rejects(
+    fixture.service.refreshConversationModels(conversationId),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'operation_not_allowed',
+  )
+  assert.deepEqual(fixture.persistence.getConversation(conversationId), before)
+  assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+  assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+})
+
 test('an offline remote Machine presents persisted backend readiness as last-known with its original timestamp', async (t) => {
   const fixture = await createRemoteUninitializedFixture(t)
   const current = await fixture.service.getMachine(remoteMachineId)

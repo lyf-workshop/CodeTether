@@ -79,6 +79,16 @@ test('builds the locked-down argv and never places a prompt in it', () => {
       }),
     /supported Claude Code level/u,
   )
+  assert.deepEqual(
+    buildClaudeCodeArguments({ sessionId, resume: true, model: 'opus' }).slice(
+      -4,
+    ),
+    ['--model', 'opus', '--no-chrome', '--disable-slash-commands'],
+  )
+  assert.throws(
+    () => buildClaudeCodeArguments({ sessionId, resume: true, model: 'other' }),
+    /supported Claude Code alias/u,
+  )
 })
 
 test('lifecycle probing and execution share one exact CLI flag contract', () => {
@@ -149,11 +159,13 @@ test('creates cold, streams one child per turn, then resumes the exact session',
     turnId: 'turn_first',
     prompt: 'secret prompt first',
     effort: 'low',
+    model: 'opus',
   })
   const second = await runtime.startTurn({
     turnId: 'turn_second',
     prompt: 'secret prompt second',
     effort: 'low',
+    model: 'sonnet',
   })
   await runtime.close()
 
@@ -191,6 +203,10 @@ test('creates cold, streams one child per turn, then resumes the exact session',
   )
   assert.ok(captures[1].arguments.includes('--resume'))
   assert.ok(!captures[1].arguments.includes('--session-id'))
+  assert.deepEqual(
+    captures.map(({ arguments: args }) => args[args.indexOf('--model') + 1]),
+    ['opus', 'sonnet'],
+  )
   assert.deepEqual(JSON.parse(captures[0].input), {
     type: 'user',
     message: { role: 'user', content: 'secret prompt first' },

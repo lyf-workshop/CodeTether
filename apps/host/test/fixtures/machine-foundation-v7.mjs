@@ -14,7 +14,7 @@ export function downgradeMachineFoundationToVersionSeven(databasePath) {
     DROP TABLE host_supervisor_grants;
     DROP TABLE host_identity;
     DELETE FROM schema_migrations
-    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25);
+    WHERE version IN (8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26);
     DROP TABLE onboarding_progress;
     DROP TABLE conversation_provider_installation_bindings;
     DROP TABLE provider_backend_observations;

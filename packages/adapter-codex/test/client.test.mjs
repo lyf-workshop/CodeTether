@@ -91,6 +91,52 @@ test('local initialization capabilities remain unchanged', async () => {
   assert.deepEqual(written[1], { method: 'initialized' })
 })
 
+test('reads visible Codex model slugs from the native App Server catalog', async () => {
+  const { child, client, written } = createHarness()
+  const models = client.listAvailableModels()
+  await nextTurn()
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'model/list',
+    params: { limit: 64, includeHidden: false },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        data: [
+          {
+            id: 'preset-one',
+            model: 'gpt-model-one',
+            displayName: 'Model One',
+            description: 'Available for coding',
+            hidden: false,
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'low', description: 'Fast' },
+              { reasoningEffort: 'high', description: 'Deep' },
+            ],
+          },
+          {
+            id: 'preset-hidden',
+            model: 'hidden-model',
+            displayName: 'Hidden',
+            hidden: true,
+          },
+        ],
+        nextCursor: null,
+      },
+    })}\n`,
+  )
+  assert.deepEqual(await models, [
+    {
+      id: 'gpt-model-one',
+      name: 'Model One',
+      description: 'Available for coding',
+      reasoningOptions: ['low', 'high'],
+    },
+  ])
+})
+
 test('backend config reads return only a secret-safe selected Provider projection', async () => {
   const { child, client, written } = createHarness()
   const result = client.readBackendConfiguration({
@@ -272,6 +318,10 @@ test('local and remote client operations cannot cross execution profiles', async
   )
   await assert.rejects(
     remote.interruptTurn({ threadId: 'thread', turnId: 'turn' }),
+    /Operation is unavailable for Codex execution profile remote-text-only/,
+  )
+  await assert.rejects(
+    remote.listAvailableModels(),
     /Operation is unavailable for Codex execution profile remote-text-only/,
   )
 })

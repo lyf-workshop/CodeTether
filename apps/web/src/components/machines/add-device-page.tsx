@@ -34,8 +34,8 @@ export function AddDevicePage() {
           <div className="min-w-0">
             <h2 className="text-xl font-semibold">添加另一台电脑</h2>
             <p className="mt-2 text-md text-text-secondary">
-              Linux x64 / ARM64、macOS ARM64。设备上需要先安装 CodeTether
-              Node，不需要账号。
+              Linux x64 / ARM64、macOS ARM64。电脑上需要先安装 CodeTether
+              远程服务，不需要账号。
             </p>
             <p className="mt-3 flex items-start gap-2 text-sm text-text-muted">
               <ShieldCheck

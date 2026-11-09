@@ -122,9 +122,9 @@ const failureReasonCopy = {
     guidance: '请恢复电脑连接并等待状态重新验证。',
   },
   node_disconnected: {
-    title: 'CodeTether Node 已断开',
-    cause: '执行电脑上的 CodeTether Node 不再连接。',
-    guidance: '请恢复 Node 运行并等待安全重连。',
+    title: '远程服务已断开',
+    cause: '执行电脑上的远程服务不再连接。',
+    guidance: '请恢复远程服务并等待安全重连。',
   },
   machine_identity_mismatch: {
     title: '电脑身份验证失败',
@@ -234,7 +234,7 @@ const failureReasonCopy = {
   relay_channel_open_failed: {
     title: 'Internet Relay 通道无法建立',
     cause: 'CodeTether 无法为这台受信任的设备建立执行通道。',
-    guidance: '请等待 Relay 与远程 Node 恢复后，再开始新的请求。',
+    guidance: '请等待 Relay 与远程电脑恢复后，再开始新的请求。',
   },
   relay_channel_lost: {
     title: 'Internet Relay 执行通道已中断',
@@ -242,9 +242,9 @@ const failureReasonCopy = {
     guidance: '为避免重复操作，CodeTether 没有自动重发原请求。',
   },
   relay_peer_offline: {
-    title: '远程 Node 未连接到 Internet Relay',
-    cause: 'Relay 当前无法到达这台受信任设备的 Node。',
-    guidance: '请等待 Node 重新连接；会话历史仍可查看。',
+    title: '远程电脑未连接到 Internet Relay',
+    cause: 'Relay 当前无法到达这台受信任的电脑。',
+    guidance: '请等待远程电脑重新连接；会话历史仍可查看。',
   },
   relay_transport_capacity_reached: {
     title: 'Internet Relay 执行通道已满',
@@ -254,7 +254,7 @@ const failureReasonCopy = {
   relay_protocol_error: {
     title: 'Internet Relay 执行协议异常',
     cause: 'CodeTether 拒绝了无效或不兼容的 Relay 设备通道数据。',
-    guidance: '请检查 Relay、Desktop 与 Node 版本后再试。',
+    guidance: '请检查 Relay、桌面应用与远程服务版本后再试。',
   },
   provider_error: {
     title: 'AI 工具执行失败',

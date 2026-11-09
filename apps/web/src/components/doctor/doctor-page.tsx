@@ -741,7 +741,7 @@ function RemoteComputerCard({
             mono
           />
           <KeyValue
-            label="Node 在线状态"
+            label="远程电脑在线状态"
             value={machine.relay.nodePresence}
             compact
             mono

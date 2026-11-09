@@ -66,19 +66,22 @@ test('shared pairing inputs preserve keyboard, bounded one-time code and deliber
   assert.match(wizard, /confirmationHeadingRef\.current\?\.focus\(\)/u)
 })
 
-test('remote rows show bounded project data without triggering Provider detection', async () => {
-  const [page, providers, query, runtime] = await Promise.all([
+test('computer cards show project counts and read Provider state without triggering discovery', async () => {
+  const [page, card, providers, query, runtime] = await Promise.all([
     source('components/machines/machines-page.tsx'),
+    source('components/machines/machine-summary-card.tsx'),
     source('components/machines/machine-providers-section.tsx'),
     source('runtime/host/machine-query.ts'),
     source('runtime/host/host-runtime.ts'),
   ])
   assert.match(page, /projectListQueryOptions/u)
   assert.doesNotMatch(page, /useQueries|machineDetailQueryOptions/u)
-  assert.match(page, /MachineProjectsSection/u)
+  assert.match(page, /MachineSummaryCard/u)
   assert.match(page, /projects=\{projectsQuery\.data\}/u)
-  assert.match(page, /machineConnectionStateLabel/u)
-  assert.match(page, /lastSeenAt/u)
+  assert.match(card, /machineDetailQueryOptions/u)
+  assert.match(card, /projectLocationForMachine/u)
+  assert.match(card, /machineSubtitleLabel/u)
+  assert.match(card, /lastSeenAt/u)
   assert.match(providers, /discovery\.state !== 'not_observed'/u)
   assert.match(providers, /discovery\?\.state === 'current'/u)
   assert.match(providers, /上次已知的状态/u)
@@ -122,7 +125,7 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
   for (const label of ['安装状态', '运行时', '后端', '执行状态', '已声明能力'])
     assert.ok(providers.includes(label))
   assert.match(providers, /health\.freshnessLabel/u)
-  assert.match(providers, /尚未提供会话所需的远程能力/u)
+  assert.match(providers, /已声明能力/u)
   assert.match(detail, /providerDiscovery/u)
   assert.match(providers, /current/u)
   assert.match(providers, /not_observed/u)

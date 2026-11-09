@@ -128,7 +128,6 @@ export function MachineProvidersSection({
             key={provider.provider}
             provider={provider}
             lifecycles={lifecycles}
-            remote={remote}
             hostReady={hostReady}
             onSelectInstallation={onSelectInstallation}
             selectionPending={selectionPending}
@@ -169,7 +168,6 @@ export function MachineProvidersSection({
 function MachineProviderCard({
   provider,
   lifecycles,
-  remote,
   hostReady,
   onSelectInstallation,
   selectionPending,
@@ -177,7 +175,6 @@ function MachineProviderCard({
 }: {
   provider: ProviderPresentation
   lifecycles: readonly MachineProviderLifecycle[]
-  remote: boolean
   hostReady: boolean
   onSelectInstallation: MachineProvidersSectionProps['onSelectInstallation']
   selectionPending: boolean
@@ -229,11 +226,9 @@ function MachineProviderCard({
               lifecycleObserved={lifecycleGroup !== undefined}
               providerAvailable={provider.available}
             />
-            {remote && provider.available ? (
-              <p className="mt-1 text-xs text-text-muted">
-                {remoteProviderCapabilitySummary(provider)}
-              </p>
-            ) : null}
+            <p className="mt-1 text-xs text-text-muted">
+              {remoteProviderCapabilitySummary(provider)}
+            </p>
             <ProviderInstallationSelector
               lifecycle={lifecycleGroup}
               disabled={!hostReady || selectionPending}
@@ -387,20 +382,21 @@ function remoteProviderCapabilitySummary(
   provider: ProviderPresentation,
 ): string {
   const { capabilities } = provider
-  if (!capabilities.streaming || !capabilities.resume) {
-    return '已检测到 AI 工具；尚未提供会话所需的远程能力'
-  }
-
   const enabled = [
-    '文本流式',
-    '原生恢复',
+    capabilities.streaming ? '流式消息' : undefined,
+    capabilities.resume ? '恢复会话' : undefined,
+    capabilities.interrupt ? '停止运行' : undefined,
+    capabilities.approvals ? '审批' : undefined,
     capabilities.fileRead ? '读取' : undefined,
+    capabilities.fileEdit ? '编辑' : undefined,
+    capabilities.shell ? '执行命令' : undefined,
     capabilities.search ? '搜索' : undefined,
+    capabilities.diff ? '查看变更' : undefined,
     capabilities.toolEvents ? '工具事件' : undefined,
+    capabilities.modelSelection ? '模型选择' : undefined,
     capabilities.reasoningControl ? provider.reasoningLabel : undefined,
   ].filter((value): value is string => value !== undefined)
-  const summary = enabled.join('、')
-  return `已声明能力 · ${summary}`
+  return `已声明能力 · ${enabled.length === 0 ? '暂无' : enabled.join('、')}`
 }
 
 function providerExecutionHealthTone(

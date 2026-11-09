@@ -122,7 +122,7 @@ test('completion requires real Machine props and never claims Provider execution
   assert.match(html, /设备已配对/u)
   assert.match(html, /添加项目/u)
   assert.match(html, /已配对不等于可以执行/u)
-  assert.match(html, /恢复原 Node 后台服务/u)
+  assert.match(html, /恢复原远程后台服务/u)
   assert.doesNotMatch(html, /machine_confirmed|现在可以.*运行/u)
 })
 test('shared setup has real service stop/pair/start, supported platforms and state warning', () => {
@@ -130,7 +130,7 @@ test('shared setup has real service stop/pair/start, supported platforms and sta
     h(NodeSetupInstructions, { platform: 'macos' }),
   )
   assert.match(html, /Linux x64 \/ ARM64、macOS ARM64/u)
-  assert.match(html, /Windows 暂时不能作为配对设备/u)
+  assert.match(html, /Windows 暂时不能作为被配对电脑/u)
   assert.match(html, /service stop/u)
   assert.match(html, /--pair --data-dir/u)
   assert.match(html, /service start/u)

@@ -156,15 +156,13 @@ export function OnboardingRemoteStep(props: SetupStepProps) {
 function OnboardingNodeInstructions() {
   const [platform, setPlatform] = useState<'linux' | 'macos'>('linux')
   return (
-    <section className="mt-5 min-w-0" aria-label="CodeTether Node 设置说明">
+    <section className="mt-5 min-w-0" aria-label="远程电脑设置说明">
       <p className="text-sm text-text-secondary">
         配对 Linux 服务器或 Apple 芯片的 Mac，不需要账号。Windows
         和同一账号下的其他桌面版目前不能作为配对设备添加。
       </p>
       <details className="mt-3 rounded-md border border-border bg-surface p-4 text-sm">
-        <summary className="cursor-pointer">
-          在设备上运行 CodeTether Node
-        </summary>
+        <summary className="cursor-pointer">在电脑上运行远程服务</summary>
         <div className="mt-4 space-y-4">
           <SegmentedControl
             aria-label="设备系统"

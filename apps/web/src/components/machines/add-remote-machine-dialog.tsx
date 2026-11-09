@@ -70,7 +70,7 @@ export function AddRemoteMachineDialog({
           data-pairing-presentation={presentation}
         >
           <DialogHeader className="sr-only">
-            <DialogTitle>添加 Node 设备</DialogTitle>
+            <DialogTitle>添加远程电脑</DialogTitle>
             <DialogDescription>
               输入设备地址和一次性配对码，然后核对两端验证码。
             </DialogDescription>
@@ -130,8 +130,8 @@ export function AddRemoteMachineDialog({
           ) : (
             <>
               <Notice tone="info" className="mb-4">
-                需要先在 Linux x64 / ARM64 或 macOS ARM64 设备上安装并开启 Node
-                配对。Windows 暂不支持作为配对设备。
+                需要先在 Linux x64 / ARM64 或 macOS ARM64
+                电脑上安装并开启远程服务 配对。Windows 暂不支持作为配对设备。
               </Notice>
               <MachinePairingEntry
                 pairing={pairing}

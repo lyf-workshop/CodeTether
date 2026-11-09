@@ -102,6 +102,13 @@ test('connection, execution and folder access remain independent project gates',
       ...machine,
       capabilities: { ...machine.capabilities, providerExecution: false },
     }),
+    true,
+  )
+  assert.equal(
+    machineCanAddProject({
+      ...machine,
+      capabilities: { ...machine.capabilities, projectAccess: false },
+    }),
     false,
   )
 })

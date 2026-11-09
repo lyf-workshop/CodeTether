@@ -9,9 +9,10 @@ export function MachineConversationsSection({
   projects,
   machine,
 }: Pick<GetMachineResponse, 'conversations' | 'projects' | 'machine'>) {
-  const own = conversations.filter(
-    (conversation) => conversation.machineId === machine.machineId,
-  )
+  const own = conversations
+    .filter((conversation) => conversation.machineId === machine.machineId)
+    .sort((a, b) => Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt))
+  const recent = own.slice(0, 10)
   const projectNames = new Map(
     projects.map((project) => [project.projectId, project.name]),
   )
@@ -26,7 +27,7 @@ export function MachineConversationsSection({
       >
         最近的会话{' '}
         <span className="ml-2 text-md font-normal text-text-muted">
-          {own.length >= 100 ? '100+' : own.length}
+          {recent.length}
         </span>
       </h2>
       {own.length === 0 ? (
@@ -39,7 +40,7 @@ export function MachineConversationsSection({
         </div>
       ) : (
         <ul className="overflow-hidden rounded-lg border border-border bg-surface">
-          {own.map((conversation) => (
+          {recent.map((conversation) => (
             <li
               key={conversation.conversationId}
               className="border-t border-border first:border-t-0"
@@ -81,9 +82,9 @@ export function MachineConversationsSection({
           ))}
         </ul>
       )}
-      {own.length >= 100 ? (
+      {own.length > 10 ? (
         <p className="mt-2 text-sm text-text-muted">
-          只显示最近 100 个会话；可以在项目内搜索更早的记录。
+          这里只显示最近 10 个会话；可以在项目内搜索更早的记录。
         </p>
       ) : null}
     </section>

@@ -153,7 +153,7 @@ export function useRemoteMachinePairing({
     beginErrorCode === 'machine_unreachable' ||
     beginErrorCode === 'machine_connection_failed'
   const pairingCodeInvalid =
-    validationError.startsWith('请输入 Node') ||
+    validationError.startsWith('请输入电脑') ||
     beginErrorCode === 'machine_pairing_code_invalid' ||
     beginErrorCode === 'machine_pairing_code_expired' ||
     beginErrorCode === 'machine_pairing_rate_limited'
@@ -178,11 +178,11 @@ export function useRemoteMachinePairing({
     )
       return
     if (parseRemoteMachinePairingTargetInput(address) === undefined) {
-      setValidationError('请输入设备地址（主机:端口）或 Node 显示的配对链接。')
+      setValidationError('请输入设备地址（主机:端口）或电脑显示的配对链接。')
       return
     }
     if (!RemoteMachinePairingCodeSchema.safeParse(pairingCode).success) {
-      setValidationError('请输入 Node 显示的六位一次性配对码。')
+      setValidationError('请输入电脑显示的六位一次性配对码。')
       return
     }
     setValidationError('')

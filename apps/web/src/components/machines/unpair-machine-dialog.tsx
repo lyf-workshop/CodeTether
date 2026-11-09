@@ -158,8 +158,8 @@ export function UnpairMachineDialog({
         ) : (
           <p className="rounded-sm bg-surface-inset px-3 py-3 text-sm text-text-secondary">
             {machine.connectionState === 'online'
-              ? 'CodeTether 会先请求远程 Node 撤销信任，确认成功后才移除本地设备记录。此操作不会删除设备上的文件。'
-              : '需要连接到远程 Node 才能确认撤销信任。无法连接时会保留设备和信任记录。'}
+              ? 'CodeTether 会先请求远程电脑撤销信任，确认成功后才移除本地设备记录。此操作不会删除设备上的文件。'
+              : '需要连接到远程电脑才能确认撤销信任。无法连接时会保留设备和信任记录。'}
           </p>
         )}
         {!hostReady ? (

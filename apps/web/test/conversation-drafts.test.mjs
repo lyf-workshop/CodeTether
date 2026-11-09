@@ -10,18 +10,22 @@ const { createConversationDraftStore, conversationDrafts } = loadWebComponent(
 )
 const { Composer } = loadWebComponent('components/conversation/composer.tsx')
 
-test('conversation drafts survive remount and reload only within their exact sessionStorage key', () => {
+test('conversation drafts save after the debounce and reload only from their exact localStorage key', async () => {
   const data = new Map()
   const storage = {
     getItem: (key) => data.get(key) ?? null,
     setItem: (key, value) => data.set(key, value),
     removeItem: (key) => data.delete(key),
   }
-  const first = createConversationDraftStore(() => storage)
+  const first = createConversationDraftStore(() => storage, 5)
   first.write('conv_draft01', '尚未发送\n第二行')
   first.write('conv_draft02', '另一个会话')
   assert.equal(first.read('conv_draft01'), '尚未发送\n第二行')
   assert.equal(first.read('conv_draft02'), '另一个会话')
+  assert.equal(data.size, 0)
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(data.get('composer-draft-conv_draft01'), '尚未发送\n第二行')
+  assert.equal(data.get('composer-draft-conv_draft02'), '另一个会话')
   const reloaded = createConversationDraftStore(() => storage)
   assert.equal(reloaded.read('conv_draft01'), '尚未发送\n第二行')
   assert.equal(reloaded.read('conv_absent01'), '')
@@ -35,7 +39,7 @@ test('conversation drafts survive remount and reload only within their exact ses
   assert.equal(first.read('conv_draft02'), '另一个会话')
 })
 
-test('optional or throwing sessionStorage never loses an in-memory draft or blocks clearing', () => {
+test('optional or throwing localStorage never loses an in-memory draft or blocks clearing', () => {
   const storage = {
     getItem() {
       throw new Error('disabled')
@@ -105,7 +109,7 @@ test('real Composer restores only its conversation draft and never displays an a
   }
 })
 
-test('Composer requires a real controller, persists edits, clears only accepted or archived drafts and never uses localStorage', async () => {
+test('Composer requires a real controller, persists edits, and clears only accepted or archived drafts', async () => {
   const [composer, workspace, drafts] = await Promise.all([
     source('composer.tsx'),
     source('conversation-workspace.tsx'),
@@ -125,8 +129,70 @@ test('Composer requires a real controller, persists edits, clears only accepted 
     composer,
     /draftAfterSubmit\(current, submittedValue, accepted\)/u,
   )
-  assert.match(drafts, /sessionStorage/u)
-  assert.doesNotMatch(drafts, /localStorage|setInterval|fetch\(/u)
+  assert.match(drafts, /composer-draft-/u)
+  assert.match(drafts, /localStorage/u)
+  assert.match(drafts, /setTimeout/u)
+  assert.doesNotMatch(drafts, /sessionStorage|setInterval|fetch\(/u)
+})
+
+test('a later draft replaces the pending save, and clearing cancels it', async () => {
+  const data = new Map()
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  }
+  const drafts = createConversationDraftStore(() => storage, 5)
+  drafts.write('conv_debounce01', 'first')
+  drafts.write('conv_debounce01', 'latest')
+  drafts.write('conv_cleared01', 'discard')
+  drafts.clear('conv_cleared01')
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(data.get('composer-draft-conv_debounce01'), 'latest')
+  assert.equal(data.has('composer-draft-conv_cleared01'), false)
+  drafts.clear('conv_debounce01')
+})
+
+test('external storage changes refresh a settled draft without replacing a pending local edit', async () => {
+  const data = new Map()
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  }
+  const drafts = createConversationDraftStore(() => storage, 5)
+  const key = 'composer-draft-conv_shared01'
+  drafts.write('conv_shared01', 'local first')
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  data.set(key, 'another window')
+  assert.equal(drafts.read('conv_shared01'), 'another window')
+  drafts.write('conv_shared01', 'local pending')
+  data.set(key, 'new external edit')
+  assert.equal(drafts.read('conv_shared01'), 'local pending')
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(data.get(key), 'local pending')
+  data.delete(key)
+  assert.equal(drafts.read('conv_shared01'), '')
+})
+
+test('failed writes and removals retain the local draft over stale storage', async () => {
+  const data = new Map([['composer-draft-conv_denied01', 'old value']])
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem() {
+      throw new Error('quota')
+    },
+    removeItem() {
+      throw new Error('denied')
+    },
+  }
+  const drafts = createConversationDraftStore(() => storage, 5)
+  assert.equal(drafts.read('conv_denied01'), 'old value')
+  drafts.write('conv_denied01', 'new unsaved value')
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(drafts.read('conv_denied01'), 'new unsaved value')
+  drafts.clear('conv_denied01')
+  assert.equal(drafts.read('conv_denied01'), '')
 })
 
 test('submit focus recovery is editor-originated and abandons intent when another control or window gets focus', async () => {

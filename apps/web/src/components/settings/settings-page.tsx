@@ -1,5 +1,5 @@
 import { Link, useLocation, useSearch } from '@tanstack/react-router'
-import { Bell, CircleUserRound, Info, Power, Sun } from 'lucide-react'
+import { Bell, CircleUserRound, Info, Keyboard, Power, Sun } from 'lucide-react'
 
 import { cn } from '@codetether/ui'
 import { AboutSettings } from './about-settings'
@@ -7,6 +7,7 @@ import { AccountSettings } from './account-settings'
 import { AppearanceSettings } from './appearance-settings'
 import { BackgroundSettings } from './background-settings'
 import { DesktopNotificationSettings } from './desktop-notification-settings'
+import { EditorSettings } from './editor-settings'
 import {
   parseSettingsSearch,
   settingsSectionFromPath,
@@ -15,6 +16,7 @@ import {
 
 const sections = [
   { id: 'appearance', label: '外观', shortLabel: '外观', icon: Sun },
+  { id: 'editor', label: '编辑器与输入', shortLabel: '输入', icon: Keyboard },
   { id: 'account', label: '账号', shortLabel: '账号', icon: CircleUserRound },
   { id: 'notify', label: '通知', shortLabel: '通知', icon: Bell },
   { id: 'background', label: '后台运行', shortLabel: '后台', icon: Power },
@@ -58,7 +60,7 @@ export function SettingsPage({
         </nav>
         <nav
           aria-label="设置分类"
-          className="grid min-w-0 grid-cols-5 gap-1 rounded-lg border border-border bg-surface-inset p-1 above-phone:hidden"
+          className="grid min-w-0 grid-cols-3 gap-1 rounded-lg border border-border bg-surface-inset p-1 above-phone:hidden"
         >
           {sections.map(({ id, shortLabel }) => (
             <Link
@@ -82,6 +84,8 @@ export function SettingsPage({
       <div className="min-w-0">
         {section === 'appearance' ? (
           <AppearanceSettings />
+        ) : section === 'editor' ? (
+          <EditorSettings />
         ) : section === 'account' ? (
           <AccountSettings />
         ) : section === 'notify' ? (

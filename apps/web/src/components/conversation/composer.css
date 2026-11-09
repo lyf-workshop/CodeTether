@@ -1,0 +1,7 @@
+.ct-composer-textarea {
+  field-sizing: content;
+  min-height: 3rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  resize: none;
+}

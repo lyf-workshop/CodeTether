@@ -38,6 +38,7 @@ test('theme previews resolve the nested theme tokens rather than inherited page 
 test('settings sections are bounded, canonical and do not expose a Host directory', () => {
   for (const section of [
     'appearance',
+    'editor',
     'account',
     'notify',
     'background',
@@ -47,6 +48,32 @@ test('settings sections are bounded, canonical and do not expose a Host director
   assert.equal(settingsSectionFromPath('/settings'), 'appearance')
   assert.equal(settingsSectionFromPath('/settings/unknown'), 'appearance')
   assert.equal(settingsSectionFromPath('/settings/account/extra'), 'appearance')
+})
+
+test('editor setting persists the send shortcut and starts with Enter', async () => {
+  const dom = await createDom()
+  const { EditorSettings } = loadWebComponent(
+    'components/settings/editor-settings.tsx',
+  )
+  try {
+    await dom.render(h(EditorSettings))
+    const enter = dom.container.querySelector(
+      '[data-slot="segmented-control-item"][value="enter"]',
+    )
+    const ctrlEnter = dom.container.querySelector(
+      '[data-slot="segmented-control-item"][value="ctrl-enter"]',
+    )
+    assert.equal(enter?.getAttribute('data-state'), 'checked')
+    assert.equal(ctrlEnter?.getAttribute('data-state'), 'unchecked')
+    await dom.perform(() => ctrlEnter.click())
+    assert.equal(
+      dom.window.localStorage.getItem('composer-send-shortcut'),
+      'ctrl-enter',
+    )
+    assert.equal(ctrlEnter.getAttribute('data-state'), 'checked')
+  } finally {
+    await dom.close()
+  }
 })
 
 test('account session presentation never duplicates access or refresh credentials', () => {

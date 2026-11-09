@@ -103,7 +103,9 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
     ),
   ])
 
-  assert.doesNotMatch(composer, /\/ 命令|@ 引用|! 终端|# 技能|附件/u)
+  assert.doesNotMatch(composer, /\/ 命令|@ 引用|! 终端|# 技能/u)
+  assert.match(composer, /disabled\s+aria-label="附件即将推出"/u)
+  assert.match(composer, /disabled\s+aria-label="语音即将推出"/u)
   assert.doesNotMatch(composer, /autoFocus=/u)
   assert.doesNotMatch(composer, /conversation\.timeline\.blocks/u)
   assert.doesNotMatch(composer, /conversation\.pendingApprovals/u)

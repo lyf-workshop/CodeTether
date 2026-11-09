@@ -19,6 +19,7 @@ import type {
 } from './conversation-view-model'
 import type { ConversationDisplayContext } from './conversation-gate-presentation'
 import { organizationConversationStatus } from './conversation-view-model'
+import { previousUserInput } from './conversation-input-history'
 import { PendingActionDock } from './pending-action-dock'
 import { ConversationRestoreButton } from '../conversations/conversation-organization-controls'
 
@@ -175,6 +176,9 @@ export function ConversationWorkspace({
           interruptController={controls.interrupt}
           context={displayContext}
           providerName={agentDefinitions[viewModel.agent].name}
+          agent={viewModel.agent}
+          model={viewModel.model}
+          previousUserInput={previousUserInput(viewModel.timeline)}
           archived={archived}
           projectBoundary={projectBoundary}
           recoveryAction={recoveryAction}

@@ -28,6 +28,16 @@ export function updateReleaseEnabled(environment = process.env) {
   return true
 }
 
+export function signedUpdaterTauriConfig(environment = process.env) {
+  const pubkey = environment.CODETETHER_UPDATE_PUBKEY
+  if (typeof pubkey !== 'string' || pubkey.length === 0)
+    throw new Error('Signed updater build requires its public key')
+  return {
+    bundle: { createUpdaterArtifacts: true },
+    plugins: { updater: { pubkey } },
+  }
+}
+
 export function updateBaseUrl(raw) {
   const url = new URL(raw)
   if (

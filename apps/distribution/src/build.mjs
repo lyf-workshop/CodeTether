@@ -21,6 +21,7 @@ import {
   updateFragment,
   updateReleaseEnabled,
   updaterArtifact,
+  signedUpdaterTauriConfig,
 } from './update-manifest.mjs'
 
 export async function reserveArtifact(path) {
@@ -72,8 +73,8 @@ async function main() {
     const updateUrl = signedUpdate
       ? updateBaseUrl(process.env.CODETETHER_UPDATE_BASE_URL)
       : null
-    // Tauri consumes signing inputs directly from the process environment.
-    // The ephemeral config override contains only the public artifacts flag.
+    // Tauri consumes the private signing inputs from the process environment.
+    // Its bundler also needs the public key in the ephemeral config override.
     if (signedUpdate) {
       pnpm(['desktop:sidecar'])
       pnpm([
@@ -81,7 +82,7 @@ async function main() {
         'apps/desktop',
         'tauri:build',
         '--config',
-        JSON.stringify({ bundle: { createUpdaterArtifacts: true } }),
+        JSON.stringify(signedUpdaterTauriConfig()),
       ])
     } else pnpm(['desktop:build'])
     const kinds =

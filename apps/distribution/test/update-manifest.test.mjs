@@ -8,6 +8,7 @@ import {
   updateFragment,
   updateReleaseEnabled,
   updaterArtifact,
+  signedUpdaterTauriConfig,
 } from '../src/update-manifest.mjs'
 
 const version = '0.1.0-alpha.3'
@@ -59,6 +60,17 @@ test('four-variable gate never enables a partially configured updater release', 
     }),
     true,
   )
+})
+
+test('signed Tauri build receives the public key in its config override', () => {
+  assert.deepEqual(
+    signedUpdaterTauriConfig({ CODETETHER_UPDATE_PUBKEY: 'test-public-key' }),
+    {
+      bundle: { createUpdaterArtifacts: true },
+      plugins: { updater: { pubkey: 'test-public-key' } },
+    },
+  )
+  assert.throws(() => signedUpdaterTauriConfig({}), /public key/u)
 })
 
 test('platform fragments use exact Tauri updater targets and release URLs', async (t) => {

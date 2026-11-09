@@ -5,7 +5,10 @@ import { Dialog, DialogContent, DialogTitle, cn } from '@codetether/ui'
 import type { MachineId, ProjectId, TurnId } from '@codetether/protocol'
 import type { ConversationSummary } from '@codetether/protocol'
 
-import type { ConversationControls } from './conversation-controls'
+import type {
+  ComposerModelSettings,
+  ConversationControls,
+} from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
@@ -40,6 +43,7 @@ export interface ConversationDetailPageProps {
   initialInspectorTab?: InspectorTab
   machineId?: MachineId
   controls: ConversationControls
+  modelSettings?: ComposerModelSettings
   projectId?: ProjectId
   targetTurnId?: TurnId
   onArchived?: (conversation: ConversationSummary) => void
@@ -55,6 +59,7 @@ export function ConversationDetailPage({
   initialInspectorTab = 'files',
   machineId,
   controls,
+  modelSettings,
   projectId,
   targetTurnId,
   onArchived,
@@ -206,6 +211,7 @@ export function ConversationDetailPage({
           projectBoundary={projectBoundary}
           displayContext={displayContext}
           controls={controls}
+          modelSettings={modelSettings}
           machineId={machineId}
           targetChangeId={selectedChangeId}
           targetChangeRequestKey={changeNavigationRequest}

@@ -314,6 +314,43 @@ test('projects and refreshes durable organization metadata without replacing liv
   assert.strictEqual(conversation.tools, existing.tools)
 })
 
+test('conversation.updated changes current model settings without replacing live Turns', () => {
+  const projection = projectSnapshot(snapshotWithRuntime())
+  const existing = projection.conversations[conversationId]
+  const updated = apply(
+    projection,
+    envelope(
+      1,
+      'conversation.updated',
+      {
+        conversation: {
+          conversationId,
+          projectId: 'proj_demo01',
+          title: 'Model settings updated',
+          titleSource: 'generated',
+          provider: 'codex',
+          model: 'gpt-5.1',
+          reasoning: 'medium',
+          currentModel: 'gpt-5.1',
+          currentReasoning: 'medium',
+          status: 'idle',
+          createdAt: timestamp,
+          updatedAt: '2026-08-26T07:05:00.000Z',
+          lastActivityAt: timestamp,
+        },
+      },
+      { turnId: null, itemId: null },
+    ),
+  ).conversations[conversationId]
+
+  assert.equal(updated.model, 'gpt-5.1')
+  assert.equal(updated.reasoning, 'medium')
+  assert.equal(updated.currentModel, 'gpt-5.1')
+  assert.equal(updated.currentReasoning, 'medium')
+  assert.strictEqual(updated.turns, existing.turns)
+  assert.strictEqual(updated.messages, existing.messages)
+})
+
 test('applies cold conversation.updated as cursor-only without inventing runtime state', () => {
   const projection = {
     cursor: { epoch, seq: 0 },

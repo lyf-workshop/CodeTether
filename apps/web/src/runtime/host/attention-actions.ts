@@ -143,6 +143,8 @@ export function attentionErrorMessage(error: unknown): string {
       return '该事项的状态已经变化，请稍候重试。'
     case 'unsupported':
       return '当前事项不能通过此操作处理。'
+    case 'operation_not_allowed':
+      return '当前事项不能通过此操作处理。'
     case 'timeout':
       return '操作等待超时，请重试。'
     case 'project_unavailable':

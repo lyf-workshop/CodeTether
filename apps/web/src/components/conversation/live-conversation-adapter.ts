@@ -234,10 +234,12 @@ export function createLiveConversationViewModel(
     status: model.status,
     agent: provider.agent,
     provider: model.provider,
-    model: model.model ?? '默认模型',
+    model: model.currentModel ?? model.model ?? '默认模型',
     reasoning:
-      provider.reasoningOptions.find((option) => option.id === model.reasoning)
-        ?.label ??
+      provider.reasoningOptions.find(
+        (option) => option.id === (model.currentReasoning ?? model.reasoning),
+      )?.label ??
+      model.currentReasoning ??
       model.reasoning ??
       '默认',
     permission:

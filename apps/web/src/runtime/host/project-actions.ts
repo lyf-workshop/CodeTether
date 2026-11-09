@@ -351,6 +351,8 @@ export function projectErrorMessage(
       return '此项目仍有关联会话，当前不能移除。'
     case 'unsupported':
       return '当前 CodeTether 版本不支持此项目操作。'
+    case 'operation_not_allowed':
+      return '当前状态不允许此项目操作。'
     case 'timeout':
       return '项目操作等待超时，请重试。'
     case 'runtime_unavailable':

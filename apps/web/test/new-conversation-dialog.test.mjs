@@ -409,3 +409,129 @@ test('real composer preserves session draft after rejected submission without re
     await dom.close()
   }
 })
+
+test('composer waits for a model change before submitting the next Turn', async () => {
+  const dom = await createDom()
+  const { Composer } = loadWebComponent('components/conversation/composer.tsx')
+  let sends = 0
+  const modelSwitchController = {
+    pending: true,
+    loadingModels: false,
+    refreshModels: async () => {},
+    update: async () => {},
+  }
+  const controller = {
+    state: 'idle',
+    submit: async () => {
+      sends += 1
+      return true
+    },
+  }
+  const view = () =>
+    h(Composer, {
+      conversationId: 'conv_switch_pending',
+      capabilities,
+      controller,
+      modelSwitchController,
+      modelSettings: {
+        currentModel: 'gpt-5',
+        availableModels: [{ id: 'gpt-5', name: 'GPT-5' }],
+        reasoningOptions: [],
+        canSelectModel: true,
+        canSelectReasoning: false,
+      },
+      providerName: 'Codex',
+    })
+  try {
+    await dom.render(view())
+    const editor = dom.container.querySelector('textarea')
+    await dom.input(editor, 'run after switching')
+    assert.equal(
+      dom.container.querySelector('button[type="submit"]').disabled,
+      true,
+    )
+    await dom.perform(() =>
+      dom.container
+        .querySelector('form')
+        .dispatchEvent(
+          new dom.window.Event('submit', { bubbles: true, cancelable: true }),
+        ),
+    )
+    assert.equal(sends, 0)
+    assert.equal(editor.value, 'run after switching')
+
+    modelSwitchController.pending = false
+    await dom.render(view())
+    assert.equal(
+      dom.container.querySelector('button[type="submit"]').disabled,
+      false,
+    )
+  } finally {
+    await dom.close()
+  }
+})
+
+test('keyboard opening a cold model picker requests its catalog without submitting', async () => {
+  const dom = await createDom()
+  dom.window.HTMLElement.prototype.scrollIntoView = () => {}
+  const { Composer } = loadWebComponent('components/conversation/composer.tsx')
+  let refreshes = 0
+  let sends = 0
+  try {
+    await dom.render(
+      h(Composer, {
+        conversationId: 'conv_cold_picker',
+        capabilities,
+        controller: {
+          state: 'idle',
+          submit: async () => {
+            sends += 1
+            return true
+          },
+        },
+        modelSwitchController: {
+          pending: false,
+          loadingModels: false,
+          refreshModels: async () => {
+            refreshes += 1
+          },
+          update: async () => {},
+        },
+        modelSettings: {
+          currentModel: 'gpt-5',
+          availableModels: [],
+          reasoningOptions: [],
+          canSelectModel: true,
+          canSelectReasoning: false,
+        },
+        providerName: 'Codex',
+      }),
+    )
+    const trigger = dom.container.querySelector('[role="combobox"]')
+    assert.equal(trigger.type, 'button')
+    assert.match(trigger.getAttribute('aria-label'), /当前 gpt-5/u)
+    await dom.perform(() =>
+      trigger.dispatchEvent(
+        new dom.window.KeyboardEvent('keydown', {
+          key: 'Enter',
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    )
+    assert.equal(refreshes, 1)
+    assert.equal(sends, 0)
+    await dom.perform(() =>
+      dom.window.document.activeElement.dispatchEvent(
+        new dom.window.KeyboardEvent('keydown', {
+          key: 'Escape',
+          bubbles: true,
+          cancelable: true,
+        }),
+      ),
+    )
+    await dom.until(() => trigger.getAttribute('aria-expanded') === 'false')
+  } finally {
+    await dom.close()
+  }
+})

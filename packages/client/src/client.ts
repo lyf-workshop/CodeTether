@@ -36,6 +36,7 @@ import {
   RemoveProjectLocationResponseSchema,
   RefreshMachineProvidersRequestSchema,
   RefreshMachineProvidersResponseSchema,
+  RefreshConversationModelsResponseSchema,
   SelectMachineProviderInstallationResponseSchema,
   SelectMachineProviderInstallationRequestSchema,
   ReadNativeTranscriptQuerySchema,
@@ -87,6 +88,8 @@ import {
   UnarchiveConversationResponseSchema,
   UnpinConversationRequestSchema,
   UnpinConversationResponseSchema,
+  UpdateConversationModelRequestSchema,
+  UpdateConversationModelResponseSchema,
   UpdateOnboardingRequestSchema,
   UpdateOnboardingResponseSchema,
   type ActionId,
@@ -126,6 +129,7 @@ import {
   type RemoveProjectLocationResponse,
   type RefreshMachineProvidersRequest,
   type RefreshMachineProvidersResponse,
+  type RefreshConversationModelsResponse,
   type SelectMachineProviderInstallationRequest,
   type SelectMachineProviderInstallationResponse,
   type ReadNativeTranscriptQuery,
@@ -175,6 +179,8 @@ import {
   type UnarchiveConversationResponse,
   type UnpinConversationRequest,
   type UnpinConversationResponse,
+  type UpdateConversationModelRequest,
+  type UpdateConversationModelResponse,
   type UpdateOnboardingRequest,
   type UpdateOnboardingResponse,
   protocolVersion,
@@ -1332,6 +1338,50 @@ export class CodeTetherClient {
       'POST',
       'unarchive-conversation',
       options,
+    )
+  }
+
+  async updateConversationModel(
+    conversationId: ConversationId,
+    input: UpdateConversationModelRequest,
+    options: RequestOptions = {},
+  ): Promise<UpdateConversationModelResponse> {
+    const conversation = parseProtocol(
+      ConversationIdSchema,
+      conversationId,
+      'update-conversation-model id',
+    )
+    const request = parseProtocol(
+      UpdateConversationModelRequestSchema,
+      input,
+      'update-conversation-model request',
+    )
+    const response = await this.#request(
+      `/api/v1/conversations/${encodeURIComponent(conversation)}/model`,
+      UpdateConversationModelResponseSchema,
+      { ...jsonRequest(request, options.signal), method: 'PATCH' },
+      request.actionId,
+    )
+    assertProtocolIdentity(
+      response.data.conversation.conversationId === conversation,
+      'Update Conversation Model response does not match the requested Conversation',
+    )
+    return response
+  }
+
+  async refreshConversationModels(
+    conversationId: ConversationId,
+    options: RequestOptions = {},
+  ): Promise<RefreshConversationModelsResponse> {
+    const conversation = parseProtocol(
+      ConversationIdSchema,
+      conversationId,
+      'refresh-conversation-models id',
+    )
+    return await this.#request(
+      `/api/v1/conversations/${encodeURIComponent(conversation)}/models/refresh`,
+      RefreshConversationModelsResponseSchema,
+      jsonRequest({}, options.signal),
     )
   }
 

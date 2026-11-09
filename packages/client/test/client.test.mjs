@@ -1428,6 +1428,121 @@ test('rejects Conversation organization responses for another identity', async (
   )
 })
 
+test('updates a Conversation model through the typed PATCH route', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_model01',
+        status: 'completed',
+        data: {
+          conversation: {
+            ...conversationSummary,
+            currentModel: 'gpt-5.1',
+            currentReasoning: 'high',
+          },
+        },
+      })
+    },
+  })
+
+  const response = await client.updateConversationModel(
+    conversationId,
+    { actionId: 'act_model01', model: 'gpt-5.1', reasoning: 'high' },
+    { signal: controller.signal },
+  )
+
+  assert.equal(response.data.conversation.currentModel, 'gpt-5.1')
+  assert.equal(response.data.conversation.currentReasoning, 'high')
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/conversations/${conversationId}/model`,
+  )
+  assert.equal(calls[0].init.method, 'PATCH')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    actionId: 'act_model01',
+    model: 'gpt-5.1',
+    reasoning: 'high',
+  })
+})
+
+test('rejects a model update response for another Conversation', async () => {
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async () =>
+      jsonResponse({
+        protocolVersion: 1,
+        actionId: 'act_model02',
+        status: 'completed',
+        data: {
+          conversation: {
+            ...conversationSummary,
+            conversationId: 'conv_other01',
+            currentModel: 'gpt-5.1',
+          },
+        },
+      }),
+  })
+
+  await assert.rejects(
+    client.updateConversationModel(conversationId, {
+      actionId: 'act_model02',
+      model: 'gpt-5.1',
+    }),
+    CodeTetherProtocolError,
+  )
+})
+
+test('loads a Codex model catalog only on the explicit refresh request', async () => {
+  const calls = []
+  const controller = new AbortController()
+  const provider = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    capabilities: {
+      streaming: true,
+      resume: true,
+      interrupt: true,
+      approvals: true,
+      fileRead: true,
+      fileEdit: true,
+      shell: true,
+      search: true,
+      diff: true,
+      toolEvents: true,
+      modelSelection: true,
+      reasoningControl: true,
+    },
+    availableModels: [{ id: 'gpt-5.1', name: 'GPT-5.1' }],
+  }
+  const client = new CodeTetherClient({
+    baseUrl: 'http://host.test',
+    fetch: async (input, init) => {
+      calls.push({ url: String(input), init })
+      return jsonResponse({ protocolVersion: 1, provider })
+    },
+  })
+
+  const response = await client.refreshConversationModels(conversationId, {
+    signal: controller.signal,
+  })
+
+  assert.deepEqual(response.provider.availableModels, provider.availableModels)
+  assert.equal(
+    new URL(calls[0].url).pathname,
+    `/api/v1/conversations/${conversationId}/models/refresh`,
+  )
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[0].init.signal, controller.signal)
+  assert.deepEqual(JSON.parse(calls[0].init.body), {})
+})
+
 test('lists Attention with bounded filters and forwards AbortSignal', async () => {
   const calls = []
   const controller = new AbortController()

@@ -31,6 +31,27 @@ export interface InterruptController {
   execute(): Promise<void>
 }
 
+export interface ModelSwitchController {
+  readonly pending: boolean
+  readonly loadingModels: boolean
+  readonly catalog?: ProviderDescriptor
+  readonly error?: string
+  update(selection: {
+    readonly model?: string
+    readonly reasoning?: string
+  }): Promise<void>
+  refreshModels(): Promise<void>
+}
+
+export interface ComposerModelSettings {
+  readonly currentModel?: string
+  readonly currentReasoning?: string
+  readonly availableModels: NonNullable<ProviderDescriptor['availableModels']>
+  readonly reasoningOptions: NonNullable<ProviderDescriptor['reasoningOptions']>
+  readonly canSelectModel: boolean
+  readonly canSelectReasoning: boolean
+}
+
 export interface ApprovalControlState {
   readonly state: 'pending' | 'submitting'
   readonly decision?: ApprovalDecision
@@ -54,6 +75,7 @@ export interface FailedTurnRetryController {
 
 export interface ConversationControls {
   readonly composer: ComposerController
+  readonly modelSwitch?: ModelSwitchController
   readonly interrupt: InterruptController
   readonly approvals: ApprovalController
   readonly failedTurnRetry: FailedTurnRetryController

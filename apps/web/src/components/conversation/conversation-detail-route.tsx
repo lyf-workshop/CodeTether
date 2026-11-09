@@ -365,7 +365,8 @@ function LoadedLiveConversationDetail({
         provider: machineQuery.data?.providers.find(
           (provider) => provider.provider === detail.conversation.provider,
         ),
-        reasoning: detail.conversation.reasoning,
+        reasoning:
+          conversation.currentReasoning ?? detail.conversation.reasoning,
       })}
       connectionState={presentation.connectionState}
       bootstrap={runtime.bootstrap}
@@ -550,6 +551,25 @@ function ConnectedLiveConversationDetail({
             },
           })}
       controls={controls}
+      modelSettings={{
+        ...((conversation.currentModel ?? conversation.model) === undefined
+          ? {}
+          : { currentModel: conversation.currentModel ?? conversation.model }),
+        ...((conversation.currentReasoning ?? conversation.reasoning) ===
+        undefined
+          ? {}
+          : {
+              currentReasoning:
+                conversation.currentReasoning ?? conversation.reasoning,
+            }),
+        availableModels: machineProvider?.availableModels ?? [],
+        reasoningOptions: machineProvider?.reasoningOptions ?? [],
+        canSelectModel: machineProvider?.capabilities.modelSelection === true,
+        canSelectReasoning:
+          conversation.provider === 'claude-code' &&
+          machineProvider?.capabilities.reasoningControl === true &&
+          (machineProvider?.reasoningOptions?.length ?? 0) > 0,
+      }}
       initialInspectorTab={initialInspectorTab}
       machineId={owningMachineId}
       displayContext={displayContext}
@@ -666,6 +686,12 @@ function includeCurrentSummary(
     ...(durable.reasoning === undefined
       ? {}
       : { reasoning: durable.reasoning }),
+    ...(current.currentModel === undefined
+      ? {}
+      : { currentModel: current.currentModel }),
+    ...(current.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: current.currentReasoning }),
     status: durable.status,
     createdAt: durable.createdAt,
     updatedAt: current.updatedAt,

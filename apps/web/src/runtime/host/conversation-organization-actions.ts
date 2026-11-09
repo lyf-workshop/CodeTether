@@ -240,6 +240,8 @@ export function conversationOrganizationErrorMessage(
       return '项目目录当前不可用，但会话历史仍可查看。'
     case 'unsupported':
       return '当前 CodeTether 版本不支持此会话操作。'
+    case 'operation_not_allowed':
+      return '当前状态不允许此会话操作。'
     case 'timeout':
       return '会话操作等待超时，请重试。'
     case 'runtime_unavailable':

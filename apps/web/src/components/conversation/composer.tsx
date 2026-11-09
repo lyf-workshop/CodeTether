@@ -18,7 +18,17 @@ import {
   WifiOff,
 } from 'lucide-react'
 
-import { Button, IconButton, Textarea, cn } from '@codetether/ui'
+import {
+  Button,
+  IconButton,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
+  cn,
+} from '@codetether/ui'
 
 import type {
   ConversationCapabilitiesViewModel,
@@ -27,8 +37,10 @@ import type {
 import {
   draftAfterSubmit,
   shouldSubmitComposerKey,
+  type ComposerModelSettings,
   type ComposerController,
   type InterruptController,
+  type ModelSwitchController,
 } from './conversation-controls'
 import {
   composerGatePresentation,
@@ -40,6 +52,8 @@ interface ComposerProps {
   conversationId: string
   capabilities: ConversationCapabilitiesViewModel
   controller: ComposerController
+  modelSettings?: ComposerModelSettings
+  modelSwitchController?: ModelSwitchController
   interruptController?: InterruptController
   context?: ConversationDisplayContext
   providerName?: string
@@ -53,6 +67,8 @@ export function Composer({
   conversationId,
   capabilities,
   controller,
+  modelSettings,
+  modelSwitchController,
   interruptController,
   context,
   providerName = 'AI 工具',
@@ -80,9 +96,35 @@ export function Composer({
   })
   const canEdit = gate === undefined
   const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
-  const canSend = canEdit && value.trim().length > 0
+  const canSend =
+    canEdit &&
+    modelSwitchController?.pending !== true &&
+    value.trim().length > 0
   const feedback =
-    controller.error ?? interruptController?.error ?? externalError
+    controller.error ??
+    modelSwitchController?.error ??
+    interruptController?.error ??
+    externalError
+  const modelCanChange =
+    canEdit && !archived && modelSwitchController?.pending !== true
+  const availableModels =
+    modelSwitchController?.catalog === undefined
+      ? (modelSettings?.availableModels ?? [])
+      : (modelSwitchController.catalog.availableModels ?? [])
+  const reasoningOptions =
+    modelSwitchController?.catalog === undefined
+      ? (modelSettings?.reasoningOptions ?? [])
+      : (modelSwitchController.catalog.reasoningOptions ?? [])
+  const currentModel = modelSettings?.currentModel
+  const modelName =
+    availableModels.find((model) => model.id === currentModel)?.name ??
+    currentModel ??
+    '默认模型'
+  const currentReasoning = modelSettings?.currentReasoning
+  const reasoningName =
+    reasoningOptions.find((option) => option.id === currentReasoning)?.label ??
+    currentReasoning ??
+    '默认'
 
   const restoreSubmitFocus = useCallback(() => {
     const editor = editorRef.current
@@ -196,6 +238,97 @@ export function Composer({
           gate?.kind === 'waiting' && 'border-warning/45',
         )}
       >
+        {modelSettings === undefined ? null : (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs text-text-secondary">
+            <span className="shrink-0 font-medium text-text-primary">
+              {providerName}
+            </span>
+            <span aria-hidden="true">·</span>
+            {modelSettings.canSelectModel &&
+            modelSwitchController !== undefined ? (
+              <Select
+                value={
+                  availableModels.some((model) => model.id === currentModel)
+                    ? currentModel
+                    : undefined
+                }
+                onOpenChange={(open) => {
+                  if (open) void modelSwitchController.refreshModels()
+                }}
+                onValueChange={(model) =>
+                  void modelSwitchController.update({ model })
+                }
+                disabled={!modelCanChange}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={`切换模型，当前 ${modelName}`}
+                  className="h-7 w-auto max-w-52 border-0 bg-transparent px-1 text-xs shadow-none"
+                >
+                  <SelectValue placeholder={modelName} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((model) => (
+                    <SelectItem
+                      key={model.id}
+                      value={model.id}
+                      title={model.description}
+                    >
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                  {availableModels.length === 0 ? (
+                    <div
+                      role="status"
+                      className="px-2 py-2 text-xs text-text-muted"
+                    >
+                      {modelSwitchController.loadingModels
+                        ? '正在读取模型…'
+                        : '暂无可用模型'}
+                    </div>
+                  ) : null}
+                </SelectContent>
+              </Select>
+            ) : (
+              <span className="min-w-0 truncate" title={modelName}>
+                {modelName}
+              </span>
+            )}
+            {modelSettings.canSelectReasoning &&
+            modelSwitchController !== undefined ? (
+              <Select
+                value={
+                  reasoningOptions.some(
+                    (option) => option.id === currentReasoning,
+                  )
+                    ? currentReasoning
+                    : undefined
+                }
+                onValueChange={(reasoning) =>
+                  void modelSwitchController.update({ reasoning })
+                }
+                disabled={!modelCanChange}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={`调整推理强度，当前 ${reasoningName}`}
+                  className="ml-auto h-7 w-auto max-w-36 border-0 bg-transparent px-1 text-xs shadow-none"
+                >
+                  <SelectValue placeholder={`推理：${reasoningName}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {reasoningOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : currentReasoning === undefined ? null : (
+              <span className="ml-auto truncate">推理：{reasoningName}</span>
+            )}
+          </div>
+        )}
         {/* Submission and active work keep the same focused, read-only editor.
             Only archived/unavailable gates replace the visible input. */}
         <div

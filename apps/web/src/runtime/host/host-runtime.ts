@@ -3,6 +3,7 @@ import {
   CodeTetherIncompatibleProtocolError,
 } from '@codetether/client'
 import {
+  ConversationIdSchema,
   formatLastEventId,
   type ApprovalDecision,
   type AdoptProviderSessionRequest,
@@ -20,6 +21,9 @@ import {
   type ProjectId,
   type ReadNativeTranscriptQuery,
   type ReadNativeTranscriptResponse,
+  type RefreshConversationModelsResponse,
+  type UpdateConversationModelRequest,
+  type UpdateConversationModelResponse,
 } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -41,7 +45,10 @@ import {
   LiveConversationActions,
   type LiveConversationMutationClient,
 } from './live-conversation-actions.js'
-import type { ConversationDetailReadClient } from './conversation-detail-query.js'
+import {
+  conversationDetailQueryKeys,
+  type ConversationDetailReadClient,
+} from './conversation-detail-query.js'
 import {
   ConversationOrganizationActions,
   type ConversationOrganizationMutationClient,
@@ -120,6 +127,13 @@ export interface HostRuntimeClient
     OnboardingReadClient,
     OnboardingMutationClient,
     DoctorReadClient {
+  updateConversationModel(
+    conversationId: ConversationId,
+    request: UpdateConversationModelRequest,
+  ): Promise<UpdateConversationModelResponse>
+  refreshConversationModels(
+    conversationId: ConversationId,
+  ): Promise<RefreshConversationModelsResponse>
   discoverProviderSessions(
     projectId: ProjectId,
     machineId: MachineId,
@@ -334,6 +348,31 @@ export class HostRuntime {
 
   startNewTurn(conversationId: string, text: string) {
     return this.#actions.startNewTurn(conversationId, text)
+  }
+
+  async updateConversationModel(
+    conversationId: string,
+    update: Pick<UpdateConversationModelRequest, 'model' | 'reasoning'>,
+  ): Promise<UpdateConversationModelResponse> {
+    const response = await this.#client.updateConversationModel(
+      ConversationIdSchema.parse(conversationId),
+      { actionId: createBrowserActionId(), ...update },
+    )
+    void this.#queryClient.invalidateQueries({
+      queryKey: conversationDetailQueryKeys.detail(
+        ConversationIdSchema.parse(conversationId),
+      ),
+      exact: true,
+    })
+    return response
+  }
+
+  refreshConversationModels(
+    conversationId: string,
+  ): Promise<RefreshConversationModelsResponse> {
+    return this.#client.refreshConversationModels(
+      ConversationIdSchema.parse(conversationId),
+    )
   }
 
   interruptTurn(conversationId: string, turnId: string) {

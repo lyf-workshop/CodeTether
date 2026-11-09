@@ -30,7 +30,7 @@ function composer(c) {
   if (!reach(m)) return `<div class="cnote">${I('wifi_off', 'sm')}<span class="grow">${m.via ? `要等 ${$m(m.via).name} 上线才能发送` : `${m.name} 离线，上线后才能发送`}</span></div>`;
   if (c.status === 'waiting') return `<div class="cnote">${I('shield', 'sm')}<span class="grow">先处理上面的批准，这一轮结束后再发送</span></div>`;
   if (c.status === 'running') {
-    const stop = canControl(c) ? `<button class="btn danger sm" data-flash="已请求停止（演示：先解锁平板）">${I('stop', 'sm')}停止</button>` : '<span style="font-size:13px;color:var(--text-3);padding-right:10px">这台设备上不能停止</span>';
+    const stop = canControl(c) ? `<button class="btn danger sm" data-sheet="stop">${I('stop', 'sm')}停止</button>` : '<span style="font-size:13px;color:var(--text-3);padding-right:10px">这台设备上不能停止</span>';
     return `<div class="cnote"><span class="spin"></span><span class="grow">${c.step} · ${c.elapsed}</span>${stop}</div>`;
   }
   return `<div class="cbox"><textarea rows="1" placeholder="回复 ${AG[c.agent]}……"></textarea><button class="send" data-flash="演示：不会真的发送" aria-label="发送">${I('send', 'sm')}</button></div>
@@ -39,18 +39,23 @@ function composer(c) {
 
 function inspector(c, q) {
   if (!canControl(c)) return `<div class="inspector">${nav({ title: '变更', right: tb('x', '关闭', `data-go="#/c/${c.id}"`), lined: true, inner: true })}<div class="ibody"><div class="note" style="margin-top:14px">${I('info')}<span>${c.agent === 'claude' ? 'Claude Code 只读取和搜索文件，不修改文件，所以没有变更。' : '经由电脑访问的设备上还不能查看变更。'}</span></div></div></div>`;
-  const sel = Number(q.f || 0), f = DIFF[sel];
+  const sel = Number(q.f || 0), f = DIFF[sel], wrap = q.wrap !== '0';
+  const wrapSw = `<button class="tb txt" data-go="#/c/${c.id}?panel=changes&f=${sel}&wrap=${wrap ? 0 : 1}">换行<span class="sw sm ${wrap ? 'on' : ''}"></span></button>`;
   return `<div class="inspector">${nav({ title: '变更', sub: `${DIFF.length} 个文件 · +9 −3`, right: tb('x', '关闭', `data-go="#/c/${c.id}"`), lined: true, inner: true })}<div class="ibody">
     <div class="group" style="margin-top:14px">${DIFF.map((d, i) => `<button class="frow ${i === sel ? 'on' : ''}" data-go="#/c/${c.id}?panel=changes&f=${i}">${I('file', 'sm')}<code>${d.f.split('/').pop()}</code><span class="add">+${d.add}</span><span class="del">−${d.del}</span></button>`).join('')}</div>
-    <div class="diff"><div class="h">${f.f}</div>${f.lines.map(([k, t]) => `<div class="l ${k}">${k === 'a' ? '+' : k === 'd' ? '−' : k === 'at' ? '' : ' '}${esc(t)}</div>`).join('')}</div></div></div>`;
+    <div class="diff ${wrap ? 'wrap' : ''}"><div class="h"><span>${f.f}</span>${wrapSw}</div>${f.lines.map(([k, t]) => `<div class="l ${k}">${k === 'a' ? '+' : k === 'd' ? '−' : k === 'at' ? '' : ' '}${esc(t)}</div>`).join('')}</div></div></div>`;
 }
 
 function scrConv(id, q) {
   const c = $c(id);
   if (!c) return { sel: '', main: nav() + page(`<h1 class="large">找不到这个会话</h1><p class="lead">它可能已经被移除，或者属于一台已经不能访问的电脑。</p><a class="btn tint" href="#/home">回到最近的会话</a>`) };
   const p = $p(c.p), m = machineOfConv(c), panel = q.panel === 'changes';
-  const sub = `${m.name} › ${p.name} · ${AG[c.agent]}${c.imported ? ' · 导入的会话' : ''}`;
-  const right = `${tb('panel', '变更', `data-go="#/c/${id}${panel ? '' : '?panel=changes'}" ${panel ? 'class="tb on"' : ''}`)}${tb('more', '更多', 'data-menu="conv"')}`;
+  // 标题下的“设备 › 项目”可以点，回到那一层（iPad 没有系统返回键）
+  const sub = `<a href="#/devices/${m.id}">${m.name}</a> › <a href="#/projects/${p.id}">${p.name}</a> · ${AG[c.agent]}${c.imported ? ' · 导入的会话' : ''}`;
+  // 变更入口：带文字和文件数，没有变更时不显示
+  const chg = canControl(c) && DIFF.length
+    ? `<button class="tb txt chg ${panel ? 'on' : ''}" data-go="#/c/${id}${panel ? '' : '?panel=changes'}">${I('panel', 'sm')}变更 ${DIFF.length}</button>` : '';
+  const right = `${chg}${tb('more', '更多', 'data-menu="conv"')}`;
   const busy = c.status === 'running' || c.status === 'waiting';
   const menu = S.menu === 'conv' || q.menu === 'conv'
     ? `<div class="menu"><button data-flash="已置顶">${I('pin', 'sm')}${c.pinned ? '取消置顶' : '置顶'}</button><button data-sheet="rename:${id}">${I('edit', 'sm')}重命名</button>

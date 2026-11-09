@@ -36,6 +36,8 @@ shot 02-09-conv-menu         /c/c9 "menu=conv"
 shot 02-10-new-session       /home "modal=new"
 shot 02-11-new-claude        /projects/p-web "modal=new:p-web"
 shot 02-12-search            /home "modal=search"
+shot 02-13-conv-stop         /c/c8 "modal=stop"
+shot 02-14-changes-nowrap    "/c/c1?panel=changes&wrap=0"
 # 03 · 设备和项目
 shot 03-01-devices           /devices
 shot 03-02-device            /devices/m-win

@@ -1,6 +1,6 @@
-// 路由：#/home #/inbox?f= #/devices #/devices/:id #/projects/:id(?view=archived&s=) #/projects/:id/search?q= #/c/:id(?panel=changes&f=)
+// 路由：#/home #/inbox?f= #/devices #/devices/:id #/projects/:id(?view=archived&s=) #/projects/:id/search?q= #/c/:id(?panel=changes&f=&wrap=0)
 //       #/settings #/settings/connection #/roadmap #/signin(?step=code) #/pair(?step=wrong|expired|done) #/home?removed=1
-// 页面参数（写在 ? 里，截图用）：theme=light|dark  o=land|port  bezel=1  side=1  modal=new|new:p-web|addproj:m-win(:name|:found)|rename:c1|archive:c9|rmproj:p-web|unpair:m-mac|pair|search  menu=conv|proj
+// 页面参数（写在 ? 里，截图用）：theme=light|dark  o=land|port  bezel=1  side=1  modal=new|new:p-web|addproj:m-win(:name|:found)|rename:c1|archive:c9|stop|rmproj:p-web|unpair:m-mac|pair|search  menu=conv|proj
 const QS = new URLSearchParams(location.search);
 document.documentElement.dataset.theme = QS.get('theme') || 'light';
 if (QS.get('bezel')) document.body.classList.add('bezel');

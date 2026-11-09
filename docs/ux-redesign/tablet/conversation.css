@@ -44,7 +44,10 @@
 .frow.on { background: var(--sel); }
 .add { color: var(--ok-text); font-weight: 600; } .del { color: var(--err-text); font-weight: 600; }
 .diff { margin-top: 12px; border-radius: 12px; overflow: hidden; background: var(--cell); font: 12.5px/1.6 ui-monospace, "SF Mono", Consolas, monospace; }
-.diff .h { padding: 8px 12px; color: var(--text-2); border-bottom: 1px solid var(--sep); font-family: inherit; }
-.diff .l { padding: 0 12px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+.diff .h { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 4px 0 12px; color: var(--text-2); border-bottom: 1px solid var(--sep); font-family: inherit; }
+.diff .h > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff .h .tb { font: 13px/1 -apple-system, system-ui, sans-serif; color: var(--text-2); gap: 8px; display: flex; }
+.diff .l { padding: 0 12px; white-space: pre; overflow-x: auto; }
+.diff.wrap .l { white-space: pre-wrap; overflow-wrap: anywhere; }
 .diff .l.a { background: var(--ok-soft); } .diff .l.d { background: var(--err-soft); }
 .diff .l.at { color: var(--text-3); background: var(--fill); }

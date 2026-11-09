@@ -5,9 +5,12 @@ function scrHome(q) {
   if (q.removed) return { sel: 'home', main: nav() + page(`<h1 class="large">最近的会话</h1>
     <div class="note err" style="margin-top:14px">${I('alert')}<span><b>Windows 台式机 已把这台平板移除</b><br>要再用它，到那台电脑上打开 设备 › 添加设备，生成新的配对码，然后在这里输入。</span></div>
     <div style="margin-top:14px;display:flex;gap:10px"><button class="btn fill" data-sheet="pair">输入配对码</button><a class="btn gray" href="#/devices">看其他电脑</a></div>`) };
-  const live = D.conversations.filter((c) => c.status === 'waiting' || c.status === 'running').sort((a, b) => a.ago - b.ago);
+  // 需要你处理 = 待处理（等待批准、已完成待查看、失败），数字和侧栏角标一致；运行中的不需要你动手，单列一节
+  const todo = D.attention.map((a) => $c(a.c));
+  const running = D.conversations.filter((c) => c.status === 'running').sort((a, b) => a.ago - b.ago);
   let h = `<h1 class="large">最近的会话</h1><p class="lead">所有电脑和设备上的会话，按设备分组。</p>`;
-  h += sec('需要你处理', '', `${live.length} 个`) + `<div class="group">${live.map((c) => convRow(c, true)).join('')}</div>`;
+  h += sec('需要你处理', '<a href="#/inbox">全部</a>', `${todo.length} 个`) + `<div class="group">${todo.map((c) => convRow(c, true)).join('')}</div>`;
+  if (running.length) h += sec('正在运行', '', `${running.length} 个`) + `<div class="group">${running.map((c) => convRow(c, true)).join('')}</div>`;
   for (const m of D.machines) {
     const list = D.projects.filter((p) => p.m === m.id).flatMap((p) => convsOf(p.id)).sort((a, b) => a.ago - b.ago);
     h += sec(`${m.name}`, list.length > 5 ? `<a href="#/devices/${m.id}">查看全部</a>` : '', mSub(m));

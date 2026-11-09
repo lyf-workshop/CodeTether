@@ -99,6 +99,7 @@ body.bezel .screen { border-radius: 22px; outline: 14px solid #111; box-shadow: 
 .nav .center { text-align: center; min-width: 0; max-width: 56%; }
 .nav .center b { display: block; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav .center small { display: block; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav .center small a { color: inherit; text-decoration: underline; text-decoration-color: var(--sep); text-underline-offset: 2px; }
 .body { flex: 1; overflow-y: auto; }
 .page { max-width: 820px; margin: 0 auto; padding: 0 28px 40px; }
 .large { font-size: 32px; font-weight: 700; letter-spacing: -.4px; margin: 6px 0 2px; }

@@ -76,7 +76,7 @@ window.DIFF = [
   { f: 'apps/web/src/components/conversation-row.tsx', add: 6, del: 2, lines: [
     ['at', '@@ -18,9 +18,13 @@'], ['', '  return ('], ['d', '    <div className="row">'], ['a', '    <div className="row min-w-0">'],
     ['a', '      <span className="title truncate">{title}</span>'], ['d', '      <span className="title">{title}</span>'],
-    ['a', '      <time className="shrink-0 tabular-nums">'], ['a', '        {formatTime(at)}'], ['a', '      </time>'], ['', '    </div>'] ] },
+    ['a', '      <time className="shrink-0 tabular-nums" dateTime={at} title={formatFullTime(at, { locale, timeZone })} aria-label={`最后活动 ${formatRelative(at)}`}>'], ['a', '        {formatTime(at)}'], ['a', '      </time>'], ['', '    </div>'] ] },
   { f: 'apps/web/src/styles/workspace-responsive.css', add: 3, del: 1, lines: [
     ['at', '@@ -42,6 +42,8 @@'], ['', '@media (max-width: 1000px) {'], ['d', '  .row time { width: 96px; }'],
     ['a', '  .row time { width: auto; }'], ['a', '  .row .title { min-width: 0; }'], ['a', '  .row { gap: 8px; }'], ['', '}'] ] },

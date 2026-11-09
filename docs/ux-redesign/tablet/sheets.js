@@ -72,5 +72,6 @@ function renderSheet(s) {
   const [k, ...rest] = s.split(':'), a = rest.join(':');
   if (s.startsWith('new')) return shNew(s.slice(3));
   return ({ addproj: () => shAddProject(a), rename: () => shRename(a), 'rename-p': () => shRename(a, true), archive: () => confirmSheet('归档这个会话？', '归档后在项目的“已归档”里，可以随时恢复。', '归档'),
+    stop: () => confirmSheet('停止这一轮？', '已经做了的修改会保留，可以接着发消息。', '停止', true),
     rmproj: () => shRmProject(a), unpair: () => shUnpair(a), pair: shPair, search: shSearch }[k] || (() => ''))();
 }

@@ -44,6 +44,7 @@ a.row:active, button.row:active { background: var(--fill); }
 .tb { width: 44px; height: 44px; border-radius: 22px; display: grid; place-items: center; color: var(--text); }
 .tb:active, .tb.on { background: var(--fill); }
 .tb.txt { width: auto; padding: 0 12px; font-weight: 500; }
+.tb.chg { display: flex; gap: 6px; align-items: center; font-size: 15px; }
 
 /* 状态 */
 .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--off); }
@@ -65,6 +66,7 @@ a.row:active, button.row:active { background: var(--fill); }
 .sw { width: 51px; height: 31px; border-radius: 16px; background: var(--fill-2); position: relative; flex: none; }
 .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgb(0 0 0 / .2); transition: left .15s; }
 .sw.on { background: var(--accent); } .sw.on::after { left: 22px; background: var(--on-accent); }
+.sw.sm { width: 38px; height: 23px; } .sw.sm::after { width: 19px; height: 19px; } .sw.sm.on::after { left: 17px; }
 .field { width: 100%; min-height: 48px; padding: 12px 14px; border-radius: 12px; border: 0; background: var(--fill); font: inherit; color: var(--text); resize: none; }
 .check { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--fill-2); display: grid; place-items: center; flex: none; }
 .check.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }

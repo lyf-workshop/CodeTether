@@ -1559,6 +1559,95 @@ test('native-resume loss permits a genuinely uninitialized remote Conversation t
   )
 })
 
+test('local model update publishes current settings once and replays the first action result', async (t) => {
+  const fixture = await createFixture(t)
+  const catalog = [
+    { id: 'gpt-old', name: 'Old', reasoningOptions: ['medium'] },
+    { id: 'gpt-new', name: 'New', reasoningOptions: ['high'] },
+  ]
+  fixture.runtime.descriptor = {
+    ...fixture.runtime.descriptor,
+    availableModels: catalog.map(({ id, name }) => ({ id, name })),
+  }
+  fixture.runtime.refreshAvailableModels = async () => catalog
+  const created = await fixture.service.createConversation({
+    actionId: 'act_phase8b_local_model_create',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  const updates = []
+  const unsubscribe = fixture.service.publisher.subscribe((event) => {
+    if (event.type === 'conversation.updated') updates.push(event)
+  })
+  try {
+    const request = {
+      actionId: 'act_phase8b_local_model_update',
+      model: 'gpt-new',
+      reasoning: 'high',
+    }
+    const first = await fixture.service.updateConversationModel(
+      conversationId,
+      request,
+    )
+    assert.equal(first.status, 'completed')
+    assert.equal(first.data.conversation.currentModel, 'gpt-new')
+    assert.equal(first.data.conversation.currentReasoning, 'high')
+    assert.equal(updates.length, 1)
+    assert.equal(updates[0].payload.conversation.currentModel, 'gpt-new')
+    assert.equal(updates[0].payload.conversation.currentReasoning, 'high')
+
+    const replay = await fixture.service.updateConversationModel(
+      conversationId,
+      request,
+    )
+    assert.deepEqual(replay, first)
+    assert.equal(updates.length, 1)
+    await assert.rejects(
+      fixture.service.updateConversationModel(conversationId, {
+        actionId: request.actionId,
+        model: 'gpt-old',
+      }),
+      (error) => error instanceof HostServiceError && error.code === 'conflict',
+    )
+  } finally {
+    unsubscribe()
+  }
+})
+
+test('remote model controls fail closed before Node session control exists', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t)
+  const created = await fixture.service.createConversation({
+    actionId: 'act_phase8b_remote_model_guard_create',
+    projectId: fixture.projectId,
+    machineId: remoteMachineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  const before = fixture.persistence.getConversation(conversationId)
+  for (const request of [
+    { actionId: 'act_phase8b_remote_model_guard_model', model: 'gpt-new' },
+    { actionId: 'act_phase8b_remote_model_guard_effort', reasoning: 'high' },
+  ]) {
+    await assert.rejects(
+      fixture.service.updateConversationModel(conversationId, request),
+      (error) =>
+        error instanceof HostServiceError &&
+        error.code === 'operation_not_allowed',
+    )
+  }
+  await assert.rejects(
+    fixture.service.refreshConversationModels(conversationId),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'operation_not_allowed',
+  )
+  assert.deepEqual(fixture.persistence.getConversation(conversationId), before)
+  assert.equal(fixture.coordinator.openCodexCalls.length, 0)
+  assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+})
+
 test('an offline remote Machine presents persisted backend readiness as last-known with its original timestamp', async (t) => {
   const fixture = await createRemoteUninitializedFixture(t)
   const current = await fixture.service.getMachine(remoteMachineId)

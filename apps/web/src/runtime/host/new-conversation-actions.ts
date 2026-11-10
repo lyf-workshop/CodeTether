@@ -201,6 +201,7 @@ export function newConversationErrorMessage(
       return `${providerName} 尚未安装。`
     case 'provider_version_unsupported':
       return `${providerName} 版本不受支持。`
+    case 'operation_not_allowed':
     case 'unsupported':
       return `当前 CodeTether 版本不支持创建 ${providerName} 会话。`
     case 'timeout':

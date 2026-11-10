@@ -659,6 +659,12 @@ function reconstructDurableConversation(
     ...(conversation.reasoning === undefined
       ? {}
       : { reasoning: conversation.reasoning }),
+    ...(conversation.currentModel === undefined
+      ? {}
+      : { currentModel: conversation.currentModel }),
+    ...(conversation.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: conversation.currentReasoning }),
     status: conversation.status,
     ...(conversation.status === 'running' || conversation.status === 'waiting'
       ? {

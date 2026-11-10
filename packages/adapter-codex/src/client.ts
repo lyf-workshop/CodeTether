@@ -51,6 +51,14 @@ export type CodexApprovalPolicy = 'untrusted' | 'on-request' | 'never'
 export type CodexSandboxMode =
   'read-only' | 'workspace-write' | 'danger-full-access'
 
+export interface CodexAvailableModel {
+  /** Model slug accepted by thread/start and turn/start. */
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly reasoningOptions: readonly string[]
+}
+
 export interface ApprovalPrompt {
   readonly event: ApprovalRequestedEvent
   readonly request: JsonRpcRequest
@@ -311,6 +319,63 @@ export class CodexAppServerClient {
     const response = parseInitializeResult(result)
     await this.#transport.notify('initialized')
     return response
+  }
+
+  /** Reads the visible catalog from an already initialized local App Server. */
+  async listAvailableModels(): Promise<readonly CodexAvailableModel[]> {
+    this.#assertExecutionProfile('local')
+    const result = await this.#transport.request<unknown>('model/list', {
+      limit: 64,
+      includeHidden: false,
+    })
+    const response = requireRecord(result, 'model/list response')
+    if (!Array.isArray(response.data) || response.data.length > 64) {
+      throw new CodexProtocolError('model/list returned an invalid model page')
+    }
+    const models: CodexAvailableModel[] = []
+    const seen = new Set<string>()
+    for (const value of response.data) {
+      const model = requireRecord(value, 'model/list model')
+      if (model.hidden === true) continue
+      const id = requireBoundedString(model, 'model', 'model/list model', 240)
+      const name = requireBoundedString(
+        model,
+        'displayName',
+        'model/list model',
+        240,
+      )
+      if (seen.has(id)) continue
+      seen.add(id)
+      const description =
+        typeof model.description === 'string'
+          ? model.description.trim().slice(0, 1024)
+          : undefined
+      if (
+        !Array.isArray(model.supportedReasoningEfforts) ||
+        model.supportedReasoningEfforts.length > 16
+      ) {
+        throw new CodexProtocolError(
+          'model/list returned invalid reasoning options',
+        )
+      }
+      const reasoningOptions = model.supportedReasoningEfforts.map((value) =>
+        requireBoundedString(
+          requireRecord(value, 'model/list reasoning option'),
+          'reasoningEffort',
+          'model/list reasoning option',
+          120,
+        ),
+      )
+      models.push({
+        id,
+        name,
+        ...(description === undefined || description.length === 0
+          ? {}
+          : { description }),
+        reasoningOptions,
+      })
+    }
+    return models
   }
 
   async startThread(options: StartThreadOptions): Promise<ThreadStartResult> {

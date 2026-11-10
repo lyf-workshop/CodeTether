@@ -378,6 +378,7 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
       return '目标会话或操作已不存在。'
     case 'conflict':
       return '会话状态已经变化，请刷新后重试。'
+    case 'operation_not_allowed':
     case 'unsupported':
       return '当前 CodeTether 版本不支持此操作。'
     case 'runtime_unavailable':

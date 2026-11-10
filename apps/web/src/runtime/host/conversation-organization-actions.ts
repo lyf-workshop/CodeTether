@@ -238,6 +238,7 @@ export function conversationOrganizationErrorMessage(
       return '此会话已归档，请先恢复后再继续。'
     case 'project_unavailable':
       return '项目目录当前不可用，但会话历史仍可查看。'
+    case 'operation_not_allowed':
     case 'unsupported':
       return '当前 CodeTether 版本不支持此会话操作。'
     case 'timeout':

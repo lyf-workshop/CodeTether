@@ -141,6 +141,7 @@ export function attentionErrorMessage(error: unknown): string {
       return '该待处理事项已不存在。'
     case 'conflict':
       return '该事项的状态已经变化，请稍候重试。'
+    case 'operation_not_allowed':
     case 'unsupported':
       return '当前事项不能通过此操作处理。'
     case 'timeout':

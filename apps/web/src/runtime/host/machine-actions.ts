@@ -440,6 +440,7 @@ export function machineErrorMessage(
       return '电脑操作等待超时，请重试。'
     case 'runtime_unavailable':
       return 'CodeTether 本地服务暂时不可用。'
+    case 'operation_not_allowed':
     case 'unsupported':
       return '当前 CodeTether 版本不支持这项设备操作。'
     case 'machine_has_project_locations':

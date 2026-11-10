@@ -349,6 +349,7 @@ export function projectErrorMessage(
       return '这台电脑仍有已添加的项目，当前不能取消配对。'
     case 'project_has_conversations':
       return '此项目仍有关联会话，当前不能移除。'
+    case 'operation_not_allowed':
     case 'unsupported':
       return '当前 CodeTether 版本不支持此项目操作。'
     case 'timeout':

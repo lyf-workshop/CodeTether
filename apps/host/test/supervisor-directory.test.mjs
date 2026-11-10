@@ -132,6 +132,19 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
         ?.resumability,
       'resumable',
     )
+    const codex = observed.find(
+      (conversation) =>
+        conversation.conversationId === conversationId('local', 0),
+    )
+    assert.equal(codex?.currentModel, 'gpt-test')
+    assert.equal(codex?.currentReasoning, 'high')
+    const recentCodex = store
+      .listRecentSupervisorConversations(localMachineId, 100)
+      .find(
+        (conversation) => conversation.conversationId === codex?.conversationId,
+      )
+    assert.equal(recentCodex?.currentModel, 'gpt-test')
+    assert.equal(recentCodex?.currentReasoning, 'high')
 
     const remote = store.listSupervisorConversations(
       remoteMachineId,
@@ -151,6 +164,8 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
     assert.equal(detail?.title, longConversationTitle)
     assert.equal(detail?.origin, 'adopted_native')
     assert.equal(detail?.provider, 'claude-code')
+    assert.equal(detail?.currentModel, 'claude-test')
+    assert.equal(detail?.currentReasoning, 'medium')
     assert.equal(detail?.resumability, 'resumable')
     assert.equal('cwd' in detail, false)
     assert.equal(
@@ -335,11 +350,16 @@ function withFixture(run) {
           index,
           {
             provider: index % 2 === 0 ? 'codex' : 'claude-code',
+            ...(index === 0
+              ? { currentModel: 'gpt-test', currentReasoning: 'high' }
+              : {}),
             ...(index === 17
               ? {
                   origin: 'adopted_native',
                   providerThreadId: 'native-adopted-thread',
                   providerSessionMaterialized: true,
+                  currentModel: 'claude-test',
+                  currentReasoning: 'medium',
                 }
               : {}),
           },

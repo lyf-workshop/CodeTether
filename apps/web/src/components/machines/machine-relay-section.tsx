@@ -160,7 +160,7 @@ export function MachineRelaySection({
 
         <dl className="min-w-0 space-y-2.5 text-sm">
           <RelayMetadata
-            label="Node 在线状态"
+            label="远程电脑在线状态"
             value={relayNodePresenceLabel(
               relay?.nodePresence ?? 'not_observed',
             )}

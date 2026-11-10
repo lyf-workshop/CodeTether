@@ -297,7 +297,7 @@ export function NewConversationDialog({
           returnFocusRef.current?.focus()
         }}
       >
-        <form onSubmit={handleSubmit}>
+        <form className="min-w-0" onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>新建会话</DialogTitle>
             <DialogDescription>

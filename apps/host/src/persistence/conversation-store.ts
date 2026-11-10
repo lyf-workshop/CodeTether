@@ -67,6 +67,7 @@ import {
   type SignedSupervisorGrant,
   type SupervisorControlAuthorizationPayload,
 } from '@codetether/supervisor-transport'
+import { boundedSupervisorRows } from '../supervisor-read-budget.js'
 import {
   validateDurableHostIdentity,
   type DurableHostIdentity,
@@ -260,6 +261,7 @@ export interface SupervisorProjectDirectoryPage {
   readonly projects: readonly SupervisorProjectDirectoryItem[]
   readonly hasMore: boolean
   readonly nextCursor?: string
+  readonly truncated?: true
 }
 
 export interface SupervisorConversationDirectoryItem {
@@ -283,6 +285,7 @@ export interface SupervisorConversationDirectoryPage {
   readonly conversations: readonly SupervisorConversationDirectoryItem[]
   readonly hasMore: boolean
   readonly nextCursor?: string
+  readonly truncated?: true
 }
 
 export interface DurableMachine {
@@ -2714,20 +2717,21 @@ export class ConversationStore {
        ORDER BY sort_at DESC, project_id ASC
        LIMIT ?`,
     ).all(...parameters) as unknown as SupervisorProjectDirectoryRow[]
-    const hasMore = rows.length > limit
     const pageRows = rows.slice(0, limit)
-    const projects = pageRows.map((row) =>
-      supervisorProjectDirectoryItemFromRow(row, machine),
+    const projects = boundedSupervisorRows(
+      pageRows.map((row) => supervisorProjectDirectoryItemFromRow(row, machine)),
     )
-    const last = pageRows.at(-1)
+    const hasMore = rows.length > projects.length
+    const last = projects.at(-1)
     return {
       projects,
       hasMore,
+      ...(projects.length < pageRows.length ? { truncated: true } : {}),
       ...(hasMore && last !== undefined
         ? {
             nextCursor: encodeSupervisorProjectCursor(machine, {
-              sortAt: TimestampSchema.parse(last.sort_at),
-              projectId: ProjectIdSchema.parse(last.project_id),
+              sortAt: last.updatedAt,
+              projectId: last.projectId,
             }),
           }
         : {}),
@@ -3452,20 +3456,21 @@ export class ConversationStore {
        ORDER BY last_activity_at DESC, conversation_id ASC
        LIMIT ?`,
     ).all(...parameters) as unknown as SupervisorConversationDirectoryRow[]
-    const hasMore = rows.length > limit
     const pageRows = rows.slice(0, limit)
-    const conversations = pageRows.map(
-      supervisorConversationDirectoryItemFromRow,
+    const conversations = boundedSupervisorRows(
+      pageRows.map(supervisorConversationDirectoryItemFromRow),
     )
-    const last = pageRows.at(-1)
+    const hasMore = rows.length > conversations.length
+    const last = conversations.at(-1)
     return {
       conversations,
       hasMore,
+      ...(conversations.length < pageRows.length ? { truncated: true } : {}),
       ...(hasMore && last !== undefined
         ? {
             nextCursor: encodeSupervisorConversationCursor(machine, project, {
-              lastActivityAt: TimestampSchema.parse(last.last_activity_at),
-              conversationId: ConversationIdSchema.parse(last.conversation_id),
+              lastActivityAt: last.lastActivityAt,
+              conversationId: last.conversationId,
             }),
           }
         : {}),

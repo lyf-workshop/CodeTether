@@ -13,6 +13,7 @@ import type {
 
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
 import { canonicalFailureActionPresentation } from '../../failures/failure-presentation.js'
+import type { ComposerSendShortcut } from './composer-shortcut.js'
 
 type CanonicalFailureReason = CanonicalFailure['reason']
 
@@ -240,7 +241,7 @@ export function deriveComposerEligibility(
       case 'incompatible':
         return disabled(
           'remote_execution_unavailable',
-          '远程电脑协议不兼容，请更新 CodeTether Node。',
+          '远程电脑协议不兼容，请更新远程电脑上的 CodeTether。',
           'machine',
         )
       case 'online':
@@ -530,7 +531,7 @@ export function conversationExecutionBoundaryPresentation(
       return {
         title: '远程执行当前不可用',
         description:
-          '历史记录仍可查看；请在电脑详情中检查 CodeTether Node 版本和状态。',
+          '历史记录仍可查看；请在电脑详情中检查远程电脑上 CodeTether 的版本和状态。',
       }
     case 'execution_unavailable':
       return {
@@ -607,14 +608,23 @@ function disabled(
 export interface ComposerKeyIntent {
   readonly key: string
   readonly shiftKey: boolean
+  readonly ctrlKey?: boolean
+  readonly altKey?: boolean
+  readonly metaKey?: boolean
   readonly isComposing: boolean
   readonly keyCode?: number
+  readonly shortcut?: ComposerSendShortcut
 }
 
 export function shouldSubmitComposerKey(intent: ComposerKeyIntent): boolean {
   return (
     intent.key === 'Enter' &&
     !intent.shiftKey &&
+    !intent.altKey &&
+    !intent.metaKey &&
+    (intent.shortcut === 'ctrl-enter'
+      ? intent.ctrlKey === true
+      : !intent.ctrlKey) &&
     !intent.isComposing &&
     intent.keyCode !== 229
   )

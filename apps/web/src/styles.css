@@ -1,5 +1,6 @@
 @import '@codetether/ui/styles.css';
 @import './components/app-shell/workspace-responsive.css';
+@import './components/conversation/composer.css';
 
 html,
 body,

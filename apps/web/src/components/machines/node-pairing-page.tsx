@@ -21,7 +21,7 @@ import {
 } from './machine-pairing-steps'
 import { useRemoteMachinePairing } from './use-remote-machine-pairing'
 
-const stepLabels = ['运行 Node', '输入配对码', '核对验证码', '完成'] as const
+const stepLabels = ['运行远程服务', '输入配对码', '核对验证码', '完成'] as const
 
 export function NodePairingPage() {
   const navigate = useNavigate()
@@ -65,7 +65,7 @@ export function NodePairingPage() {
           tabIndex={-1}
           className="text-page font-semibold outline-none"
         >
-          配对 Node 设备
+          配对远程电脑
         </h1>
         <p className="text-md text-text-secondary">
           只连接你能够核对身份的设备，配对本身不会启动 AI 工作。
@@ -96,7 +96,7 @@ export function NodePairingPage() {
         {step === 1 ? (
           <section className="space-y-6">
             <div>
-              <h2 className="text-xl font-semibold">在设备上运行 Node</h2>
+              <h2 className="text-xl font-semibold">在电脑上运行远程服务</h2>
               <p className="mt-2 text-md text-text-secondary">
                 请选择要添加的设备系统，按已有安装路径开启一次性配对。
               </p>
@@ -106,7 +106,7 @@ export function NodePairingPage() {
               onValueChange={(value) => {
                 if (value === 'linux' || value === 'macos') setPlatform(value)
               }}
-              aria-label="Node 所在设备的系统"
+              aria-label="远程电脑的系统"
             >
               <SegmentedControlItem value="linux">Linux</SegmentedControlItem>
               <SegmentedControlItem value="macos">macOS</SegmentedControlItem>

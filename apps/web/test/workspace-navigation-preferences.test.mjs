@@ -362,13 +362,20 @@ test('actual sidebar render restores collapsed devices and automatically reveals
   )
 })
 
-test('actual sidebar add-project entry uses canonical device capability including provider execution', () => {
+test('actual sidebar add-project entry requires project access, not provider execution', () => {
   hostState = 'connected'
   assert.match(renderSidebar(), /aria-label="在 这台电脑 上添加项目"/u)
-  for (const disabled of [
-    machine({
-      capabilities: { projectAccess: true, providerExecution: false },
+  assert.match(
+    renderSidebar({
+      machines: [
+        machine({
+          capabilities: { projectAccess: true, providerExecution: false },
+        }),
+      ],
     }),
+    /aria-label="在 这台电脑 上添加项目"/u,
+  )
+  for (const disabled of [
     machine({
       capabilities: { projectAccess: false, providerExecution: true },
     }),

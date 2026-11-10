@@ -12,7 +12,7 @@ const roadmapItems = [
   {
     title: 'Windows 设备配对',
     description: '把另一台 Windows 电脑作为配对设备使用。',
-    dependency: '当前 Node 发布目标仅包括 Linux x64 / ARM64 与 macOS ARM64。',
+    dependency: '当前远程服务仅支持 Linux x64 / ARM64 与 macOS ARM64。',
   },
   {
     title: '远程停止',
@@ -48,7 +48,7 @@ const roadmapItems = [
   {
     title: '浏览配对设备上的文件夹',
     description: '添加项目时，在配对设备上浏览并选择文件夹。',
-    dependency: 'Node 没有列目录接口；目前需要输入完整路径。',
+    dependency: '远程服务尚不能列出目录；目前需要输入完整路径。',
   },
   {
     title: 'Claude Code 编辑、终端与变更',

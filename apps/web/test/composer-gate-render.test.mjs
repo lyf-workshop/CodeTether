@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createElement as h } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { JSDOM } from 'jsdom'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
 import { deriveLiveControlAvailability } from '../.tmp/test-dist/components/conversation/conversation-controls.js'
 
@@ -35,6 +36,17 @@ test('ready composer renders the real editable textarea and canonical form', () 
   assert.match(markup, /<textarea[^>]*id="conversation-composer"/u)
   assert.doesNotMatch(markup, /hidden=""|readOnly=""/u)
   assert.match(markup, /支付项目 · 这台电脑/u)
+})
+
+test('disabled attachment and voice controls leave hover hints on pointer-receiving wrappers', () => {
+  const document = new JSDOM(render()).window.document
+  for (const label of ['附件即将推出', '语音即将推出']) {
+    const button = document.querySelector(`button[aria-label="${label}"]`)
+    assert.ok(button)
+    assert.equal(button.disabled, true)
+    assert.equal(button.classList.contains('pointer-events-none'), true)
+    assert.equal(button.parentElement?.getAttribute('title'), '即将推出')
+  }
 })
 
 test('submitting keeps the mounted editor visible and readonly with Send disabled', () => {

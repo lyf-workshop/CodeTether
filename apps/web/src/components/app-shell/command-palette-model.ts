@@ -6,7 +6,7 @@ import type {
   ProjectId,
   ProjectRecord,
 } from '@codetether/protocol'
-import { machineConnectionStateLabel } from '../machines/machine-presentation.js'
+import { machineSubtitleLabel } from '../machines/machine-presentation.js'
 
 export type PaletteActionId =
   | 'new-conversation'
@@ -130,10 +130,7 @@ export function commandPaletteGroups(
     .map((machine) => ({
       id: 'device:' + machine.machineId,
       label: machine.displayName,
-      description:
-        machine.kind === 'local'
-          ? '这台电脑'
-          : machineConnectionStateLabel(machine.connectionState),
+      description: machineSubtitleLabel(machine),
       target: { kind: 'device', machineId: machine.machineId },
     }))
   return [

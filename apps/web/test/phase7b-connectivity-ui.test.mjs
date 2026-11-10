@@ -184,7 +184,7 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   assert.match(relaySection, /<summary/u)
   assert.match(relaySection, /focus-visible:ring/u)
   assert.match(relaySection, /aria-hidden="true"/u)
-  assert.match(relaySection, /label="Node 在线状态"/u)
+  assert.match(relaySection, /label="远程电脑在线状态"/u)
   assert.match(relaySection, /label="互联网执行"/u)
   assert.match(relaySection, /\{status\.description\}/u)
   assert.match(relaySection, /\{value\}[\s\S]*<\/dd>/u)
@@ -195,7 +195,7 @@ test('Machine connectivity surfaces keep responsive and accessible semantic cont
   assert.match(relaySection, /overflow-x-hidden/u)
   assert.match(relaySection, /break-words/u)
   assert.match(relaySection, /break-all/u)
-  assert.match(detail, /expanded-workspace:grid-cols-/u)
+  assert.match(detail, /space-y-9/u)
 
   assert.match(failureCard, /<article/u)
   assert.match(failureCard, /role="status"/u)

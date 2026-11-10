@@ -4,10 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { setTimeout as delay } from 'node:timers/promises'
+import { TLSSocket } from 'node:tls'
 
 import {
   RelayClientMessageSchema,
   RelaySupervisorAuthenticateMessageSchema,
+  relayProtocolLimits,
   relayPublicKeySpkiFromCertificate,
   relayProtocolVersion,
 } from '@codetether/relay-protocol'
@@ -109,6 +112,134 @@ test('opaque Relay carries the same authenticated read-only Supervisor protocol'
     await fixture.close()
   }
 })
+
+test('Supervisor Relay accepts the next chunk once its peer receives the acknowledgement', async (t) => {
+  const result = { payload: 'x'.repeat(8 * 1024) }
+  const fixture = await createFixture({ readHostBootstrap: () => result })
+  const acknowledgement = Promise.withResolvers()
+  try {
+    const session = await connectThroughRelay(fixture, 'large-response-proof')
+    let firstSequence
+    let delayedAcknowledgement = false
+    const channelFailures = []
+    observeRelayWrites(t, fixture, (message) => {
+      if (message.type === 'supervisor.channel.error') {
+        channelFailures.push(message.code)
+      }
+      if (
+        message.type === 'supervisor.channel.data' &&
+        message.connectionEpoch === message.deviceConnectionEpoch
+      ) {
+        if (
+          firstSequence === undefined &&
+          message.data.length ===
+            relayProtocolLimits.maximumChannelEncodedDataCharacters
+        ) {
+          firstSequence = message.sequence
+        } else if (message.sequence === firstSequence + 1) {
+          // Relay has accepted the next data frame while the first ack's
+          // write callback is still pending.
+          acknowledgement.resolve()
+        }
+      } else if (
+        message.type === 'supervisor.channel.data.ack' &&
+        message.connectionEpoch === message.hostConnectionEpoch &&
+        message.acknowledgedSequence === firstSequence
+      ) {
+        delayedAcknowledgement = true
+        return () => acknowledgement.promise
+      }
+    })
+
+    const actual = await session.readHostBootstrap().catch((error) => {
+      assert.deepEqual(channelFailures, [], 'Relay rejected the next chunk')
+      throw error
+    })
+    assert.deepEqual(actual, result)
+    assert.equal(delayedAcknowledgement, true)
+    session.close()
+  } finally {
+    acknowledgement.resolve()
+    await fixture.close()
+  }
+})
+
+test('Supervisor Relay skips the timeout when a chunk is already acknowledged', async (t) => {
+  const result = { payload: 'x'.repeat(8 * 1024) }
+  const channelAcknowledgementTimeoutMs = 500
+  const fixture = await createFixture({
+    readHostBootstrap: () => result,
+    channelAcknowledgementTimeoutMs,
+  })
+  const dataWrite = Promise.withResolvers()
+  try {
+    const session = await connectThroughRelay(fixture, 'early-ack-proof')
+    let firstSequence
+    let earlyAcknowledgement = false
+    const channelFailures = []
+    observeRelayWrites(t, fixture, (message) => {
+      if (message.type === 'supervisor.channel.error') {
+        channelFailures.push(message.code)
+      }
+      if (
+        firstSequence === undefined &&
+        message.type === 'supervisor.channel.data' &&
+        message.connectionEpoch === message.deviceConnectionEpoch &&
+        message.data.length ===
+          relayProtocolLimits.maximumChannelEncodedDataCharacters
+      ) {
+        firstSequence = message.sequence
+        return () => dataWrite.promise
+      }
+      if (
+        message.type === 'supervisor.channel.data.ack' &&
+        message.connectionEpoch === message.hostConnectionEpoch &&
+        message.acknowledgedSequence === firstSequence
+      ) {
+        return () => {
+          earlyAcknowledgement = true
+          // Let the Relay finish processing the ack before it observes
+          // completion of the earlier data write.
+          setImmediate(dataWrite.resolve)
+        }
+      }
+    })
+
+    assert.deepEqual(await session.readHostBootstrap(), result)
+    assert.equal(earlyAcknowledgement, true)
+    await delay(channelAcknowledgementTimeoutMs + 100)
+    assert.deepEqual(channelFailures, [], 'Relay expired an acknowledged chunk')
+    assert.deepEqual(await session.listMachines(), {
+      machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+    })
+    session.close()
+  } finally {
+    dataWrite.resolve()
+    await fixture.close()
+  }
+})
+
+function observeRelayWrites(t, fixture, observe) {
+  const relayPort = fixture.relay.listeningAddress.port
+  const write = TLSSocket.prototype.write
+  t.mock.method(TLSSocket.prototype, 'write', function (frame, ...options) {
+    if (
+      this.localPort === relayPort &&
+      Buffer.isBuffer(frame) &&
+      frame[4] === 0x7b &&
+      frame.readUInt32BE(0) === frame.length - 4
+    ) {
+      const afterWrite = observe(JSON.parse(frame.toString('utf8', 4)))
+      if (afterWrite !== undefined) {
+        const [callback] = options
+        return write.call(this, frame, (error) => {
+          void Promise.resolve(afterWrite()).then(() => callback(error))
+        })
+      }
+    }
+    return write.call(this, frame, ...options)
+  })
+}
 
 test('Supervisor Relay identities cannot substitute for Controller Relay identities', async () => {
   const identity = await generateSupervisorTlsIdentity(
@@ -289,7 +420,10 @@ test('one Host Relay registration carries two independent ProductDevice sessions
   }
 })
 
-async function createFixture() {
+async function createFixture({
+  readHostBootstrap,
+  channelAcknowledgementTimeoutMs,
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'codetether-supervisor-relay-'))
   const store = new RelayStateStore(join(root, 'state'))
   const relayTls = await generateRelayPinnedTlsIdentity(store.identity)
@@ -303,6 +437,7 @@ async function createFixture() {
     managementPort: 0,
     heartbeatIntervalMs: 500,
     heartbeatTimeoutMs: 2_000,
+    channelAcknowledgementTimeoutMs,
     logger: { log: (event, fields = {}) => logs.push({ event, ...fields }) },
   })
   await relay.start()
@@ -334,10 +469,12 @@ async function createFixture() {
       }
     },
     reads: {
-      readHostBootstrap: () => ({
-        hostId: ids.hostId,
-        transportAuthority: 'host',
-      }),
+      readHostBootstrap:
+        readHostBootstrap ??
+        (() => ({
+          hostId: ids.hostId,
+          transportAuthority: 'host',
+        })),
       listMachines: () => ({
         machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
       }),

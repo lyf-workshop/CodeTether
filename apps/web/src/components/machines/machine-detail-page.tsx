@@ -11,13 +11,14 @@ import {
   Unplug,
 } from 'lucide-react'
 
-import { Button, Notice, SectionState, StatusTag, cn } from '@codetether/ui'
+import { Button, Notice, SectionState, cn } from '@codetether/ui'
 import {
   MachineIdSchema,
   ProviderInstallationIdSchema,
   type MachineId,
   type MachineSummary,
   type ProviderDescriptor,
+  type RelayMachineConnectivity,
   type RemoteMachineConnection,
 } from '@codetether/protocol'
 import { CodeTetherResponseError } from '@codetether/client'
@@ -35,12 +36,12 @@ import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
 import {
   formatMachineLastSeen,
   machineConnectionStateLabel,
-  machineConnectionTone,
-  machineEnvironmentLabel,
   machineExecutionTransportLabel,
+  machineSubtitleLabel,
   remoteMachineAddressLabel,
   remoteMachineSummaryDescription,
 } from './machine-presentation'
+import { relayConnectivityPresentation } from './machine-relay-presentation'
 import { MachineProjectsSection } from './machine-projects-section'
 import { MachineProvidersSection } from './machine-providers-section'
 import { MachineRelaySection } from './machine-relay-section'
@@ -165,26 +166,13 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           >
             {machine.displayName}
           </h1>
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <StatusTag tone={machineConnectionTone(machine.connectionState)}>
-              {machineConnectionStateLabel(machine.connectionState)}
-            </StatusTag>
-            <span className="text-sm text-text-muted">
-              {machineEnvironmentLabel(machine)}
-            </span>
-          </div>
+          <p className="mt-2 text-sm text-text-muted">
+            {machineSubtitleLabel(machine)} ·{' '}
+            {machine.kind === 'local'
+              ? '本机'
+              : machineExecutionTransportLabel(connection?.executionTransport)}
+          </p>
         </div>
-        {canAdd ? (
-          <AddProjectDialog
-            fixedMachineId={machine.machineId}
-            trigger={
-              <Button variant="secondary">
-                <Plus aria-hidden="true" />
-                添加项目
-              </Button>
-            }
-          />
-        ) : null}
       </header>
       {!online ? (
         <div className="mb-6">
@@ -227,48 +215,48 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           </Notice>
         </div>
       ) : null}
-      <div className="grid min-w-0 gap-8 expanded-workspace:grid-cols-[var(--layout-device-detail-columns)]">
-        <div className="min-w-0 space-y-10">
-          <MachineProjectsSection
-            machine={machine}
-            projects={projects}
-            appearance="list"
-            showAddCard={false}
-            showLocationRemoval
-            onLocationRemoved={() => void machineQuery.refetch()}
-          />
-          <MachineConversationsSection
-            machine={machine}
-            projects={projects}
-            conversations={conversations}
-          />
-        </div>
-        <aside className="min-w-0 space-y-4" aria-label="设备状态与连接">
-          <MachineProvidersSection
-            providers={providers}
-            lifecycles={providerLifecycles}
-            connection={connection}
-            discovery={providerDiscovery}
-            hostReady={hostReady}
-            onRefresh={() => providerRefreshMutation.mutate()}
-            refreshPending={providerRefreshMutation.isPending}
-            refreshError={providerRefreshMutation.error}
-            onSelectInstallation={(provider, providerInstallationId) =>
-              providerSelectionMutation.mutate({
-                provider,
-                providerInstallationId,
-              })
-            }
-            selectionPending={providerSelectionMutation.isPending}
-            selectionError={providerSelectionMutation.error}
-            pendingProvider={providerSelectionMutation.variables?.provider}
-            pendingInstallationId={
-              providerSelectionMutation.variables?.providerInstallationId
-            }
-          />
+      <div className="min-w-0 space-y-9">
+        <MachineProjectsSection
+          machine={machine}
+          projects={projects}
+          appearance="cards"
+          showAddCard={false}
+          showLocationRemoval
+          onLocationRemoved={() => void machineQuery.refetch()}
+        />
+        <MachineConversationsSection
+          key={machine.machineId}
+          machine={machine}
+          projects={projects}
+          conversations={conversations}
+        />
+        <MachineProvidersSection
+          providers={providers}
+          lifecycles={providerLifecycles}
+          connection={connection}
+          discovery={providerDiscovery}
+          hostReady={hostReady}
+          onRefresh={() => providerRefreshMutation.mutate()}
+          refreshPending={providerRefreshMutation.isPending}
+          refreshError={providerRefreshMutation.error}
+          onSelectInstallation={(provider, providerInstallationId) =>
+            providerSelectionMutation.mutate({
+              provider,
+              providerInstallationId,
+            })
+          }
+          selectionPending={providerSelectionMutation.isPending}
+          selectionError={providerSelectionMutation.error}
+          pendingProvider={providerSelectionMutation.variables?.provider}
+          pendingInstallationId={
+            providerSelectionMutation.variables?.providerInstallationId
+          }
+        />
+        <div className="min-w-0 space-y-4">
           <MachineConnectionSection
             machine={machine}
             connection={connection}
+            relay={relay}
             hostReady={hostReady}
             onUnpair={() => setUnpairOpen(true)}
           />
@@ -284,7 +272,25 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
               />
             </details>
           ) : null}
-        </aside>
+        </div>
+      </div>
+      <div className="mt-8 flex flex-wrap gap-3 border-t border-border pt-5">
+        {canAdd ? (
+          <AddProjectDialog
+            fixedMachineId={machine.machineId}
+            trigger={
+              <Button variant="secondary">
+                <Plus aria-hidden="true" />
+                添加项目
+              </Button>
+            }
+          />
+        ) : null}
+        {machine.kind === 'local' ? (
+          <Button asChild variant="secondary">
+            <Link to="/add">配对新设备</Link>
+          </Button>
+        ) : null}
       </div>
       <UnpairMachineDialog
         machine={machine}
@@ -300,11 +306,13 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
 export function MachineConnectionSection({
   machine,
   connection,
+  relay,
   hostReady,
   onUnpair,
 }: {
   machine: MachineSummary
   connection?: RemoteMachineConnection
+  relay?: RelayMachineConnectivity
   hostReady: boolean
   onUnpair: () => void
 }) {
@@ -342,6 +350,18 @@ export function MachineConnectionSection({
         {connection ? (
           <>
             <MachineMetadata
+              label="上次在线"
+              value={formatMachineLastSeen(machine.lastSeenAt) ?? '尚未记录'}
+            />
+            <MachineMetadata
+              label="Relay 状态"
+              value={
+                relay === undefined
+                  ? '尚未读取'
+                  : relayConnectivityPresentation(relay.state).label
+              }
+            />
+            <MachineMetadata
               label="局域网直连"
               value={machineConnectionStateLabel(
                 connection.directState ?? connection.state,
@@ -365,7 +385,7 @@ export function MachineConnectionSection({
               label="上次连接尝试"
               value={formatMachineLastSeen(connection.lastAttemptAt) ?? '未知'}
             />
-            <MachineMetadata label="配对方式" value="CodeTether Node" />
+            <MachineMetadata label="配对方式" value="电脑配对" />
           </>
         ) : (
           <MachineMetadata

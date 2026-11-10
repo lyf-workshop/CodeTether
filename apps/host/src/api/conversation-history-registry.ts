@@ -16,6 +16,7 @@ export type ConversationHistoryPosition =
       readonly source: 'durable'
       readonly startedAt: Timestamp
       readonly turnId: TurnId
+      readonly beforeEntryOrder?: number
     }
   | {
       readonly source: 'native_provider'

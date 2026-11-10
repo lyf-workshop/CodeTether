@@ -1,17 +1,22 @@
+import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
-import { AgentBadge, SectionState, StatusBadge } from '@codetether/ui'
+import { AgentBadge, Button, SectionState, StatusBadge } from '@codetether/ui'
 import type { GetMachineResponse } from '@codetether/protocol'
 
 import { formatConversationActivity } from '../conversations/conversation-list-model'
+
+const conversationPageSize = 10
 
 export function MachineConversationsSection({
   conversations,
   projects,
   machine,
 }: Pick<GetMachineResponse, 'conversations' | 'projects' | 'machine'>) {
-  const own = conversations.filter(
-    (conversation) => conversation.machineId === machine.machineId,
-  )
+  const [visibleCount, setVisibleCount] = useState(conversationPageSize)
+  const own = conversations
+    .filter((conversation) => conversation.machineId === machine.machineId)
+    .sort((a, b) => Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt))
+  const recent = own.slice(0, visibleCount)
   const projectNames = new Map(
     projects.map((project) => [project.projectId, project.name]),
   )
@@ -26,7 +31,7 @@ export function MachineConversationsSection({
       >
         最近的会话{' '}
         <span className="ml-2 text-md font-normal text-text-muted">
-          {own.length >= 100 ? '100+' : own.length}
+          {recent.length}
         </span>
       </h2>
       {own.length === 0 ? (
@@ -39,7 +44,7 @@ export function MachineConversationsSection({
         </div>
       ) : (
         <ul className="overflow-hidden rounded-lg border border-border bg-surface">
-          {own.map((conversation) => (
+          {recent.map((conversation) => (
             <li
               key={conversation.conversationId}
               className="border-t border-border first:border-t-0"
@@ -81,9 +86,25 @@ export function MachineConversationsSection({
           ))}
         </ul>
       )}
-      {own.length >= 100 ? (
-        <p className="mt-2 text-sm text-text-muted">
-          只显示最近 100 个会话；可以在项目内搜索更早的记录。
+      {recent.length < own.length ? (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            onClick={() =>
+              setVisibleCount((count) => count + conversationPageSize)
+            }
+          >
+            加载更多会话
+          </Button>
+          <span className="text-sm text-text-muted">
+            已显示 {recent.length} 个，已读取 {own.length} 个
+          </span>
+        </div>
+      ) : own.length >= 100 ? (
+        <p className="mt-3 text-sm text-text-muted">
+          设备页最多显示最近 100 个会话；如有更早记录，可在所属项目中查找。
         </p>
       ) : null}
     </section>

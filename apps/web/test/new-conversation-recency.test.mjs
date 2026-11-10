@@ -18,6 +18,8 @@ const machine = (machineId, extra = {}) => ({
   machineId,
   displayName: machineId === localId ? '这台电脑' : '配对设备',
   kind: machineId === localId ? 'local' : 'remote',
+  platform: machineId === localId ? 'windows' : 'darwin',
+  architecture: 'x64',
   connectionState: machineId === localId ? 'local' : 'online',
   availability: 'available',
   capabilities: { projectAccess: true, providerExecution: true },
@@ -52,12 +54,12 @@ const groups = () =>
     ],
   )
 
-test('cold project menu keeps local-first device grouping with no invented recent activity', () => {
+test('cold project menu keeps local-first computer grouping with no invented recent activity', () => {
   const canonical = groups()
   const menu = selection.conversationProjectMenuGroups(canonical, [])
   assert.deepEqual(
     menu.map((group) => group.label),
-    ['这台电脑', '配对设备'],
+    ['这台电脑 (Windows)', '配对设备 (macOS)'],
   )
   assert.deepEqual(choices(menu), choices(canonical))
   assert.equal(
@@ -66,7 +68,7 @@ test('cold project menu keeps local-first device grouping with no invented recen
   )
 })
 
-test('recent project menu contains at most five exact project-device pairs and the remainder stays device grouped', () => {
+test('recent project activity sorts within each computer without moving choices to another group', () => {
   const canonical = groups()
   const records = [
     record('proj_shared01', remoteId, 18),
@@ -78,21 +80,17 @@ test('recent project menu contains at most five exact project-device pairs and t
   const menu = selection.conversationProjectMenuGroups(canonical, [
     source(records),
   ])
-  assert.equal(menu[0].label, '最近使用')
-  assert.equal(menu[0].kind, 'recent')
+  assert.equal(menu[0].label, '这台电脑 (Windows)')
+  assert.equal(menu[1].label, '配对设备 (macOS)')
+  assert.equal(menu[0].kind, 'device')
   assert.deepEqual(
-    menu[0].choices.map((choice) => choice.key),
+    menu[1].choices.map((choice) => choice.key),
     [
       key('proj_shared01', remoteId),
-      ...[5, 4, 3, 2].map((i) => key('proj_recent0' + i, remoteId)),
+      ...[5, 4, 3, 2, 1, 0].map((i) => key('proj_recent0' + i, remoteId)),
     ],
   )
-  assert.equal(menu[0].choices.length, 5)
-  assert.deepEqual(
-    menu.slice(1).map((group) => group.label),
-    ['这台电脑', '配对设备'],
-  )
-  assert.equal(menu[1].choices[0].key, key('proj_shared01', localId))
+  assert.equal(menu[0].choices[0].key, key('proj_shared01', localId))
   assert.equal(
     new Set(choices(menu).map((choice) => choice.key)).size,
     choices(canonical).length,
@@ -117,7 +115,7 @@ test('recency deduplicates newer cached Conversation truth before taking pair ac
     ]),
   ])
   assert.deepEqual(
-    menu[0].choices.map((choice) => choice.projectId),
+    menu[1].choices.slice(0, 3).map((choice) => choice.projectId),
     ['proj_recent01', 'proj_recent02', 'proj_recent00'],
   )
 })
@@ -136,9 +134,9 @@ test('missing lastActivityAt and metadata-only updatedAt cannot invent recency o
   ])
   assert.deepEqual(
     menu[0].choices.map((choice) => choice.key),
-    [key('proj_shared01', remoteId)],
+    [key('proj_shared01', localId)],
   )
-  assert.equal(menu[1].choices[0].key, key('proj_shared01', localId))
+  assert.equal(menu[1].choices[0].key, key('proj_shared01', remoteId))
 })
 
 test('recent display ordering leaves unavailable reasons, fixed context and global selection authorities unchanged', () => {
@@ -149,7 +147,7 @@ test('recent display ordering leaves unavailable reasons, fixed context and glob
   const menu = selection.conversationProjectMenuGroups(canonical, [
     source([record('proj_shared01', remoteId, 19)]),
   ])
-  assert.match(menu[0].choices[0].unavailableReason, /离线/u)
+  assert.match(menu[1].choices[0].unavailableReason, /离线/u)
   assert.equal(
     selection.resolveConversationProject(canonical).choice.machineId,
     localId,
@@ -192,14 +190,15 @@ test('recency reads only already-loaded list, project metric and detail Query me
   )
   assert.deepEqual(
     menu[0].choices.map((choice) => choice.key),
-    [key('proj_shared01', localId), key('proj_shared01', remoteId)],
+    [key('proj_shared01', localId)],
   )
+  assert.equal(menu[1].choices[0].key, key('proj_shared01', remoteId))
   assert.equal(client.getQueryCache().getAll().length, before)
   assert.equal(client.isFetching(), 0)
   client.clear()
 })
 
-test('actual project fields render the recent group with real device/path labels and disabled reasons', () => {
+test('actual project fields render computer groups with real path labels and disabled reasons', () => {
   const ui = { ...loadUiComponent('index.ts') }
   for (const name of ['Select', 'SelectContent', 'SelectGroup', 'SelectValue'])
     ui[name] = ({ children }) => h('div', {}, children)
@@ -242,8 +241,10 @@ test('actual project fields render the recent group with real device/path labels
       onReasoningChange() {},
     }),
   )
-  assert.ok(html.indexOf('最近使用') < html.indexOf('这台电脑'))
-  assert.match(html, /配对设备/u)
+  assert.ok(
+    html.indexOf('这台电脑 (Windows)') < html.indexOf('配对设备 (macOS)'),
+  )
+  assert.doesNotMatch(html, /最近使用/u)
   assert.match(html, /proj_shared01\/machine_recentremote01/u)
   assert.match(html, /aria-disabled="true"/u)
   assert.match(html, /设备离线或连接尚未恢复/u)

@@ -5,16 +5,6 @@ import type {
   RemoteMachineAddress,
 } from '@codetether/protocol'
 
-const architectureLabels: Record<string, string> = {
-  x64: 'x64',
-  x86_64: 'x64',
-  amd64: 'x64',
-  arm64: 'ARM64',
-  aarch64: 'ARM64',
-  x86: 'x86',
-  i686: 'x86',
-}
-
 export function machinePlatformFamily(
   platform: string,
 ): 'windows' | 'macos' | 'linux' | 'other' {
@@ -33,20 +23,56 @@ export function machinePlatformFamily(
 }
 
 export function machinePlatformLabel(platform: string): string {
-  if (platform.toLocaleLowerCase('en-US') === 'windows') return 'Windows'
-  return platform
+  switch (machinePlatformFamily(platform)) {
+    case 'windows':
+      return 'Windows'
+    case 'macos':
+      return 'macOS'
+    case 'linux':
+      return 'Linux'
+    case 'other':
+      return platform
+  }
 }
 
 export function machineArchitectureLabel(architecture: string): string {
-  return (
-    architectureLabels[architecture.toLocaleLowerCase('en-US')] ?? architecture
-  )
+  return architecture
 }
 
 export function machineEnvironmentLabel(
   machine: Pick<MachineSummary, 'architecture' | 'platform'>,
 ): string {
   return `${machinePlatformLabel(machine.platform)} · ${machineArchitectureLabel(machine.architecture)}`
+}
+
+export function machineSubtitleLabel(
+  machine: Pick<
+    MachineSummary,
+    'architecture' | 'connectionState' | 'platform'
+  >,
+): string {
+  return `${machineEnvironmentLabel(machine)} · ${machineConnectionStateLabel(machine.connectionState)}`
+}
+
+/** Each execution Machine is a separate computer in the UI, even on shared hardware. */
+export function sortMachinesForDisplay(
+  machines: readonly MachineSummary[],
+): MachineSummary[] {
+  return [...machines].sort((a, b) => {
+    const rankDifference = machineSortRank(a) - machineSortRank(b)
+    if (rankDifference !== 0) return rankDifference
+    const lastSeenDifference =
+      (b.lastSeenAt === undefined ? 0 : Date.parse(b.lastSeenAt)) -
+      (a.lastSeenAt === undefined ? 0 : Date.parse(a.lastSeenAt))
+    return lastSeenDifference || a.displayName.localeCompare(b.displayName)
+  })
+}
+
+function machineSortRank(machine: MachineSummary): number {
+  if (machine.kind === 'local') return 0
+  if (machine.connectionState === 'online') return 1
+  if (machine.connectionState === 'connecting') return 2
+  return 3
 }
 
 export function machineAvailabilityLabel(
@@ -63,7 +89,7 @@ export function machineConnectionStateLabel(
 ): string {
   switch (state) {
     case 'local':
-      return '这台电脑'
+      return '在线'
     case 'connecting':
       return '连接中'
     case 'online':
@@ -91,7 +117,7 @@ export function machineConnectionTransportLabel(
 ): string {
   switch (state) {
     case 'local':
-      return '这台设备'
+      return '这台电脑'
     case 'online':
     case 'connecting':
     case 'offline':
@@ -149,7 +175,7 @@ export function machineConnectionBadgeVariant(
 }
 
 export function machineKindLabel(machine: Pick<MachineSummary, 'kind'>) {
-  return machine.kind === 'local' ? '这台电脑' : 'Node 配对'
+  return machine.kind === 'local' ? '这台电脑' : '远程电脑'
 }
 
 export function remoteMachineAddressLabel(

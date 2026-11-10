@@ -33,6 +33,7 @@ const pageTitles: Readonly<Record<string, string>> = {
   '/signin': '登录',
   '/roadmap': '后续规划',
   '/settings/appearance': '外观',
+  '/settings/editor': '编辑器与输入',
   '/settings/account': '账号',
   '/settings/notify': '通知',
   '/settings/background': '后台运行',

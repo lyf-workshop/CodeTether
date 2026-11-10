@@ -1,5 +1,6 @@
 export const settingsSections = [
   'appearance',
+  'editor',
   'account',
   'notify',
   'background',

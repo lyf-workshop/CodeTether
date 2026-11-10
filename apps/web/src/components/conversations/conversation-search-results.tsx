@@ -28,6 +28,7 @@ import { providerAgentId } from '../../provider/provider-presentation'
 
 interface ConversationSearchResultsProps {
   archiveView: 'active' | 'archived'
+  machineName?: string
   fetchNextError?: string
   hasNextPage: boolean
   isFetchingNextPage: boolean
@@ -39,6 +40,7 @@ interface ConversationSearchResultsProps {
 
 export function ConversationSearchResults({
   archiveView,
+  machineName,
   fetchNextError,
   hasNextPage,
   isFetchingNextPage,
@@ -103,7 +105,7 @@ export function ConversationSearchResults({
             id="conversation-search-results-heading"
             className="text-base font-semibold text-text-primary"
           >
-            搜索结果
+            搜索结果{machineName === undefined ? '' : ` · ${machineName}`}
           </h2>
           <p className="mt-0.5 text-xs text-text-muted" aria-live="polite">
             已显示 {results.length} 条结果
@@ -119,6 +121,7 @@ export function ConversationSearchResults({
           <ConversationSearchResultRow
             key={result.conversation.conversationId}
             archiveView={archiveView}
+            machineName={machineName}
             result={result}
             onMembershipChanged={refreshMembershipAndRestoreFocus}
           />
@@ -156,12 +159,14 @@ export function ConversationSearchResults({
 
 interface ConversationSearchResultRowProps {
   archiveView: 'active' | 'archived'
+  machineName?: string
   onMembershipChanged: (conversationId: string) => void
   result: ConversationSearchResult
 }
 
 function ConversationSearchResultRow({
   archiveView,
+  machineName,
   onMembershipChanged,
   result,
 }: ConversationSearchResultRowProps) {
@@ -169,7 +174,7 @@ function ConversationSearchResultRow({
   const conversation = result.conversation
   const archived =
     archiveView === 'archived' || conversation.archivedAt !== undefined
-  const matchDescription = `${providerDisplayName(conversation.provider)} · ${conversationSearchMatchDescription(result)}`
+  const matchDescription = `${providerDisplayName(conversation.provider)}${machineName === undefined ? '' : ` · ${machineName}`} · ${conversationSearchMatchDescription(result)}`
 
   const menu = (
     <ConversationOrganizationMenu

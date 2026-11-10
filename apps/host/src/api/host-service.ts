@@ -261,6 +261,16 @@ import { ProviderSessionDiscoveryRegistry } from './provider-session-discovery-r
 import { NativeTranscriptCursorRegistry } from './native-transcript-registry.js'
 import { ConversationHistoryCursorRegistry } from './conversation-history-registry.js'
 import {
+  compactSupervisorDurableTurn,
+  compactSupervisorLiveEvent,
+  compactSupervisorNativeEntry,
+  supervisorTranscriptByteBudget,
+} from './supervisor-transcript-budget.js'
+import {
+  boundedSupervisorRows,
+  supervisorJsonBytes,
+} from '../supervisor-read-budget.js'
+import {
   decodeRemoteProviderSessionBinding,
   encodeRemoteProviderSessionBinding,
 } from './remote-provider-session-binding.js'
@@ -2059,22 +2069,32 @@ export class HostService {
       position?.source === 'durable' ||
       (position === undefined && durableCount > 0)
     ) {
-      const page = readDurableConversationHistoryPage(
-        persistence,
-        conversation,
-        {
-          limit: query.limit,
-          ...(position?.source !== 'durable'
+      const durable = position?.source === 'durable' ? position : undefined
+      const beforeEntryOrder = durable?.beforeEntryOrder
+      const boundary =
+        durable === undefined
+          ? undefined
+          : { startedAt: durable.startedAt, turnId: durable.turnId }
+      const readPage = (limit: number) =>
+        readDurableConversationHistoryPage(persistence, conversation, {
+          limit,
+          ...(boundary === undefined
             ? {}
-            : {
-                before: {
-                  startedAt: position.startedAt,
-                  turnId: position.turnId,
-                },
-              }),
+            : beforeEntryOrder === undefined
+              ? { before: boundary }
+              : { atTurn: boundary }),
           maxEntries: 2_048,
-        },
-      )
+        })
+      let limit = beforeEntryOrder === undefined ? query.limit : 1
+      let page = readPage(limit)
+      while (
+        page !== undefined &&
+        page.runtime.turns.length > 1 &&
+        supervisorJsonBytes(page.runtime) > supervisorTranscriptByteBudget
+      ) {
+        limit = Math.floor(page.runtime.turns.length / 2)
+        page = readPage(limit)
+      }
       if (page === undefined) {
         throw new HostServiceError(
           'not_found',
@@ -2082,22 +2102,35 @@ export class HostService {
           404,
         )
       }
+      const projected =
+        beforeEntryOrder !== undefined ||
+        supervisorJsonBytes(page.runtime) > supervisorTranscriptByteBudget
+          ? compactSupervisorDurableTurn(page.runtime, beforeEntryOrder)
+          : { runtime: page.runtime }
+      const turn = projected.runtime.turns[0]
       const beforeCursor =
-        page.hasMoreBefore && page.before !== undefined
+        projected.beforeEntryOrder !== undefined && turn !== undefined
           ? this.#conversationHistoryCursors.create(scope, {
               source: 'durable',
-              ...page.before,
+              startedAt: turn.startedAt,
+              turnId: turn.turnId,
+              beforeEntryOrder: projected.beforeEntryOrder,
             })
-          : directory.origin === 'adopted_native'
+          : page.before !== undefined
             ? this.#conversationHistoryCursors.create(scope, {
-                source: 'native_provider',
+                source: 'durable',
+                ...page.before,
               })
-            : undefined
+            : directory.origin === 'adopted_native'
+              ? this.#conversationHistoryCursors.create(scope, {
+                  source: 'native_provider',
+                })
+              : undefined
       return RemoteConversationHistoryPageSchema.parse({
         protocolVersion,
         conversationId: conversation,
         source: 'durable',
-        runtime: page.runtime,
+        runtime: projected.runtime,
         ...(beforeCursor === undefined ? {} : { beforeCursor }),
         hasMoreBefore: beforeCursor !== undefined,
         historyComplete: beforeCursor === undefined,
@@ -2112,13 +2145,29 @@ export class HostService {
       directory.origin === 'adopted_native' &&
       (position === undefined || position.source === 'native_provider')
     ) {
-      const native = await this.readNativeTranscript(conversation, {
-        limit: query.limit,
-        ...(position?.source !== 'native_provider' ||
-        position.cursor === undefined
-          ? {}
-          : { cursor: position.cursor }),
-      })
+      const readPage = (limit: number) =>
+        this.readNativeTranscript(conversation, {
+          limit,
+          ...(position?.source !== 'native_provider' ||
+          position.cursor === undefined
+            ? {}
+            : { cursor: position.cursor }),
+        })
+      // A remote native entry can use six JSON bytes per content, ID or
+      // cursor byte. Request one entry to fit the upstream 16 KiB Node frame.
+      let native = await readPage(
+        machine === this.#machines.localMachineId() ? query.limit : 1,
+      )
+      while (
+        native.entries.length > 1 &&
+        supervisorJsonBytes(native) > supervisorTranscriptByteBudget
+      ) {
+        // The provider creates a cursor at the actual end of its page.
+        native = await readPage(Math.floor(native.entries.length / 2))
+      }
+      if (supervisorJsonBytes(native) > supervisorTranscriptByteBudget) {
+        native = compactSupervisorNativeEntry(native)
+      }
       const beforeCursor =
         native.nextCursor === undefined
           ? undefined
@@ -2283,19 +2332,25 @@ export class HostService {
     const matching = replay.events.filter(
       (event) => event.conversationId === conversationId,
     )
-    const events = matching.slice(0, limit)
+    const events = boundedSupervisorRows(
+      matching.slice(0, limit).map(compactSupervisorLiveEvent),
+      supervisorTranscriptByteBudget,
+    )
+    const last = events.at(-1)
     return {
       protocolVersion,
       conversationId,
       cursor:
-        matching.length > limit && events.at(-1) !== undefined
+        matching.length > events.length && last !== undefined
           ? formatLastEventId({
               epoch: replay.epoch,
-              seq: events.at(-1)!.seq,
+              seq: last.seq,
             })
           : currentCursor,
       events,
-      resetRequired: false,
+      // Keep real identities intact if a non-display field is too large.
+      // Recover via the existing history reset instead of skipping an event.
+      resetRequired: matching.length > 0 && last === undefined,
       active,
     }
   }

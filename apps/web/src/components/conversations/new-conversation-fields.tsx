@@ -79,8 +79,8 @@ export function NewConversationFields({
             : undefined
 
   return (
-    <div className="space-y-5">
-      <section aria-labelledby={formId + '-project-label'}>
+    <div className="min-w-0 space-y-5">
+      <section className="min-w-0" aria-labelledby={formId + '-project-label'}>
         <h3
           id={formId + '-project-label'}
           className="text-sm font-medium text-text-primary"
@@ -111,48 +111,57 @@ export function NewConversationFields({
             disabled={loading || busy}
           >
             <SelectTrigger
-              className="mt-2"
+              className="mt-2 min-w-0"
               aria-label="选择项目"
               aria-describedby={formId + '-project-context'}
             >
               <SelectValue
-                placeholder={loading ? '正在读取项目…' : '请选择项目所在设备'}
+                className="block min-w-0 max-w-full truncate"
+                placeholder={loading ? '正在读取项目…' : '请选择电脑上的项目'}
               >
-                {project?.project.name}
+                {project === undefined
+                  ? undefined
+                  : `${project.project.name} · ${project.machine?.displayName ?? '电脑不可用'}`}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent>
-              {displayGroups.map((group) => (
+            <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
+              {displayGroups.map((group, index) => (
                 <SelectGroup key={group.key}>
-                  <SelectLabel>{group.label}</SelectLabel>
+                  <SelectLabel
+                    title={group.label}
+                    className={cn(
+                      'max-w-full truncate rounded-xs bg-surface-muted px-2 py-2 text-xs font-semibold text-text-primary',
+                      index > 0 && 'mt-1',
+                      group.choices.every(
+                        (choice) => choice.unavailableReason !== undefined,
+                      ) && 'text-text-muted',
+                    )}
+                  >
+                    {group.label}
+                  </SelectLabel>
                   {group.choices.map((choice) => (
                     <SelectItem
                       key={choice.key}
+                      className="min-w-0 max-w-full overflow-hidden"
                       value={choice.key}
                       disabled={choice.unavailableReason !== undefined}
                       textValue={
                         choice.project.name +
                         ' · ' +
-                        (choice.machine?.displayName ?? '设备不可用') +
+                        (choice.machine?.displayName ?? '电脑不可用') +
                         ' · ' +
                         choice.location.rootPath
                       }
                     >
-                      <span className="grid min-w-0 gap-0.5">
-                        <span className="truncate">
-                          {choice.project.name}
-                          {choice.unavailableReason === undefined
-                            ? ''
-                            : '（' + choice.unavailableReason + '）'}
-                        </span>
+                      <span className="grid w-full min-w-0 max-w-full gap-0.5">
+                        <span className="truncate">{choice.project.name}</span>
                         <span
                           className="truncate font-mono text-xs text-text-muted"
                           title={choice.location.rootPath}
                         >
-                          {group.kind === 'recent'
-                            ? (choice.machine?.displayName ?? '设备不可用') +
-                              ' · '
-                            : ''}
+                          {choice.unavailableReason === undefined
+                            ? ''
+                            : choice.unavailableReason + ' · '}
                           {choice.location.rootPath}
                         </span>
                       </span>
@@ -168,7 +177,10 @@ export function NewConversationFields({
           className="mt-2 flex min-w-0 items-center gap-1.5 text-xs text-text-muted"
         >
           <Monitor aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="shrink-0">
+          <span
+            className="min-w-0 max-w-1/2 truncate"
+            title={project?.machine?.displayName}
+          >
             {project?.machine?.displayName ??
               (loading ? '正在读取设备…' : '请选择设备上的项目')}
           </span>

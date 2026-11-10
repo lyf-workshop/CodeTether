@@ -9,14 +9,16 @@ import {
 
 const sourceRoot = new URL('../src/', import.meta.url)
 
-test('Machines routes and navigation expose only real Host-backed Machine pages', async () => {
-  const [router, sidebar, list, detail, machineProjects] = await Promise.all([
-    source('router.tsx'),
-    source('components/app-shell/workspace-sidebar.tsx'),
-    source('components/machines/machines-page.tsx'),
-    source('components/machines/machine-detail-page.tsx'),
-    source('components/machines/machine-projects-section.tsx'),
-  ])
+test('computer routes and navigation expose real Host-backed cards and detail', async () => {
+  const [router, sidebar, list, card, detail, machineProjects] =
+    await Promise.all([
+      source('router.tsx'),
+      source('components/app-shell/workspace-sidebar.tsx'),
+      source('components/machines/machines-page.tsx'),
+      source('components/machines/machine-summary-card.tsx'),
+      source('components/machines/machine-detail-page.tsx'),
+      source('components/machines/machine-projects-section.tsx'),
+    ])
 
   assert.match(router, /path: '\/machines'/u)
   assert.match(router, /path: '\/devices'/u)
@@ -30,10 +32,13 @@ test('Machines routes and navigation expose only real Host-backed Machine pages'
   assert.match(list, /machineListQueryOptions/u)
   assert.match(list, /projectListQueryOptions/u)
   assert.doesNotMatch(list, /machineDetailQueryOptions|useQueries/u)
+  assert.match(list, /MachineSummaryCard/u)
+  assert.match(card, /machineDetailQueryOptions/u)
+  assert.match(card, /machineSubtitleLabel/u)
   assert.match(detail, /machineDetailQueryOptions/u)
   assert.match(detail, /MachineProvidersSection/u)
   assert.match(detail, /MachineProjectsSection/u)
-  assert.match(detail, /machineEnvironmentLabel/u)
+  assert.match(detail, /machineSubtitleLabel/u)
   assert.match(machineProjects, /项目/u)
   assert.match(detail, /machineConnectionStateLabel/u)
   assert.match(detail, /MachineConnectionSection/u)

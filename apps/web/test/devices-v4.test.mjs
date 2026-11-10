@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { metadataUiFixture } from './fixtures/metadata-ui.mjs'
+import { createDom, h } from './fixtures/dom.mjs'
 
 import {
   deviceProjectState,
@@ -102,6 +103,13 @@ test('connection, execution and folder access remain independent project gates',
       ...machine,
       capabilities: { ...machine.capabilities, providerExecution: false },
     }),
+    true,
+  )
+  assert.equal(
+    machineCanAddProject({
+      ...machine,
+      capabilities: { ...machine.capabilities, projectAccess: false },
+    }),
     false,
   )
 })
@@ -200,6 +208,89 @@ test('visible card metrics use one exact cold index without requiring hover or P
       { archived: 'all', limit: 100, signal: undefined },
     ],
   ])
+})
+
+test('device detail reveals the eleventh and twelfth conversations only after loading more', async () => {
+  const machine = {
+    machineId: localId,
+    displayName: '这台电脑',
+    kind: 'local',
+    connectionState: 'local',
+    availability: 'available',
+    capabilities: { projectAccess: true, providerExecution: true },
+  }
+  const conversations = Array.from({ length: 12 }, (_, index) => ({
+    ...conversation(String(index), localId),
+    title: `会话 ${index + 1}`,
+    lastActivityAt: new Date(
+      Date.parse(timestamp) + index * 60_000,
+    ).toISOString(),
+  }))
+  const fixture = metadataUiFixture({ machines: [machine], conversations })
+  const { MachineConversationsSection } = fixture.load(
+    'components/machines/machine-conversations-section.tsx',
+  )
+  const dom = await createDom()
+  try {
+    await dom.render(
+      h(MachineConversationsSection, {
+        machine,
+        projects: [{ projectId: 'proj_one', name: '项目' }],
+        conversations,
+      }),
+    )
+    assert.equal(dom.container.querySelectorAll('li').length, 10)
+    assert.match(dom.container.textContent, /会话 12/u)
+    assert.doesNotMatch(dom.container.textContent, /会话 1(?:\D|$)/u)
+    const loadMore = [...dom.container.querySelectorAll('button')].find(
+      (button) => button.textContent.includes('加载更多会话'),
+    )
+    assert.ok(loadMore)
+    await dom.perform(() => loadMore.click())
+    assert.equal(dom.container.querySelectorAll('li').length, 12)
+    assert.match(dom.container.textContent, /会话 1(?:\D|$)/u)
+    assert.equal(
+      [...dom.container.querySelectorAll('button')].some((button) =>
+        button.textContent.includes('加载更多会话'),
+      ),
+      false,
+    )
+  } finally {
+    await dom.close()
+  }
+})
+
+test('device card pairs a decorative folder icon with its known project count', () => {
+  const machine = {
+    machineId: localId,
+    displayName: '这台电脑',
+    kind: 'local',
+    platform: 'Windows',
+    architecture: 'x64',
+    connectionState: 'local',
+    availability: 'available',
+    capabilities: { projectAccess: true, providerExecution: true },
+  }
+  const project = {
+    projectId: 'proj_one',
+    name: '项目',
+    locations: [{ machineId: localId, rootPath: 'D:\\项目' }],
+  }
+  const fixture = metadataUiFixture({
+    machines: [machine],
+    projects: [project],
+  })
+  const { MachineSummaryCard } = fixture.load(
+    'components/machines/machine-summary-card.tsx',
+  )
+  const html = fixture.render(MachineSummaryCard, {
+    machine,
+    projects: [project],
+    projectError: false,
+    hostConnected: true,
+  })
+  assert.match(html, /lucide-folder/u)
+  assert.match(html, /1 个项目/u)
 })
 
 test('provider cards wrap identities and diagnostic values in narrow layouts', async () => {

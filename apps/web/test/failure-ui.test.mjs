@@ -45,7 +45,7 @@ test('failure card and Composer expose keyboard and screen-reader semantics', as
 })
 
 test('failure surfaces retain bounded responsive layout at both required desktop widths', async () => {
-  const [card, timeline, machine, dialog] = await Promise.all([
+  const [card, timeline, machine, machineProjects, dialog] = await Promise.all([
     readFile(
       new URL(
         'components/conversation/conversation-failure-card.tsx',
@@ -62,6 +62,10 @@ test('failure surfaces retain bounded responsive layout at both required desktop
       'utf8',
     ),
     readFile(
+      new URL('components/machines/machine-projects-section.tsx', sourceRoot),
+      'utf8',
+    ),
+    readFile(
       new URL(
         'components/conversations/new-conversation-dialog.tsx',
         sourceRoot,
@@ -75,7 +79,7 @@ test('failure surfaces retain bounded responsive layout at both required desktop
   assert.match(card, /overflow-auto break-all/u)
   assert.match(timeline, /mx-auto w-full min-w-0 max-w-\(--read-w\)/u)
   assert.match(machine, /min-w-0/u)
-  assert.match(machine, /expanded-workspace:grid-cols-/u)
+  assert.match(machineProjects, /sm:grid-cols-2 desktop:grid-cols-3/u)
   assert.match(dialog, /ct-new-conversation-dialog overflow-x-hidden/u)
 })
 

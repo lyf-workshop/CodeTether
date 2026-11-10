@@ -99,6 +99,7 @@ export function ConversationGroup({
 interface ConversationRowProps {
   archiveView: 'active' | 'archived'
   conversation: ConversationSummary
+  machineName?: string
   selected: boolean
   showUnpinnedDivider: boolean
   showProvider?: boolean
@@ -107,6 +108,7 @@ interface ConversationRowProps {
 function ConversationRow({
   archiveView,
   conversation,
+  machineName,
   selected,
   showUnpinnedDivider,
   showProvider = false,
@@ -188,6 +190,7 @@ function ConversationRow({
             metadata={
               <span className="truncate">
                 {providerDisplayName(conversation.provider)}
+                {machineName === undefined ? '' : ` · ${machineName}`}
                 {archived && conversation.archivedAt !== undefined
                   ? ` · 归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
                   : ''}
@@ -281,9 +284,11 @@ export type { ConversationGroupProps }
 
 export function ConversationRows({
   archiveView = 'active',
+  machineName,
   conversations,
 }: {
   archiveView?: 'active' | 'archived'
+  machineName?: string
   conversations: readonly ConversationSummary[]
 }) {
   return (
@@ -293,6 +298,7 @@ export function ConversationRows({
           key={conversation.conversationId}
           archiveView={archiveView}
           conversation={conversation}
+          machineName={machineName}
           selected={false}
           showUnpinnedDivider={false}
           showProvider

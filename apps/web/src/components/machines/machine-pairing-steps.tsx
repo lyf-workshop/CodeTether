@@ -33,7 +33,7 @@ export function MachinePairingEntry({
       <div>
         <h2 className="text-xl font-semibold">输入配对码</h2>
         <p className="mt-2 text-md text-text-secondary">
-          输入要添加的设备上 CodeTether Node 显示的信息。
+          输入要添加的电脑上 CodeTether 远程服务显示的信息。
         </p>
       </div>
       <div className="space-y-2">
@@ -48,7 +48,7 @@ export function MachinePairingEntry({
           autoCapitalize="none"
           autoComplete="off"
           spellCheck={false}
-          placeholder="192.168.1.42:4318 或 Node 配对链接"
+          placeholder="192.168.1.42:4318 或电脑配对链接"
           disabled={pairing.busy || pairing.otherTrustBusy}
           aria-invalid={pairing.addressInvalid || undefined}
           aria-errormessage={pairing.addressInvalid ? errorId : undefined}
@@ -132,7 +132,7 @@ export function MachinePairingConfirmation({
           核对验证码
         </h2>
         <p className="mt-2 text-md text-text-secondary">
-          请与另一台设备上的 Node 核对。只有两端显示一致才继续。
+          请与另一台电脑上的验证码核对。只有两端显示一致才继续。
         </p>
       </div>
       <div className="rounded-lg border border-border bg-surface-inset p-4">
@@ -214,7 +214,7 @@ export function MachinePairingComplete({
         <StatusTag tone="ok">已配对</StatusTag>
       </div>
       <Notice tone="info">
-        请结束设备上的临时配对进程，并恢复原 Node 后台服务。AI
+        请结束电脑上的临时配对进程，并恢复原远程后台服务。AI
         工具与项目是否可用会独立检查；已配对不等于可以执行。
       </Notice>
       <div className="flex flex-wrap justify-end gap-3">

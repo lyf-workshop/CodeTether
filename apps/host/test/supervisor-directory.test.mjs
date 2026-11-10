@@ -4,25 +4,33 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { encodeMachineFrame } from '@codetether/machine-transport'
+
 import { ConversationStore } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
 
 const baseTime = Date.parse('2026-09-25T12:00:00.000Z')
+const longProjectName = '项目'.repeat(120)
+const longConversationTitle = '会话'.repeat(120)
 
 test('Supervisor Project directory is Machine-scoped, complete, and stably paginated', () => {
   withFixture(({ store, localMachineId, remoteMachineId, projectIds }) => {
     const observed = []
+    let byteLimited = false
     let cursor
     do {
       const page = store.listSupervisorProjects(localMachineId, {
-        limit: 5,
+        limit: 100,
         ...(cursor === undefined ? {} : { cursor }),
       })
+      assertFrameFits(page)
+      byteLimited ||= page.truncated === true
       observed.push(...page.projects)
       assert.equal(page.hasMore, page.nextCursor !== undefined)
       cursor = page.nextCursor
     } while (cursor !== undefined)
 
+    assert.equal(byteLimited, true)
     assert.equal(observed.length, projectIds.length)
     assert.equal(
       new Set(observed.map((project) => project.projectId)).size,
@@ -34,10 +42,15 @@ test('Supervisor Project directory is Machine-scoped, complete, and stably pagin
     )
     assert.ok(observed.every((project) => project.machineId === localMachineId))
     assert.ok(observed.every((project) => !('rootPath' in project)))
+    assert.ok(observed.every((project) => project.name === longProjectName))
 
     const shared = store.getSupervisorProject(remoteMachineId, projectIds[0])
+    assertFrameFits({ project: shared })
     assert.equal(shared?.projectId, projectIds[0])
     assert.equal(shared?.machineId, remoteMachineId)
+    assert.equal(shared?.name, longProjectName)
+    assert.equal(shared?.conversationCount, 1)
+    assert.equal('rootPath' in shared, false)
     assert.equal(
       store.getSupervisorProject(remoteMachineId, projectIds[1]),
       undefined,
@@ -45,6 +58,7 @@ test('Supervisor Project directory is Machine-scoped, complete, and stably pagin
 
     const first = store.listSupervisorProjects(localMachineId, { limit: 2 })
     assert.ok(first.nextCursor)
+    assert.equal(first.truncated, undefined)
     assert.throws(
       () =>
         store.listSupervisorProjects(remoteMachineId, {
@@ -60,21 +74,25 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
   withFixture(({ store, localMachineId, remoteMachineId, projectIds }) => {
     const projectId = projectIds[0]
     const observed = []
+    let byteLimited = false
     let cursor
     do {
       const page = store.listSupervisorConversations(
         localMachineId,
         projectId,
         {
-          limit: 13,
+          limit: 100,
           ...(cursor === undefined ? {} : { cursor }),
         },
       )
+      assertFrameFits(page)
+      byteLimited ||= page.truncated === true
       observed.push(...page.conversations)
       assert.equal(page.hasMore, page.nextCursor !== undefined)
       cursor = page.nextCursor
     } while (cursor !== undefined)
 
+    assert.equal(byteLimited, true)
     assert.equal(observed.length, 61)
     assert.equal(
       new Set(observed.map((conversation) => conversation.conversationId)).size,
@@ -88,6 +106,7 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
         (conversation) =>
           conversation.projectId === projectId &&
           conversation.machineId === localMachineId &&
+          conversation.title === longConversationTitle &&
           !('providerThreadId' in conversation) &&
           !('cwd' in conversation),
       ),
@@ -123,6 +142,17 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
       remote.conversations.map((conversation) => conversation.conversationId),
       [conversationId('remote', 0)],
     )
+    const detail = store.getSupervisorConversation(
+      localMachineId,
+      projectId,
+      conversationId('local', 17),
+    )
+    assertFrameFits({ conversation: detail })
+    assert.equal(detail?.title, longConversationTitle)
+    assert.equal(detail?.origin, 'adopted_native')
+    assert.equal(detail?.provider, 'claude-code')
+    assert.equal(detail?.resumability, 'resumable')
+    assert.equal('cwd' in detail, false)
     assert.equal(
       store.getSupervisorConversation(
         remoteMachineId,
@@ -142,6 +172,16 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
   })
 })
 
+function assertFrameFits(data) {
+  encodeMachineFrame({
+    type: 'supervisor.response',
+    protocolVersion: 1,
+    requestId: `sreq_${'r'.repeat(96)}`,
+    ok: true,
+    data: { protocolVersion: 1, ...data },
+  })
+}
+
 function withFixture(run) {
   const directory = mkdtempSync(
     join(tmpdir(), 'codetether-supervisor-directory-'),
@@ -157,7 +197,7 @@ function withFixture(run) {
     store.activateTrustedMachinePeer(remoteMachineId, timestamp(1))
 
     const projectIds = Array.from(
-      { length: 14 },
+      { length: 35 },
       (_, index) => `proj_supervisor_${String(index).padStart(4, '0')}`,
     )
     for (const [index, projectId] of projectIds.entries()) {
@@ -178,7 +218,7 @@ function withFixture(run) {
       }
       store.createProject({
         projectId,
-        name: `Project ${String(index)}`,
+        name: longProjectName,
         locations,
         createdAt: timestamp(index + 2),
         updatedAt: timestamp(index + 2),
@@ -235,7 +275,9 @@ function withFixture(run) {
 }
 
 function normalizedRoot(directory, suffix) {
-  return normalizeTrustedProjectRoot(join(directory, suffix))
+  return normalizeTrustedProjectRoot(
+    join(directory, ...Array(15).fill('path'.repeat(60)), suffix),
+  )
 }
 
 function location(projectId, machineId, root, at) {
@@ -255,7 +297,7 @@ function conversation(id, projectId, machineId, cwd, index, overrides = {}) {
     conversationId: id,
     projectId,
     machineId,
-    title: `Conversation ${String(index)}`,
+    title: longConversationTitle,
     titleSource: 'generated',
     provider: 'codex',
     cwd,

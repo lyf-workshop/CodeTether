@@ -16,13 +16,12 @@ export function machineCanAddProject(machine: DeviceState): boolean {
     (machine.connectionState === 'local' ||
       machine.connectionState === 'online') &&
     machine.availability === 'available' &&
-    machine.capabilities.projectAccess &&
-    machine.capabilities.providerExecution
+    machine.capabilities.projectAccess
   )
 }
 
 export function machineCannotAddProjectReason(): string {
-  return '设备恢复在线并可以运行 AI 工具后，即可添加项目。'
+  return '电脑恢复在线并允许访问项目文件夹后，即可添加项目。'
 }
 
 export function deviceProjectState(

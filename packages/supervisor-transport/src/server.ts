@@ -6,7 +6,9 @@ import { createServer, type Server, type TLSSocket } from 'node:tls'
 import {
   FramedMachineConnection,
   MachineTransportError,
+  MachineWireErrorCodeSchema,
 } from '@codetether/machine-transport'
+import { ZodError } from 'zod'
 
 import {
   supervisorProtocolVersion,
@@ -43,6 +45,10 @@ import {
   supervisorTlsServerOptions,
   type SupervisorTlsIdentity,
 } from './tls.js'
+
+// Some existing clients validate Machine data with strict schemas. Keep
+// truncation diagnostics for those responses out of their JSON shape.
+export const supervisorReadTruncated = Symbol('supervisorReadTruncated')
 
 export interface SupervisorAdmissionResult {
   readonly hostId: string
@@ -536,7 +542,8 @@ export class SupervisorServer {
   ): Promise<void> {
     const startedAt = Date.now()
     try {
-      if (isSupervisorControlOperation(request) && !controlAuthorized) {
+      const isControl = isSupervisorControlOperation(request)
+      if (isControl && !controlAuthorized) {
         throw new Error('operation_not_allowed')
       }
       let data: unknown
@@ -628,22 +635,45 @@ export class SupervisorServer {
           data = await this.#options.operations(request)
           break
       }
-      await connection.send({
+      const response = {
         type: 'supervisor.response',
         protocolVersion: supervisorProtocolVersion,
         requestId: request.requestId,
         ok: true,
         data,
-      })
+      }
+      const responseBytes = isControl
+        ? undefined
+        : Buffer.byteLength(JSON.stringify(response), 'utf8')
+      if (
+        responseBytes !== undefined &&
+        responseBytes > supervisorTransportLimits.maximumFrameBytes
+      ) {
+        this.#options.onDiagnostic?.('supervisor.read.frame_too_large', {
+          operation: request.operation,
+          transport,
+          responseBytes,
+        })
+        throw new RangeError('Supervisor read exceeds the frame bound')
+      }
+      await connection.send(response)
       this.#options.onDiagnostic?.('supervisor.read', {
         operation: request.operation,
         transport,
         latencyMs: Date.now() - startedAt,
+        ...(responseBytes === undefined ? {} : { responseBytes }),
         ...supervisorReadRequestFields(request),
         ...supervisorReadResultFields(data),
       })
     } catch (error) {
       const code = supervisorReadErrorCode(error)
+      this.#options.onDiagnostic?.('supervisor.read.failed', {
+        operation: request.operation,
+        transport,
+        latencyMs: Date.now() - startedAt,
+        code,
+        ...supervisorReadErrorFields(error),
+      })
       const status = (error as { readonly httpStatus?: unknown } | undefined)
         ?.httpStatus
       await connection.send({
@@ -731,7 +761,12 @@ function supervisorReadResultFields(
         ? value.machines
         : undefined
   const transcriptEntries = remoteTranscriptEntryCount(value)
+  const truncated =
+    value.truncated === true ||
+    (supervisorReadTruncated in value &&
+      value[supervisorReadTruncated] === true)
   return {
+    ...(truncated ? { truncated: true } : {}),
     ...(Array.isArray(collection) ? { resultCount: collection.length } : {}),
     ...(transcriptEntries === undefined
       ? {}
@@ -798,6 +833,30 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
+}
+
+function supervisorReadErrorFields(
+  error: unknown,
+): Readonly<Record<string, string>> {
+  if (error instanceof MachineTransportError) {
+    const { code } = error
+    const safeCode =
+      code === 'connection_failed' ||
+      code === 'timeout' ||
+      MachineWireErrorCodeSchema.safeParse(code).success
+    return {
+      errorClass: 'MachineTransportError',
+      ...(safeCode ? { causeCode: code } : {}),
+    }
+  }
+  if (error instanceof RangeError) return { errorClass: 'RangeError' }
+  if (error instanceof TypeError) return { errorClass: 'TypeError' }
+  if (error instanceof ZodError) return { errorClass: 'ZodError' }
+  if (!(error instanceof Error)) return { errorClass: 'NonError' }
+  return {
+    errorClass:
+      error.name === 'HostServiceError' ? 'HostServiceError' : 'Error',
+  }
 }
 
 function supervisorReadErrorCode(

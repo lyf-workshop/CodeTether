@@ -67,6 +67,45 @@ test('Enter submits while Shift+Enter and IME composition remain text input', ()
     }),
     false,
   )
+  assert.equal(
+    shouldSubmitComposerKey({
+      key: 'Enter',
+      shiftKey: false,
+      ctrlKey: true,
+      isComposing: false,
+    }),
+    false,
+  )
+  assert.equal(
+    shouldSubmitComposerKey({
+      key: 'Enter',
+      shiftKey: false,
+      ctrlKey: true,
+      isComposing: false,
+      shortcut: 'ctrl-enter',
+    }),
+    true,
+  )
+  assert.equal(
+    shouldSubmitComposerKey({
+      key: 'Enter',
+      shiftKey: false,
+      ctrlKey: false,
+      isComposing: false,
+      shortcut: 'ctrl-enter',
+    }),
+    false,
+  )
+  assert.equal(
+    shouldSubmitComposerKey({
+      key: 'Enter',
+      shiftKey: true,
+      ctrlKey: true,
+      isComposing: false,
+      shortcut: 'ctrl-enter',
+    }),
+    false,
+  )
 })
 
 test('draft clears only after an accepted matching submission', () => {

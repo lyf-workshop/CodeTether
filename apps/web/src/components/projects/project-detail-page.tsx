@@ -263,6 +263,7 @@ function ProjectDetailPage({
         key={`${projectId}:${location.machineId}`}
         projectId={projectId}
         machineId={location.machineId}
+        machineName={machine?.displayName}
         projectName={project.name}
         search={{ ...search, machineId: location.machineId }}
         searchPage={searchPage}

@@ -35,10 +35,7 @@ export function WorkspaceDeviceSection({
   const Icon = machine.kind === 'local' ? Monitor : Server
   const canAddProject =
     connectionState === 'connected' && machineCanAddProject(machine)
-  const status =
-    machine.connectionState === 'local'
-      ? '这台电脑'
-      : machineConnectionStateLabel(machine.connectionState)
+  const status = machineConnectionStateLabel(machine.connectionState)
   const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
   return (
     <div data-workspace-machine={machine.machineId}>

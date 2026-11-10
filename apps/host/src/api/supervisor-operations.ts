@@ -13,42 +13,31 @@ import {
 } from '@codetether/protocol'
 import type { SupervisorB1Operation } from '@codetether/supervisor-transport'
 
+import {
+  boundedSupervisorRows,
+  supervisorJsonBytes,
+  supervisorRowsByteBudget,
+  truncateSupervisorText,
+} from '../supervisor-read-budget.js'
 import type { HostService } from './host-service.js'
-
-// Supervisor frames allow 256 KiB. Keep variable-sized rows within a tighter
-// budget and leave space for the response envelope and summaries.
-const maximumRowsBytes = 12 * 1024
-
-function rowBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value), 'utf8') + 1
-}
-
-function boundedRows<T>(rows: readonly T[]): T[] {
-  let remaining = maximumRowsBytes
-  const bounded: T[] = []
-  for (const row of rows) {
-    remaining -= rowBytes(row)
-    if (remaining < 0) break
-    bounded.push(row)
-  }
-  return bounded
-}
 
 function boundedChanges(
   rows: readonly ConversationFileChangeRecord[],
   offset: number,
 ) {
   const changes: ConversationFileChangeRecord[] = []
+  const maximumRowsBytes = supervisorRowsByteBudget - 2
   let remaining = maximumRowsBytes
   let omittedDiffs = 0
   let omittedChanges = 0
   let nextOffset = offset
   for (const change of rows.slice(offset)) {
     const { diff, ...metadata } = change
-    const changeBytes = rowBytes(change)
+    const changeBytes = supervisorJsonBytes(change) + 1
     const projected =
       diff !== undefined && changeBytes > maximumRowsBytes ? metadata : change
-    const bytes = projected === change ? changeBytes : rowBytes(projected)
+    const bytes =
+      projected === change ? changeBytes : supervisorJsonBytes(projected) + 1
     if (bytes > maximumRowsBytes) {
       omittedChanges += 1
       nextOffset += 1
@@ -78,7 +67,7 @@ export function executeSupervisorB1Operation(
         MachineIdSchema.parse(request.machineId),
         request.limit,
       )
-      const conversations = boundedRows(recent)
+      const conversations = boundedSupervisorRows(recent)
       return {
         protocolVersion,
         conversations,
@@ -94,11 +83,31 @@ export function executeSupervisorB1Operation(
           limit: request.limit,
         }),
       )
-      const items = boundedRows(attention.items)
+      const compact = attention.items.map((item) => {
+        if (
+          item.type !== 'approval' ||
+          item.payload.actionSubtitle === undefined ||
+          supervisorJsonBytes(item) <= supervisorRowsByteBudget - 2
+        )
+          return item
+        return {
+          ...item,
+          payload: {
+            ...item.payload,
+            actionSubtitle: truncateSupervisorText(
+              item.payload.actionSubtitle,
+              8192,
+            ),
+          },
+        }
+      })
+      const items = boundedSupervisorRows(compact)
       return {
         ...attention,
         items,
-        truncated: items.length < attention.items.length,
+        truncated:
+          items.length < attention.items.length ||
+          items.some((item, index) => item !== attention.items[index]),
       } satisfies SupervisorAttentionListResponse
     }
     case 'attention.resolve':

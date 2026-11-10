@@ -34,6 +34,10 @@ test('project choices group exact locations under real devices, local first, wit
     [localId, remoteId],
   )
   assert.deepEqual(
+    groups.map((group) => group.label),
+    ['这台电脑 (Windows)', '构建设备 (Linux)'],
+  )
+  assert.deepEqual(
     groups[1].choices.map((choice) => choice.projectId),
     [projectId, 'project_second01'],
   )
@@ -351,6 +355,8 @@ function machine(machineId, overrides = {}) {
     kind: machineId === localId ? 'local' : 'remote',
     connectionState: machineId === localId ? 'local' : 'online',
     displayName: machineId === localId ? '本机' : '构建设备',
+    platform: machineId === localId ? 'windows' : 'linux',
+    architecture: 'x64',
     availability: 'available',
     capabilities: { projectAccess: true, providerExecution: true },
     ...overrides,

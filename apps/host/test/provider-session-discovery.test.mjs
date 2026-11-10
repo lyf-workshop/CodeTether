@@ -974,6 +974,7 @@ test('native transcript projection stays scoped, paginated, and creates no produ
 })
 
 test('Supervisor adopted history reuses native cursors through the true beginning', async (t) => {
+  const large = 'newer ' + '😀'.repeat(6000)
   const candidate = nativeCandidate(
     'native-supervisor-history',
     'revision-supervisor-history',
@@ -984,16 +985,36 @@ test('Supervisor adopted history reuses native cursors through the true beginnin
   )
   const fixture = await createFixture(t, {
     candidates: [candidate],
-    transcriptImplementation: async (request) =>
-      request.cursor === undefined
-        ? nativeTranscriptPage('provider-entry-supervisor-newer', 'newer', {
-            nextCursor: 'private-supervisor-cursor',
-            complete: false,
-            sequence: 2,
-          })
-        : nativeTranscriptPage('provider-entry-supervisor-older', 'older', {
-            sequence: 1,
-          }),
+    transcriptImplementation: async (request) => {
+      const older = nativeTranscriptPage(
+        'provider-entry-supervisor-older',
+        'older',
+        {
+          sequence: 1,
+        },
+      )
+      if (request.cursor !== undefined) return older
+      const newer = nativeTranscriptPage(
+        'provider-entry-supervisor-newer',
+        large,
+        {
+          nextCursor: 'private-supervisor-cursor',
+          complete: false,
+          sequence: 2,
+        },
+      )
+      if (request.limit === 1) return newer
+      return {
+        ...older,
+        entries: [...older.entries, ...newer.entries],
+        metrics: {
+          ...older.metrics,
+          bytesRead: older.metrics.bytesRead + newer.metrics.bytesRead,
+          recordsScanned: 2,
+          entriesReturned: 2,
+        },
+      }
+    },
   })
   const adopted = await adoptFirstCandidate(fixture)
   const conversationId = adopted.data.conversation.conversationId
@@ -1001,13 +1022,15 @@ test('Supervisor adopted history reuses native cursors through the true beginnin
     fixture.machineId,
     fixture.projectId,
     conversationId,
-    { limit: 1 },
+    { limit: 2 },
   )
   assert.equal(recent.source, 'native_provider')
   assert.equal(recent.historyComplete, false)
   assert.equal(recent.hasMoreBefore, true)
   assert.ok(recent.beforeCursor)
-  assert.equal(recent.native.entries[0].content, 'newer')
+  assert.match(recent.native.entries[0].content, /^newer .*…$/u)
+  assert.ok(Buffer.byteLength(JSON.stringify(recent), 'utf8') < 12 * 1024)
+  assert.equal(recent.native.metrics.truncated, true)
   const second = fixture.persistence.createOrGetAdoptedConversation({
     conversationId: 'conv_supervisor_history_scope',
     projectId: fixture.projectId,
@@ -1043,7 +1066,10 @@ test('Supervisor adopted history reuses native cursors through the true beginnin
   assert.equal(older.historyComplete, true)
   assert.equal(older.hasMoreBefore, false)
   assert.equal(older.native.entries[0].content, 'older')
-  assert.equal(fixture.discovery.transcriptCalls.length, 2)
+  assert.deepEqual(
+    fixture.discovery.transcriptCalls.map(({ limit }) => limit),
+    [2, 1, 1],
+  )
   assert.equal(fixture.runtime.startConversationCalls, 0)
   assert.equal(fixture.runtime.resumeConversationCalls, 0)
   assert.equal(fixture.runtime.startTurnCalls, 0)

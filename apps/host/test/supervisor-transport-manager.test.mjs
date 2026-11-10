@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
+import { MachineProviderLifecycleSchema } from '@codetether/protocol'
 import {
   RelayService,
   RelayStateStore,
@@ -181,6 +182,41 @@ test('remote Supervisor loopback endpoints are recognized before Relay fallback'
 })
 
 test('forced-remote manager reads Host state without using local HTTP product data', async () => {
+  const observedAt = '2026-11-06T00:00:00.000Z'
+  const providerLifecycles = ['codex', 'claude-code'].map((provider) =>
+    MachineProviderLifecycleSchema.parse({
+      provider,
+      installations: Array.from({ length: 8 }, (_, index) => ({
+        installationId: `pinst_supervisor_regression_${index}`,
+        provider,
+        selected: false,
+        version: '版'.repeat(120),
+        launcherKind: 'native',
+        installMethod: 'manual',
+        availability: 'available',
+        revision: `prev_supervisor_regression_${index}`,
+        firstObservedAt: observedAt,
+        lastObservedAt: observedAt,
+        backend: {
+          mode: 'custom_gateway',
+          readiness: 'ready',
+          freshness: 'current',
+          configuration: {
+            source: 'unknown',
+            hasBaseUrl: true,
+            hasApiKey: false,
+            hasAuthToken: false,
+            hasOAuthToken: false,
+            bedrockConfigured: false,
+            vertexConfigured: false,
+          },
+          sanitizedOrigin: `https://${'gateway.'.repeat(25)}example.test`,
+          observedAt,
+        },
+      })),
+    }),
+  )
+  assert.ok(Buffer.byteLength(JSON.stringify(providerLifecycles)) > 16 * 1024)
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
   })
@@ -222,7 +258,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
         protocolVersion: 1,
         machine: { machineId: `machine_${'m'.repeat(32)}` },
         providers: [{ provider: 'codex', availability: 'available' }],
-        providerLifecycles: [],
+        providerLifecycles,
         projects: [{ path: 'must-not-cross-remote-boundary' }],
         conversations: [{ title: 'must-not-cross-remote-boundary' }],
       }
@@ -404,6 +440,10 @@ test('forced-remote manager reads Host state without using local HTTP product da
     )
     assert.equal(reads.machines, 1)
     assert.equal(reads.detail, 1)
+    assert.deepEqual(detail.providers, [
+      { provider: 'codex', availability: 'available' },
+    ])
+    assert.equal('providerLifecycles' in detail, false)
     assert.equal('projects' in detail, false)
     assert.equal('conversations' in detail, false)
     const machineId = `machine_${'m'.repeat(32)}`
@@ -869,6 +909,10 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     identityGeneration: 1,
   }
   const reads = { machines: 0, detail: 0, history: 0, live: 0 }
+  const machineRows = Array.from({ length: 48 }, (_, index) => ({
+    machineId: `machine_${'m'.repeat(32)}${index || ''}`,
+    displayName: '设备'.repeat(120),
+  }))
   const service = {
     publisher: { subscribe: () => () => undefined },
     close: async () => undefined,
@@ -877,7 +921,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       reads.machines += 1
       return {
         protocolVersion: 1,
-        machines: [{ machineId: `machine_${'m'.repeat(32)}` }],
+        machines: machineRows,
       }
     },
     getMachine: async () => {
@@ -885,7 +929,16 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       return {
         protocolVersion: 1,
         machine: { machineId: `machine_${'m'.repeat(32)}` },
-        providers: [{ provider: 'codex', availability: 'available' }],
+        providers: [
+          {
+            provider: 'codex',
+            availability: 'available',
+            models: Array.from({ length: 64 }, (_, index) => ({
+              id: `model-${index}`,
+              label: '模型'.repeat(120),
+            })),
+          },
+        ],
         providerLifecycles: [],
       }
     },
@@ -1069,15 +1122,18 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines`,
     )
     assert.equal(machineListResponse.status, 200)
-    const machineId = (await machineListResponse.json()).machines[0].machineId
+    const machineList = await machineListResponse.json()
+    assert.equal('truncated' in machineList, false)
+    assert.ok(machineList.machines.length < machineRows.length)
+    const machineId = machineList.machines[0].machineId
     const machineDetailResponse = await originalFetch(
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}`,
     )
     assert.equal(machineDetailResponse.status, 200)
-    assert.equal(
-      (await machineDetailResponse.json()).machine.machineId,
-      machineId,
-    )
+    const machineDetail = await machineDetailResponse.json()
+    assert.equal(machineDetail.machine.machineId, machineId)
+    assert.equal('truncated' in machineDetail, false)
+    assert.equal(machineDetail.providers[0].provider, 'codex')
     const projectListResponse = await originalFetch(
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects?limit=25`,
     )

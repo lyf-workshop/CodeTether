@@ -82,6 +82,17 @@ test('Project access remains an independent registration gate', () => {
   assert.equal(result.machine, machine)
 })
 
+test('A remote computer with project access remains eligible before AI tools are available', () => {
+  const machine = {
+    ...remote,
+    capabilities: { projectAccess: true, providerExecution: false },
+  }
+  assert.equal(
+    selectFixedProjectCreationMachine([machine], machine.machineId).state,
+    'ready',
+  )
+})
+
 test('Generic Add Project keeps the existing local flow without selecting a remote Device', () => {
   assert.deepEqual(selectFixedProjectCreationMachine([remote]), {
     state: 'unselected',
@@ -97,7 +108,6 @@ test('Unavailable registration has an actionable explanation without private mac
     'missing',
     'offline',
     'project_access_unavailable',
-    'execution_unavailable',
   ])
     assert.equal(typeof fixedProjectCreationMachineExplanation(state), 'string')
   assert.equal(fixedProjectCreationMachineExplanation('ready'), undefined)

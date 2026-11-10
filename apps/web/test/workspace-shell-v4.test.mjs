@@ -200,7 +200,7 @@ test('project and conversation modal headings match the title-and-description pr
 
 test('embedded Doctor uses Chinese product labels without changing typed diagnostic codes', async () => {
   const doctor = await source('components/doctor/doctor-page.tsx')
-  for (const label of ['AI 工具状态', 'Relay 注册状态', 'Node 在线状态'])
+  for (const label of ['AI 工具状态', 'Relay 注册状态', '远程电脑在线状态'])
     assert.ok(doctor.includes(label), label)
   assert.match(doctor, /AI 工具的官方登录/u)
   assert.match(doctor, /此 AI 工具版本不受支持/u)

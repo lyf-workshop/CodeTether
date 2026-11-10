@@ -11,6 +11,7 @@ import type {
 import type { ProviderPresentation } from '../../provider/provider-presentation.js'
 import { providerLifecycleForMachine } from '../../provider/provider-presentation.js'
 import { providerLifecycleSupportsConversationExecution } from '../conversation/conversation-controls.js'
+import { machinePlatformLabel } from '../machines/machine-presentation.js'
 import { selectNewConversationMachine } from './new-conversation-machine-selection.js'
 import { newConversationProviderEligibility } from './new-conversation-provider-selection.js'
 
@@ -47,7 +48,7 @@ export interface ConversationProjectGroup {
 
 export interface ConversationProjectMenuGroup {
   readonly key: string
-  readonly kind: 'recent' | 'device'
+  readonly kind: 'device'
   readonly label: string
   readonly choices: readonly ConversationProjectChoice[]
 }
@@ -68,6 +69,15 @@ export function conversationProjectChoiceKey(
   selection: ConversationProjectSelection,
 ): string {
   return selection.projectId + ':' + selection.machineId
+}
+
+export function conversationComputerGroupLabel(
+  machine: MachineSummary,
+): string {
+  const platform = machine.platform
+    ? machinePlatformLabel(machine.platform)
+    : '系统未知'
+  return `${machine.kind === 'local' ? '这台电脑' : machine.displayName} (${platform})`
 }
 
 /** Derive choices from Query records, keeping unavailable locations visible. */
@@ -133,20 +143,20 @@ export function conversationProjectGroups(
   return [
     ...ordered.map((machine) => ({
       machineId: machine.machineId,
-      label: machine.displayName,
+      label: conversationComputerGroupLabel(machine),
       choices: choices.filter(
         (choice) => choice.machineId === machine.machineId,
       ),
     })),
     ...orphanIds.map((machineId) => ({
       machineId,
-      label: '设备不可用',
+      label: '电脑不可用',
       choices: choices.filter((choice) => choice.machineId === machineId),
     })),
   ].filter((group) => group.choices.length > 0)
 }
 
-/** Menu ordering only: never changes canonical choices, eligibility or launch context. */
+/** Sort recent projects within their own computer; keep exact choice authority. */
 export function conversationProjectMenuGroups(
   groups: readonly ConversationProjectGroup[],
   activitySources: readonly ConversationActivitySource[],
@@ -177,30 +187,18 @@ export function conversationProjectMenuGroups(
     if (current === undefined || record.lastActivityAt > current)
       activityByPair.set(key, record.lastActivityAt)
   }
-  const recent = groups
-    .flatMap((group) => group.choices)
-    .filter((choice) => activityByPair.has(choice.key))
-    .sort((left, right) =>
-      activityByPair
-        .get(right.key)!
-        .localeCompare(activityByPair.get(left.key)!),
-    )
-    .slice(0, 5)
-  const recentKeys = new Set(recent.map((choice) => choice.key))
-  const remaining = groups
-    .map<ConversationProjectMenuGroup>((group) => ({
-      key: 'device:' + group.machineId,
-      kind: 'device',
-      label: group.label,
-      choices: group.choices.filter((choice) => !recentKeys.has(choice.key)),
-    }))
-    .filter((group) => group.choices.length > 0)
-  return recent.length === 0
-    ? remaining
-    : [
-        { key: 'recent', kind: 'recent', label: '最近使用', choices: recent },
-        ...remaining,
-      ]
+  return groups.map<ConversationProjectMenuGroup>((group) => ({
+    key: 'device:' + group.machineId,
+    kind: 'device',
+    label: group.label,
+    choices: [...group.choices].sort((left, right) => {
+      const leftActivity = activityByPair.get(left.key)
+      const rightActivity = activityByPair.get(right.key)
+      if (leftActivity === undefined) return rightActivity === undefined ? 0 : 1
+      if (rightActivity === undefined) return -1
+      return rightActivity.localeCompare(leftActivity)
+    }),
+  }))
 }
 
 export function resolveConversationProject(

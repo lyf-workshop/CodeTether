@@ -6,6 +6,7 @@ import test from 'node:test'
 import ts from 'typescript'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { JSDOM } from 'jsdom'
 import { loadUiComponent } from './fixtures/render-ui.mjs'
 
 const filename = resolve(
@@ -97,6 +98,78 @@ test('fixed project row is locked and displays its exact device and full path ti
   assert.match(html, /title="D:\\work\\folder"/u)
   assert.match(html, /本机/u)
   assert.doesNotMatch(html, /aria-label="选择项目"/u)
+})
+
+test('a long selected project path preserves its full Windows path in the hover title', () => {
+  const fullPath =
+    'C:\\Users\\Administrator\\AppData\\Local\\Temp\\codetether-d2-frontend-evidence\\project'
+  const html = render({
+    project: { ...project, location: { rootPath: fullPath } },
+  })
+  assert.match(html, /class="min-w-0 truncate font-mono" title="[^"]+"/u)
+  assert.ok(html.includes(`title="${fullPath}"`))
+})
+
+test('multiple computers have distinct, prominent project group headers', () => {
+  // Render the closed selector's content with minimal wrappers; Radix portals
+  // otherwise leave the menu out of server-rendered markup.
+  const selectUi = {
+    ...ui,
+    Select: ({ children }) => createElement('div', null, children),
+    SelectTrigger: ({ children }) => createElement('div', null, children),
+    SelectValue: ({ children }) => createElement('span', null, children),
+    SelectContent: ({ children }) => createElement('div', null, children),
+    SelectGroup: ({ children }) => createElement('section', null, children),
+    SelectLabel: ({ children, className }) =>
+      createElement('h3', { className, 'data-slot': 'select-label' }, children),
+    SelectItem: ({ children }) =>
+      createElement('div', { role: 'option' }, children),
+  }
+  const isolatedModule = { exports: {} }
+  new Function('require', 'module', 'exports', output)(
+    (specifier) =>
+      specifier === '@codetether/ui' ? selectUi : requireDependency(specifier),
+    isolatedModule,
+    isolatedModule.exports,
+  )
+  const remote = {
+    ...project,
+    key: 'project_456:machine_remote',
+    projectId: 'project_456',
+    machineId: 'machine_remote',
+    project: { name: 'Remote Project' },
+    location: { rootPath: '/srv/remote-project' },
+    machine: { kind: 'remote', displayName: '构建电脑' },
+  }
+  const groups = [
+    {
+      machineId: project.machineId,
+      label: '这台电脑 (Windows)',
+      choices: [project],
+    },
+    {
+      machineId: remote.machineId,
+      label: '构建电脑 (Linux)',
+      choices: [remote],
+    },
+  ]
+  const html = renderToStaticMarkup(
+    createElement(isolatedModule.exports.NewConversationFields, {
+      ...base,
+      groups,
+    }),
+  )
+  const document = new JSDOM(html).window.document
+  const labels = [...document.querySelectorAll('[data-slot="select-label"]')]
+  assert.deepEqual(
+    labels.map((label) => label.textContent),
+    ['这台电脑 (Windows)', '构建电脑 (Linux)'],
+  )
+  for (const label of labels) {
+    assert.ok(label.classList.contains('bg-surface-muted'))
+    assert.ok(label.classList.contains('font-semibold'))
+  }
+  assert.equal(document.querySelectorAll('[role="option"]').length, 2)
 })
 
 test('reasoning selector is absent when capability or descriptor options do not support it', () => {

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { Monitor, Server } from 'lucide-react'
+import { Folder, Monitor, Server } from 'lucide-react'
 
 import { StatusTag } from '@codetether/ui'
 import type {
@@ -141,16 +141,25 @@ export function MachineSummaryCard({
           AI 工具显示上次已知的安装状态
         </p>
       ) : null}
-      <div className="mt-auto border-t border-border pt-4 text-sm text-text-secondary">
-        {projectCount === undefined
-          ? projectError
-            ? '项目数量暂不可用'
-            : '正在读取项目…'
-          : `${projectCount} 个项目`}
+      <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border pt-4 text-sm text-text-secondary">
+        <span className="inline-flex items-center gap-1.5">
+          {projectCount === undefined ? (
+            projectError ? (
+              '项目数量暂不可用'
+            ) : (
+              '正在读取项目…'
+            )
+          ) : (
+            <>
+              <Folder aria-hidden="true" className="size-4 shrink-0" />
+              {projectCount} 个项目
+            </>
+          )}
+        </span>
         {machine.kind === 'remote' &&
         machine.connectionState !== 'online' &&
         lastSeen !== undefined ? (
-          <span className="ml-2 text-text-muted">上次在线 {lastSeen}</span>
+          <span className="text-text-muted">上次在线 {lastSeen}</span>
         ) : null}
       </div>
     </article>

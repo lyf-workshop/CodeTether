@@ -125,12 +125,13 @@ export function NewConversationFields({
               </SelectValue>
             </SelectTrigger>
             <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
-              {displayGroups.map((group) => (
+              {displayGroups.map((group, index) => (
                 <SelectGroup key={group.key}>
                   <SelectLabel
                     title={group.label}
                     className={cn(
-                      'max-w-full truncate',
+                      'max-w-full truncate rounded-xs bg-surface-muted px-2 py-2 text-xs font-semibold text-text-primary',
+                      index > 0 && 'mt-1',
                       group.choices.every(
                         (choice) => choice.unavailableReason !== undefined,
                       ) && 'text-text-muted',

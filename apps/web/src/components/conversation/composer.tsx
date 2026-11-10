@@ -329,7 +329,7 @@ export function Composer({
                   size="sm"
                   disabled
                   aria-label="附件即将推出"
-                  className="px-2"
+                  className="pointer-events-none px-2"
                 >
                   <Paperclip aria-hidden="true" />
                   <span className="hidden sm:inline">附件</span>
@@ -342,7 +342,7 @@ export function Composer({
                   size="sm"
                   disabled
                   aria-label="语音即将推出"
-                  className="px-2"
+                  className="pointer-events-none px-2"
                 >
                   <Mic aria-hidden="true" />
                   <span className="hidden sm:inline">语音</span>

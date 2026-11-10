@@ -77,7 +77,7 @@ test('card defers detail reads until near the viewport when observation is suppo
   }
 })
 
-test('recent conversations are ordered by instant and limited to ten', () => {
+test('recent conversations initially show ten in instant order with a load-more control', () => {
   const fixture = metadataUiFixture()
   const { MachineConversationsSection } = fixture.load(
     'components/machines/machine-conversations-section.tsx',
@@ -108,7 +108,9 @@ test('recent conversations are ordered by instant and limited to ten', () => {
     projects: [project],
     conversations,
   })
+  assert.equal((html.match(/<li\b/gu) ?? []).length, 10)
   assert.doesNotMatch(html, /较早时区记录/u)
   assert.ok(html.indexOf('较新记录9') < html.indexOf('较新记录0'))
-  assert.match(html, /只显示最近 10 个会话/u)
+  assert.match(html, /加载更多会话/u)
+  assert.match(html, /已显示 10 个，已读取 11 个/u)
 })

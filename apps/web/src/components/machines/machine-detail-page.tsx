@@ -225,6 +225,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           onLocationRemoved={() => void machineQuery.refetch()}
         />
         <MachineConversationsSection
+          key={machine.machineId}
           machine={machine}
           projects={projects}
           conversations={conversations}

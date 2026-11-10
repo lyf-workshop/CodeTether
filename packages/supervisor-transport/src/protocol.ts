@@ -557,7 +557,7 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       projectId: opaqueId('proj'),
       limit: supervisorDirectoryLimitSchema,
       cursor: supervisorDirectoryCursorSchema.optional(),
-      archived: z.enum(['active', 'archived', 'all']).default('all'),
+      archived: z.enum(['active', 'archived', 'all']).default('active'),
     })
     .strict(),
   supervisorRequestBaseSchema
@@ -642,27 +642,22 @@ export const supervisorResponseSchema = z
         'internal',
       ])
       .optional(),
+    reason: HostErrorCodeSchema.optional(),
     httpStatus: z.union([z.literal(409), z.literal(422)]).optional(),
   })
   .strict()
   .superRefine((value, context) => {
     if (
       value.ok === (value.code !== undefined) ||
+      (value.ok && value.reason !== undefined) ||
       (value.httpStatus !== undefined && value.code !== 'unsupported')
     ) {
       context.addIssue({ code: 'custom', message: 'Invalid response outcome' })
     }
-    if (
-      !value.ok &&
-      value.data !== undefined &&
-      !supervisorFailureDataSchema.safeParse(value.data).success
-    ) {
-      context.addIssue({ code: 'custom', message: 'Invalid failure data' })
-    }
   })
 export type SupervisorResponse = z.infer<typeof supervisorResponseSchema>
 
-export const supervisorFailureDataSchema = z.strictObject({
+export const supervisorFailureDataSchema = z.object({
   reason: HostErrorCodeSchema,
 })
 

@@ -5,6 +5,7 @@ import { MachineTransportError } from '@codetether/machine-transport'
 import { CompactSign, exportJWK, generateKeyPair } from 'jose'
 
 import {
+  ConnectedSupervisorSession,
   SupervisorClientError,
   SupervisorServer,
   canonicalJsonBytes,
@@ -228,7 +229,7 @@ test('Supervisor read failures log only safe operation and error metadata', asyn
   }
 })
 
-test('B4a operation schemas keep old directory defaults and bound new input', () => {
+test('B4a operation schemas default to active conversations and bound new input', () => {
   const scope = {
     machineId: `machine_${'m'.repeat(32)}`,
     projectId: `proj_${'p'.repeat(32)}`,
@@ -250,7 +251,7 @@ test('B4a operation schemas keep old directory defaults and bound new input', ()
         limit: 25,
       }),
     ).archived,
-    'all',
+    'active',
   )
   assert.equal(
     supervisorB1OperationSchema.parse({
@@ -344,6 +345,7 @@ test('B4a operation schemas keep old directory defaults and bound new input', ()
       requestId: `sreq_${'r'.repeat(32)}`,
       ok: false,
       code: 'conflict',
+      reason: 'project_has_conversations',
       data: { reason: 'project_has_conversations' },
     }).success,
     true,
@@ -355,7 +357,40 @@ test('B4a operation schemas keep old directory defaults and bound new input', ()
       requestId: `sreq_${'r'.repeat(32)}`,
       ok: false,
       code: 'conflict',
-      data: { reason: '/private/path' },
+      reason: '/private/path',
+    }).success,
+    false,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      reason: 'project_has_conversations',
+    }).success,
+    true,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      data: { reason: '/private/path', opaque: true },
+    }).success,
+    true,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: true,
+      reason: 'conflict',
+      data: {},
     }).success,
     false,
   )
@@ -389,6 +424,54 @@ test('B4a error mapping preserves safe Host reasons and canonical fallbacks', ()
   assert.deepEqual(supervisorFailureFromError(failure('/private/path')), {
     code: 'internal',
   })
+})
+
+test('Supervisor client reads the top-level reason and accepts legacy failure data', async () => {
+  const request = async (response) => {
+    let sent
+    const connection = {
+      async send(frame) {
+        sent = frame
+      },
+      async receive(schema) {
+        return schema.parse({
+          type: 'supervisor.response',
+          protocolVersion: 1,
+          requestId: sent.requestId,
+          ok: false,
+          code: 'conflict',
+          ...response,
+        })
+      },
+      end() {},
+    }
+    const session = new ConnectedSupervisorSession(
+      connection,
+      '2099-01-01T00:00:00.000Z',
+    )
+    try {
+      await session.readHostBootstrap()
+      assert.fail('expected Supervisor failure')
+    } catch (error) {
+      assert.ok(error instanceof SupervisorClientError)
+      return error.reason
+    } finally {
+      session.close()
+    }
+  }
+  assert.equal(
+    await request({
+      reason: 'project_has_conversations',
+      data: { reason: '/private/path' },
+    }),
+    'project_has_conversations',
+  )
+  assert.equal(
+    await request({
+      data: { reason: 'project_has_conversations', detail: 'legacy' },
+    }),
+    'project_has_conversations',
+  )
 })
 
 test('B4a project create data makes a reduced Location list explicit', () => {

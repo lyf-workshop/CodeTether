@@ -218,7 +218,7 @@ export class ConnectedSupervisorSession {
         machineId,
         projectId,
         ...page,
-        archived: page.archived ?? 'all',
+        archived: page.archived ?? 'active',
       },
       signal,
     )
@@ -401,7 +401,8 @@ export class ConnectedSupervisorSession {
       throw new SupervisorClientError(
         response.code!,
         response.httpStatus,
-        failureData.success ? failureData.data.reason : undefined,
+        response.reason ??
+          (failureData.success ? failureData.data.reason : undefined),
       )
     }
     return response.data

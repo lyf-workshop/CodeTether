@@ -523,6 +523,7 @@ export class SupervisorServer {
             requestId: envelope.data.requestId,
             ok: false,
             code: 'invalid_request',
+            reason: 'invalid_request',
             data: { reason: 'invalid_request' },
           })
           continue
@@ -717,7 +718,10 @@ export class SupervisorServer {
         code: failure.code,
         ...(failure.reason === undefined
           ? {}
-          : { data: { reason: failure.reason } }),
+          : {
+              reason: failure.reason,
+              data: { reason: failure.reason },
+            }),
         ...(failure.httpStatus === undefined
           ? {}
           : { httpStatus: failure.httpStatus }),

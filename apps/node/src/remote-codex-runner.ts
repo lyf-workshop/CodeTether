@@ -9,6 +9,7 @@ import {
   type ThreadResumeResult,
   type ThreadStartResult,
   type TurnStartResult,
+  type CodexAvailableModel,
 } from '@codetether/adapter-codex'
 import {
   canonicalFailure,
@@ -21,10 +22,14 @@ import {
   MachineTransportError,
   RemoteCodexProviderIdentitySchema,
   RemoteCodexPromptSchema,
+  RemoteProviderModelSchema,
   machineTransportLimits,
   type CodexSessionOpenMessage,
   type CodexTurnStartMessage,
   type RemoteCodexTurnEventPayload,
+  type RemoteProviderModel,
+  type ProviderInstallationId,
+  type ProviderInstallationRevision,
 } from '@codetether/machine-transport'
 
 import { validateProjectLocationPath } from './project-location-validation.js'
@@ -34,6 +39,7 @@ import type { NodeProviderLifecycleCoordinator } from './provider-lifecycle.js'
 import type { RemoteProviderSessionConnectionOwner } from './remote-provider-session-owner.js'
 
 interface RemoteCodexClient {
+  readonly listRemoteTextModels?: () => Promise<readonly CodexAvailableModel[]>
   readonly startRemoteTextThread: (options: {
     readonly cwd: string
   }) => Promise<ThreadStartResult>
@@ -44,6 +50,8 @@ interface RemoteCodexClient {
   readonly startRemoteTextTurn: (options: {
     readonly threadId: string
     readonly prompt: string
+    readonly model?: string
+    readonly effort?: string | null
   }) => Promise<TurnStartResult>
   readonly waitForTurn: (
     threadId: string,
@@ -144,6 +152,51 @@ export class RemoteCodexRunnerPool {
 
   get activeCount(): number {
     return this.#runners.size
+  }
+
+  /** Explicit catalog query for the exact executable installation. */
+  async listAvailableModels(
+    installationId: ProviderInstallationId,
+    expectedRevision: ProviderInstallationRevision,
+    signal?: AbortSignal,
+  ): Promise<readonly RemoteProviderModel[]> {
+    if (
+      this.#closed ||
+      !this.#executionSupported ||
+      this.#cleanupFailures.size > 0 ||
+      this.#providerLifecycle === undefined
+    ) {
+      throw executionUnavailable()
+    }
+    const installation =
+      await this.#providerLifecycle.resolveExecutableInstallation(
+        'codex',
+        installationId,
+        expectedRevision,
+        signal,
+      )
+    if (installation.provider !== 'codex') throw executionUnavailable()
+    const client = await this.#clientFactory({
+      onEvent: () => undefined,
+      onError: () => undefined,
+      executable: installation.executable,
+      environment: installation.environment,
+      codexHome: defaultRemoteCodexHome(installation.environment),
+    })
+    let models: readonly CodexAvailableModel[]
+    try {
+      if (client.listRemoteTextModels === undefined)
+        throw executionUnavailable()
+      models = await client.listRemoteTextModels()
+    } finally {
+      await client.shutdown()
+    }
+    if (models.length > 64) throw executionUnavailable()
+    const parsed = models.map((model) => RemoteProviderModelSchema.parse(model))
+    if (new Set(parsed.map(({ id }) => id)).size !== parsed.length) {
+      throw executionUnavailable()
+    }
+    return parsed
   }
 
   async open(
@@ -575,9 +628,29 @@ export class RemoteCodexRunner {
     this.#rememberAction(request.actionId, turn)
     let started: TurnStartResult
     try {
+      if (request.model !== undefined || request.effort !== undefined) {
+        if (
+          request.model === undefined ||
+          this.#client.listRemoteTextModels === undefined
+        ) {
+          throw executionUnavailable()
+        }
+        const models = await this.#client.listRemoteTextModels()
+        const chosen = models.find(({ id }) => id === request.model)
+        if (
+          chosen === undefined ||
+          (request.effort !== undefined &&
+            request.effort !== null &&
+            !chosen.reasoningOptions.includes(request.effort))
+        ) {
+          throw executionUnavailable()
+        }
+      }
       started = await this.#client.startRemoteTextTurn({
         threadId: this.providerThreadId,
         prompt: request.prompt,
+        ...(request.model === undefined ? {} : { model: request.model }),
+        ...(request.effort === undefined ? {} : { effort: request.effort }),
       })
     } catch (error) {
       turn.fail(
@@ -987,6 +1060,16 @@ function turnRequestHash(request: CodexTurnStartMessage): string {
     .update(request.providerThreadId)
     .update('\0')
     .update(request.prompt)
+    .update('\0')
+    .update(request.model ?? '')
+    .update('\0')
+    .update(
+      request.effort === undefined
+        ? 'unset'
+        : request.effort === null
+          ? 'null'
+          : `value:${request.effort}`,
+    )
     .digest('base64url')
 }
 

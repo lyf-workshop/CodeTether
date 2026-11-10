@@ -267,6 +267,28 @@ test('runner streams one idempotent restricted Turn with stable Read/Search tool
   )
 })
 
+test('remote Claude next Turn model and null effort override session defaults', async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), 'codetether-claude-model-'))
+  t.after(async () => await rm(temporary, { recursive: true, force: true }))
+  const root = await realpath(temporary)
+  const harness = runtimeHarness()
+  const pool = new RemoteClaudeRunnerPool({ runtimeFactory: harness.factory })
+  t.after(async () => await pool.close())
+
+  const runner = await pool.open(sessionRequest(root))
+  const request = turnRequest(runner.providerSessionId, {
+    model: 'sonnet',
+    effort: null,
+  })
+  await runner.startTurn(request)
+  assert.equal(harness.runtimes[0].starts[0].model, 'sonnet')
+  assert.equal('effort' in harness.runtimes[0].starts[0], false)
+  await assert.rejects(
+    runner.startTurn({ ...request, effort: undefined }),
+    (error) => error.code === 'duplicate_action_conflict',
+  )
+})
+
 test('runner does not acknowledge a Turn before Provider ownership is established', async (t) => {
   const temporary = await mkdtemp(join(tmpdir(), 'codetether-claude-ack-'))
   t.after(async () => await rm(temporary, { recursive: true, force: true }))
@@ -928,6 +950,7 @@ test('a newer authenticated connection safely replaces the exact idle Claude ses
         requestId: 'D'.repeat(43),
         providerSessionId: sessionId,
         providerSessionMaterialized: true,
+        effort: 'low',
       }),
       connectionOwner(2),
     )
@@ -945,6 +968,7 @@ test('a newer authenticated connection safely replaces the exact idle Claude ses
   assert.equal(retired, 1)
   assert.equal(runtime.closeCount, 1)
   assert.equal(replacement.resumed, true)
+  assert.equal(replacement.effort, 'low')
   assert.deepEqual(harness.calls[1], {
     cwd: root,
     providerSessionId: sessionId,
@@ -961,6 +985,13 @@ test('a newer authenticated connection safely replaces the exact idle Claude ses
   )
   await pool.release(stale)
   assert.equal(pool.activeCount, 1)
+  await replacement.startTurn(
+    turnRequest(replacement.providerSessionId, {
+      actionId: 'act_remote_claude_after_switch',
+      turnId: 'turn_remote_claude_after_switch',
+    }),
+  )
+  assert.equal(harness.runtimes[1].starts[0].effort, 'low')
   await pool.release(replacement)
   assert.equal(pool.activeCount, 0)
 })
@@ -1012,7 +1043,6 @@ test('Claude idle-session handoff rejects active or mismatched ownership', async
       connectionOwner(11),
     ],
     [{ ...exactUnused, rootPath: otherRoot }, connectionOwner(11)],
-    [{ ...exactUnused, effort: 'low' }, connectionOwner(11)],
     [
       { ...exactUnused, providerSessionMaterialized: true },
       connectionOwner(11),

@@ -23,6 +23,7 @@ import {
   machineProtocolVersion,
   MachineTransportError,
   machineTransportLimits,
+  listRemoteProviderModels,
   newControllerId,
   newMachineNonce,
   openRemoteClaudeSession as openRemoteClaudeSessionWithInstallation,
@@ -93,12 +94,21 @@ function fakeClientFactory(options = {}) {
   let starts = 0
   let resumes = 0
   let shutdowns = 0
+  let lastTurnOptions
   const factory = async (value) => {
     launches += 1
     callbacks = value
     options.onFactoryOwned?.()
     await options.factoryGate
     return {
+      listRemoteTextModels: async () =>
+        options.models ?? [
+          {
+            id: 'gpt-codex-fixture',
+            name: 'Fixture Codex',
+            reasoningOptions: ['low', 'high'],
+          },
+        ],
       startRemoteTextThread: async ({ cwd }) => ({
         thread: { id: 'provider-thread-a', cwd },
         model: 'test',
@@ -114,7 +124,8 @@ function fakeClientFactory(options = {}) {
           cwd,
         }
       },
-      startRemoteTextTurn: async () => {
+      startRemoteTextTurn: async (turnOptions) => {
+        lastTurnOptions = turnOptions
         starts += 1
         if (options.turnStartFailure !== undefined) {
           throw options.turnStartFailure
@@ -159,6 +170,9 @@ function fakeClientFactory(options = {}) {
     },
     get shutdowns() {
       return shutdowns
+    },
+    get lastTurnOptions() {
+      return lastTurnOptions
     },
   }
 }
@@ -277,6 +291,53 @@ test('runner owns one idempotent text Turn and chunks bounded output', async () 
   } finally {
     await pool.close()
     await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('remote Codex validates model and effort before the next Provider Turn', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-model-turn-'))
+  const fake = fakeClientFactory()
+  const pool = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+  })
+  try {
+    const runner = await pool.open(sessionRequest(directory))
+    const request = {
+      ...turnRequest(runner.providerThreadId),
+      model: 'gpt-codex-fixture',
+      effort: 'high',
+    }
+    await runner.startTurn(request)
+    assert.equal(fake.lastTurnOptions.model, 'gpt-codex-fixture')
+    assert.equal(fake.lastTurnOptions.effort, 'high')
+  } finally {
+    await pool.close()
+    await rm(directory, { recursive: true, force: true })
+  }
+
+  const other = await mkdtemp(join(tmpdir(), 'codetether-bad-model-'))
+  const rejected = fakeClientFactory()
+  const rejectedPool = new RemoteCodexRunnerPool({
+    codexHome: other,
+    clientFactory: rejected.factory,
+  })
+  try {
+    const runner = await rejectedPool.open(sessionRequest(other))
+    await assert.rejects(
+      runner.startTurn({
+        ...turnRequest(runner.providerThreadId),
+        model: 'gpt-codex-fixture',
+        effort: 'unsupported',
+      }),
+      (error) =>
+        error.code === 'remote_execution_unavailable' ||
+        error.code === 'provider_start_failed',
+    )
+    assert.equal(rejected.starts, 0)
+  } finally {
+    await rejectedPool.close()
+    await rm(other, { recursive: true, force: true })
   }
 })
 
@@ -1560,6 +1621,8 @@ test('real authenticated transport streams one fake-owned remote Codex Turn', as
       actionId: 'act_remote_a',
       turnId: 'turn_remote_a',
       prompt: 'Return the marker.',
+      model: 'gpt-codex-fixture',
+      reasoning: 'high',
     })
     const events = []
     for await (const event of turn.events()) events.push(event.event)
@@ -1570,6 +1633,8 @@ test('real authenticated transport streams one fake-owned remote Codex Turn', as
     assert.equal(runners.activeCount, 0)
     assert.equal(fake.launches, 1)
     assert.equal(fake.starts, 1)
+    assert.equal(fake.lastTurnOptions.model, 'gpt-codex-fixture')
+    assert.equal(fake.lastTurnOptions.effort, 'high')
   } finally {
     await session?.close().catch(() => undefined)
     await service.close().catch(() => undefined)
@@ -1748,6 +1813,7 @@ test('authenticated Claude transport admits exact B and resumes it while the pro
   await mkdir(project)
   const providerSessionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
   const factoryCalls = []
+  const turnInputs = []
   const exactRequests = []
   let processStarts = 0
   const runtimes = new Set()
@@ -1792,6 +1858,7 @@ test('authenticated Claude transport admits exact B and resumes it while the pro
         },
         async startTurn(turn) {
           processStarts += 1
+          turnInputs.push(turn)
           const base = {
             provider: 'claude-code',
             timestamp: new Date().toISOString(),
@@ -1894,6 +1961,8 @@ test('authenticated Claude transport admits exact B and resumes it while the pro
       actionId: 'act_remote_claude01',
       turnId: 'turn_remote_claude01',
       prompt: 'Inspect the fixture.',
+      model: 'sonnet',
+      reasoning: null,
     })
     const events = []
     for await (const event of turn.events()) events.push(event.event)
@@ -1909,6 +1978,8 @@ test('authenticated Claude transport admits exact B and resumes it while the pro
       ],
     )
     assert.equal(events[0].text, 'CLAUDE TRANSPORT MARKER')
+    assert.equal(turnInputs[0].model, 'sonnet')
+    assert.equal('effort' in turnInputs[0], false)
     assert.deepEqual(events[1], {
       type: 'tool.started',
       itemId: 'tool_remote_read',
@@ -1946,6 +2017,117 @@ test('authenticated Claude transport admits exact B and resumes it while the pro
     assert.equal(runtimes.size, 0)
   } finally {
     await session?.close().catch(() => undefined)
+    await service.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('authenticated model catalog uses the exact Node installation without opening a session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-model-catalog-'))
+  const fake = fakeClientFactory({
+    models: Array.from({ length: 12 }, (_, index) => ({
+      id: `gpt-codex-fixture-${index}`,
+      name: `Fixture Codex ${index}`,
+      reasoningOptions: ['low', 'high'],
+    })),
+  })
+  const exactRequests = []
+  const lifecycle = {
+    async resolveExecutableInstallation(provider, id, revision) {
+      exactRequests.push([provider, id, revision])
+      if (id !== providerInstallationId || revision !== installationRevision) {
+        throw new MachineTransportError(
+          'provider_unavailable',
+          'Installation changed',
+          { peerAuthenticated: true },
+        )
+      }
+      return {
+        provider,
+        executable: process.execPath,
+        environment: { HOME: directory },
+        compatibility: {
+          capabilities: {
+            reasoningControl: { effective: true },
+          },
+        },
+      }
+    },
+    async close() {},
+  }
+  const runners = new RemoteCodexRunnerPool({
+    codexHome: directory,
+    clientFactory: fake.factory,
+    providerLifecycle: lifecycle,
+  })
+  const state = await NodeStateStore.open({
+    dataDirectory: join(directory, 'node-state'),
+    displayName: 'Model Catalog Test Node',
+    platform: 'Linux',
+    architecture: 'x64',
+  })
+  const service = new CodeTetherNodeService({
+    state,
+    bindAddress: '127.0.0.1',
+    port: 0,
+    providerDetector: executionDetector(),
+    providerLifecycle: lifecycle,
+    remoteCodexRunners: runners,
+  })
+  const controller = {
+    controllerId: newControllerId(),
+    tls: await generateMachineTlsIdentity('Catalog Test Controller'),
+  }
+  try {
+    const peer = await pairService(service, controller)
+    const codex = await listRemoteProviderModels({
+      peer,
+      controller,
+      provider: 'codex',
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
+    })
+    assert.deepEqual(
+      codex.map(({ id }) => id),
+      Array.from({ length: 12 }, (_, index) => `gpt-codex-fixture-${index}`),
+    )
+    assert.equal(fake.launches, 1)
+    assert.equal(fake.shutdowns, 1)
+    assert.equal(runners.activeCount, 0)
+    const claude = await listRemoteProviderModels({
+      peer,
+      controller,
+      provider: 'claude-code',
+      providerInstallationId,
+      expectedInstallationRevision: installationRevision,
+    })
+    assert.deepEqual(
+      claude.map(({ id }) => id),
+      ['opus', 'sonnet', 'haiku'],
+    )
+    assert.deepEqual(claude[0].reasoningOptions, [
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ])
+    assert.deepEqual(
+      exactRequests.map(([provider]) => provider),
+      ['codex', 'claude-code'],
+    )
+    await assert.rejects(
+      listRemoteProviderModels({
+        peer,
+        controller,
+        provider: 'codex',
+        providerInstallationId,
+        expectedInstallationRevision: 'prev_wrongrevision01',
+      }),
+      (error) => error.code === 'provider_unavailable',
+    )
+    assert.equal(fake.launches, 1)
+  } finally {
     await service.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }

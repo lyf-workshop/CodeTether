@@ -712,19 +712,15 @@ export const RemoteProviderDescriptorSchema = z
     const remoteCodexTextFoundation =
       descriptor.provider === 'codex' &&
       descriptor.availability === 'available' &&
-      enabled.length === 2 &&
-      enabled[0] === 'resume' &&
-      enabled[1] === 'streaming'
+      (enabled.join(',') === 'resume,streaming' ||
+        enabled.join(',') === 'modelSelection,resume,streaming')
     const remoteClaudeReadSearchFoundation =
       descriptor.provider === 'claude-code' &&
       descriptor.availability === 'available' &&
-      enabled.length === 6 &&
-      enabled[0] === 'fileRead' &&
-      enabled[1] === 'reasoningControl' &&
-      enabled[2] === 'resume' &&
-      enabled[3] === 'search' &&
-      enabled[4] === 'streaming' &&
-      enabled[5] === 'toolEvents'
+      (enabled.join(',') ===
+        'fileRead,reasoningControl,resume,search,streaming,toolEvents' ||
+        enabled.join(',') ===
+          'fileRead,modelSelection,reasoningControl,resume,search,streaming,toolEvents')
     let admittedCapabilities =
       enabled.length === 0 ||
       remoteCodexTextFoundation ||
@@ -750,6 +746,7 @@ export const RemoteProviderDescriptorSchema = z
       ) {
         expected.streaming = true
         expected.resume = compatibility.capabilities.nativeResume.effective
+        expected.modelSelection = descriptor.capabilities.modelSelection
       } else if (
         descriptor.provider === 'claude-code' &&
         compatibleRuntime &&
@@ -765,6 +762,7 @@ export const RemoteProviderDescriptorSchema = z
         expected.toolEvents = true
         expected.reasoningControl =
           compatibility.capabilities.reasoningControl.effective
+        expected.modelSelection = descriptor.capabilities.modelSelection
       }
       admittedCapabilities = Object.entries(descriptor.capabilities).every(
         ([capability, value]) =>
@@ -900,6 +898,86 @@ export const ProvidersDescribedMessageSchema = z
   .strict()
 export type ProvidersDescribedMessage = z.infer<
   typeof ProvidersDescribedMessageSchema
+>
+
+/** Explicit, installation-bound catalog query; never opens a Provider session. */
+export const ProviderModelsListMessageSchema = z
+  .object({
+    type: z.literal('provider.models.list'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    expectedMachineId: MachineTransportMachineIdSchema,
+    expectedNodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    expectedInstallationRevision: ProviderInstallationRevisionSchema,
+    cursor: z.number().int().min(0).max(63).optional(),
+  })
+  .strict()
+export type ProviderModelsListMessage = z.infer<
+  typeof ProviderModelsListMessageSchema
+>
+
+export const RemoteProviderModelSchema = z
+  .object({
+    id: z
+      .string()
+      .trim()
+      .min(1)
+      .max(240)
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/),
+    name: z.string().trim().min(1).max(240),
+    description: z.string().trim().min(1).max(1024).optional(),
+    reasoningOptions: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(1)
+          .max(20)
+          .regex(/^[a-z]+$/),
+      )
+      .max(8)
+      .readonly(),
+  })
+  .strict()
+export type RemoteProviderModel = z.infer<typeof RemoteProviderModelSchema>
+
+export const ProviderModelsListedMessageSchema = z
+  .object({
+    type: z.literal('provider.models.listed'),
+    protocolVersion: VersionField,
+    requestId: NonceSchema,
+    machineId: MachineTransportMachineIdSchema,
+    nodeId: NodeIdSchema,
+    provider: z.enum(['codex', 'claude-code']),
+    providerInstallationId: ProviderInstallationIdSchema,
+    installationRevision: ProviderInstallationRevisionSchema,
+    models: z.array(RemoteProviderModelSchema).max(8).readonly(),
+    nextCursor: z.number().int().min(1).max(63).optional(),
+  })
+  .strict()
+  .superRefine((response, context) => {
+    if (
+      new Set(response.models.map(({ id }) => id)).size !==
+      response.models.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider model IDs must be unique',
+        path: ['models'],
+      })
+    }
+    if (Buffer.byteLength(JSON.stringify(response), 'utf8') > 12 * 1024) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Provider model catalog exceeds its frame budget',
+        path: ['models'],
+      })
+    }
+  })
+export type ProviderModelsListedMessage = z.infer<
+  typeof ProviderModelsListedMessageSchema
 >
 
 /**
@@ -1314,6 +1392,15 @@ export const CodexTurnStartMessageSchema = z
     turnId: MachineTransportTurnIdSchema,
     providerThreadId: RemoteCodexProviderIdentitySchema,
     prompt: RemoteCodexPromptSchema,
+    model: RemoteProviderModelSchema.shape.id.optional(),
+    effort: z
+      .string()
+      .trim()
+      .min(1)
+      .max(20)
+      .regex(/^[a-z]+$/)
+      .nullable()
+      .optional(),
   })
   .strict()
 export type CodexTurnStartMessage = z.infer<typeof CodexTurnStartMessageSchema>
@@ -1514,6 +1601,8 @@ export const ClaudeTurnStartMessageSchema = z
     turnId: MachineTransportTurnIdSchema,
     providerSessionId: RemoteClaudeProviderIdentitySchema,
     prompt: RemoteClaudePromptSchema,
+    model: z.enum(['opus', 'sonnet', 'haiku']).optional(),
+    effort: RemoteClaudeEffortSchema.nullable().optional(),
   })
   .strict()
 export type ClaudeTurnStartMessage = z.infer<
@@ -1788,6 +1877,8 @@ export const MachineWireMessageSchema = z.discriminatedUnion('type', [
   ProjectLocationValidatedMessageSchema,
   ProvidersDescribeMessageSchema,
   ProvidersDescribedMessageSchema,
+  ProviderModelsListMessageSchema,
+  ProviderModelsListedMessageSchema,
   ProviderSessionsDiscoverMessageSchema,
   ProviderSessionsDiscoveredMessageSchema,
   ProviderSessionValidateMessageSchema,

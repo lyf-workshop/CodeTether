@@ -1374,7 +1374,7 @@ function providerDescriptor(
           search: false,
           diff: false,
           toolEvents: false,
-          modelSelection: false,
+          modelSelection: executable,
           reasoningControl: false,
         }
       : {
@@ -1393,7 +1393,7 @@ function providerDescriptor(
           toolEvents:
             executable &&
             compatibility?.capabilities.toolEvents.effective === true,
-          modelSelection: false,
+          modelSelection: executable,
           reasoningControl:
             executable &&
             compatibility?.capabilities.reasoningControl.effective === true,

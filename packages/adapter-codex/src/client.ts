@@ -161,6 +161,8 @@ export interface RemoteTextResumeOptions {
 export interface RemoteTextTurnOptions {
   readonly threadId: string
   readonly prompt: string
+  readonly model?: string
+  readonly effort?: string | null
 }
 
 export interface ListStoredThreadsOptions {
@@ -324,6 +326,16 @@ export class CodexAppServerClient {
   /** Reads the visible catalog from an already initialized local App Server. */
   async listAvailableModels(): Promise<readonly CodexAvailableModel[]> {
     this.#assertExecutionProfile('local')
+    return await this.#listModels()
+  }
+
+  /** Reads the catalog on the fixed remote text profile without opening a thread. */
+  async listRemoteTextModels(): Promise<readonly CodexAvailableModel[]> {
+    this.#assertExecutionProfile('remote-text-only')
+    return await this.#listModels()
+  }
+
+  async #listModels(): Promise<readonly CodexAvailableModel[]> {
     const result = await this.#transport.request<unknown>('model/list', {
       limit: 64,
       includeHidden: false,
@@ -516,6 +528,8 @@ export class CodexAppServerClient {
     this.#assertExecutionProfile('remote-text-only')
     const result = await this.#transport.request<unknown>('turn/start', {
       threadId: options.threadId,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.effort === undefined ? {} : { effort: options.effort }),
       input: [
         {
           type: 'text',

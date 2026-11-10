@@ -123,6 +123,7 @@ test('authenticated tested Claude advertises only the restricted execution matri
         .sort(),
       [
         'fileRead',
+        'modelSelection',
         'reasoningControl',
         'resume',
         'search',

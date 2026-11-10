@@ -672,7 +672,7 @@ test('public Provider capabilities preserve optional lifecycle granularity inste
     search: true,
     diff: false,
     toolEvents: true,
-    modelSelection: false,
+    modelSelection: true,
     reasoningControl: false,
   })
   assert.equal(result.descriptor.reasoningLabel, undefined)

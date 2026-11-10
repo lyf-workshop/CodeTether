@@ -331,7 +331,9 @@ test('cold multi-install lifecycle work has one creation-time deadline and a fre
     machineId: 'machine_provider_lifecycle_deadline',
     dataDirectory: directory,
     platform: process.platform,
-    lifecycleWorkTimeoutMs: 40,
+    // Windows filesystem revision probes need more than the tiny Unix fixture
+    // budget when eight installations are rechecked in one retry generation.
+    lifecycleWorkTimeoutMs: process.platform === 'win32' ? 500 : 40,
     discoverCodex: async () => discovery(candidates),
     observeCodex: async (options) => {
       observationCalls += 1

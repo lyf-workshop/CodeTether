@@ -303,6 +303,60 @@ test('remote text-only thread, resume, and turn requests are fixed', async () =>
   assert.equal((await startedTurn).turn.id, 'turn-remote')
 })
 
+test('remote model discovery and next Turn settings stay inside the text profile', async () => {
+  const { child, client, written } = createHarness({}, 'remote-text-only')
+  const catalog = client.listRemoteTextModels()
+  await nextTurn()
+  assert.equal(written[0].method, 'model/list')
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        data: [
+          {
+            model: 'gpt-codex-fixture',
+            displayName: 'Fixture Codex',
+            description: 'Available',
+            hidden: false,
+            supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
+          },
+        ],
+        nextCursor: null,
+      },
+    })}\n`,
+  )
+  assert.deepEqual(await catalog, [
+    {
+      id: 'gpt-codex-fixture',
+      name: 'Fixture Codex',
+      description: 'Available',
+      reasoningOptions: ['high'],
+    },
+  ])
+
+  const turn = client.startRemoteTextTurn({
+    threadId: 'thread-remote',
+    prompt: 'test',
+    model: 'gpt-codex-fixture',
+    effort: 'high',
+  })
+  await nextTurn()
+  assert.equal(written[1].method, 'turn/start')
+  assert.equal(written[1].params.model, 'gpt-codex-fixture')
+  assert.equal(written[1].params.effort, 'high')
+  assert.deepEqual(written[1].params.sandboxPolicy, {
+    type: 'readOnly',
+    networkAccess: false,
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[1].id,
+      result: { turn: { id: 'turn-remote', status: 'inProgress' } },
+    })}\n`,
+  )
+  await turn
+})
+
 test('local and remote client operations cannot cross execution profiles', async () => {
   const cwd = resolve('remote-profile-boundary')
   const local = createHarness().client

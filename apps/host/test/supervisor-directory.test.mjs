@@ -172,6 +172,104 @@ test('Supervisor Conversation directory preserves bindings, provenance, and stab
   })
 })
 
+test('Supervisor Conversation directory sorts pinned rows first and paginates each archive filter without gaps', () => {
+  withFixture(({ store, localMachineId, projectIds }) => {
+    const projectId = projectIds[0]
+    const id = (index) => conversationId('local', index)
+    store.pinConversation(id(2), timestamp(300))
+    store.pinConversation(id(8), timestamp(301))
+    store.archiveConversation(id(55), timestamp(302))
+    store.archiveConversation(id(60), timestamp(303))
+
+    const readAll = (archived) => {
+      const observed = []
+      const cursors = new Set()
+      let cursor
+      do {
+        const page = store.listSupervisorConversations(
+          localMachineId,
+          projectId,
+          {
+            limit: 7,
+            archived,
+            ...(cursor === undefined ? {} : { cursor }),
+          },
+        )
+        assertFrameFits(page)
+        assert.equal(page.hasMore, page.nextCursor !== undefined)
+        observed.push(...page.conversations)
+        cursor = page.nextCursor
+        if (cursor !== undefined) {
+          assert.equal(
+            cursors.has(cursor),
+            false,
+            'pagination cursor must advance',
+          )
+          cursors.add(cursor)
+        }
+        assert.ok(cursors.size < 20, 'pagination must terminate')
+      } while (cursor !== undefined)
+      return observed
+    }
+
+    const all = readAll('all')
+    const active = readAll('active')
+    const archived = readAll('archived')
+    const expectedUnpinned = Array.from(
+      { length: 61 },
+      (_, index) => 60 - index,
+    )
+      .filter((index) => index !== 2 && index !== 8)
+      .map(id)
+    assert.deepEqual(
+      all.map((row) => row.conversationId),
+      [id(8), id(2), ...expectedUnpinned],
+    )
+    assert.deepEqual(
+      active.map((row) => row.conversationId),
+      all.filter((row) => !row.archived).map((row) => row.conversationId),
+    )
+    assert.deepEqual(
+      archived.map((row) => row.conversationId),
+      [id(60), id(55)],
+    )
+    assert.equal(all.length, 61)
+    assert.equal(active.length, 59)
+    assert.equal(archived.length, 2)
+    assert.equal(all[0].pinnedAt, timestamp(301))
+    assert.equal(all[1].pinnedAt, timestamp(300))
+    assert.ok(all.slice(2).every((row) => row.pinnedAt === undefined))
+
+    const defaultPage = store.listSupervisorConversations(
+      localMachineId,
+      projectId,
+      { limit: 100 },
+    )
+    assert.deepEqual(
+      defaultPage.conversations.map((row) => row.conversationId),
+      active
+        .slice(0, defaultPage.conversations.length)
+        .map((row) => row.conversationId),
+    )
+    assert.ok(defaultPage.conversations.every((row) => !row.archived))
+
+    const activePage = store.listSupervisorConversations(
+      localMachineId,
+      projectId,
+      { limit: 1, archived: 'active' },
+    )
+    assert.throws(
+      () =>
+        store.listSupervisorConversations(localMachineId, projectId, {
+          limit: 1,
+          archived: 'archived',
+          cursor: activePage.nextCursor,
+        }),
+      /invalid_request/,
+    )
+  })
+})
+
 function assertFrameFits(data) {
   encodeMachineFrame({
     type: 'supervisor.response',

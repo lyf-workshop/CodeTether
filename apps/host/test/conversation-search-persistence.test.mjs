@@ -6,6 +6,8 @@ import { performance } from 'node:perf_hooks'
 import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
+import { encodeMachineFrame } from '@codetether/machine-transport'
+
 import {
   ConversationSearchCursorError,
   ConversationStore,
@@ -623,6 +625,73 @@ test('opaque keyset cursors are query-bound, strictly advance, and reject malfor
         }),
       ConversationSearchCursorError,
     )
+  })
+})
+
+test('Supervisor search byte budget advances from the last returned UTF-8 result', () => {
+  withFixture(({ store, workspace }) => {
+    for (let index = 0; index < 30; index += 1) {
+      const conversation = seedConversation(store, workspace, index)
+      store.createTurn(
+        durableTurn(conversation.conversationId, index, {
+          text: `${'前文'.repeat(55)}预算标记${'后文'.repeat(55)}`,
+        }),
+      )
+    }
+
+    const expected = store
+      .searchProjectConversations(projectId, {
+        query: '预算标记',
+        limit: 100,
+      })
+      .results.map((result) => result.conversation.conversationId)
+    assert.equal(expected.length, 30)
+
+    const observed = []
+    const cursors = new Set()
+    let cursor
+    let clipped = false
+    do {
+      const page = store.searchProjectConversations(projectId, {
+        query: '预算标记',
+        limit: 25,
+        maximumResultsBytes: 4_096,
+        ...(cursor === undefined ? {} : { cursor }),
+      })
+      const serialized = JSON.stringify(page.results)
+      assert.ok(Buffer.byteLength(serialized, 'utf8') <= 4_096)
+      encodeMachineFrame({
+        type: 'supervisor.response',
+        protocolVersion: 1,
+        requestId: `sreq_${'r'.repeat(96)}`,
+        ok: true,
+        data: { protocolVersion: 1, ...page },
+      })
+      assert.equal(page.hasMore, page.nextCursor !== undefined)
+      assert.ok(page.results.length > 0)
+      assert.ok(
+        page.results.every((result) => result.matchedField === 'user_input'),
+      )
+      assert.ok(
+        page.results.every((result) =>
+          result.matchPreview.includes('预算标记'),
+        ),
+      )
+      clipped ||= page.hasMore && page.results.length < 25
+      observed.push(
+        ...page.results.map((result) => result.conversation.conversationId),
+      )
+      cursor = page.nextCursor
+      if (cursor !== undefined) {
+        assert.equal(cursors.has(cursor), false, 'search cursor must advance')
+        cursors.add(cursor)
+      }
+      assert.ok(cursors.size < 30, 'search pagination must terminate')
+    } while (cursor !== undefined)
+
+    assert.equal(clipped, true)
+    assert.deepEqual(observed, expected)
+    assert.equal(new Set(observed).size, expected.length)
   })
 })
 

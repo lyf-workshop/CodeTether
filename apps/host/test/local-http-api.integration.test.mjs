@@ -16,11 +16,13 @@ import {
 } from '@codetether/relay'
 import {
   canonicalJsonBytes,
+  SupervisorClientError,
   supervisorDescriptorProofType,
   supervisorGrantProofType,
 } from '@codetether/supervisor-transport'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
+import { HttpBoundary } from '../dist/api/http-boundary.js'
 import { HostService } from '../dist/api/host-service.js'
 import {
   startLocalCodexHost,
@@ -33,6 +35,31 @@ import { ConversationStore } from '../dist/persistence/index.js'
 
 const epoch = '11111111-1111-4111-8111-111111111111'
 const wrongEpoch = '22222222-2222-4222-8222-222222222222'
+
+test('HTTP proxy preserves a safe Supervisor reason for remote management', () => {
+  const boundary = new HttpBoundary({ allowedOrigins: [] })
+  const response = {
+    writeHead(status) {
+      this.status = status
+      return this
+    },
+    end(body) {
+      this.body = JSON.parse(body)
+    },
+  }
+  boundary.writeError(
+    response,
+    new SupervisorClientError(
+      'conflict',
+      undefined,
+      'project_has_conversations',
+    ),
+    {},
+  )
+  assert.equal(response.status, 409)
+  assert.equal(response.body.code, 'project_has_conversations')
+  assert.deepEqual(SafeErrorEnvelopeSchema.parse(response.body), response.body)
+})
 
 test('paired Supervisor over forced Relay uses local action gates and rejects stale renewal after signed removal', async () => {
   const directory = await mkdtemp(

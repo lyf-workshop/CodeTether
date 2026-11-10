@@ -3,15 +3,22 @@ import {
   ApprovalIdSchema,
   AttentionIdSchema,
   ConversationIdSchema,
+  ConversationSearchQuerySchema,
   ListAttentionQuerySchema,
   MachineIdSchema,
+  ManualConversationTitleSchema,
   ProjectIdSchema,
   TurnIdSchema,
   protocolVersion,
   type ConversationFileChangeRecord,
+  type ProjectRecord,
   type SupervisorAttentionListResponse,
 } from '@codetether/protocol'
-import type { SupervisorB1Operation } from '@codetether/supervisor-transport'
+import {
+  supervisorProjectCreateDataSchema,
+  supervisorTransportLimits,
+  type SupervisorB1Operation,
+} from '@codetether/supervisor-transport'
 
 import {
   boundedSupervisorRows,
@@ -19,7 +26,7 @@ import {
   supervisorRowsByteBudget,
   truncateSupervisorText,
 } from '../supervisor-read-budget.js'
-import type { HostService } from './host-service.js'
+import { HostServiceError, type HostService } from './host-service.js'
 
 function boundedChanges(
   rows: readonly ConversationFileChangeRecord[],
@@ -62,6 +69,88 @@ export function executeSupervisorB1Operation(
   request: SupervisorB1Operation,
 ): unknown {
   switch (request.operation) {
+    case 'project.create': {
+      const machineId = MachineIdSchema.parse(request.machineId)
+      const action = {
+        actionId: ActionIdSchema.parse(request.actionId),
+        path: request.path,
+        ...(request.name === undefined ? {} : { name: request.name }),
+      }
+      const localMachineId = service
+        .listMachines()
+        .machines.find((machine) => machine.kind === 'local')?.machineId
+      const requestId =
+        'requestId' in request ? String(request.requestId) : undefined
+      const beforeCreate = (project: ProjectRecord) => {
+        const location = project.locations.find(
+          (candidate) => candidate.machineId === machineId,
+        )
+        if (location === undefined) {
+          throw new Error('Created Project has no target Location')
+        }
+        boundedProjectCreationData(
+          machineId === localMachineId
+            ? { project, created: true }
+            : { project, location, created: true },
+          machineId,
+          requestId,
+        )
+      }
+      const created =
+        machineId === localMachineId
+          ? service.createProject(action, beforeCreate)
+          : service.createRemoteProject(machineId, action, beforeCreate)
+      return created.then((response) =>
+        boundedProjectCreationData(response.data, machineId, requestId),
+      )
+    }
+    case 'project.remove':
+      return service
+        .deleteProject(ProjectIdSchema.parse(request.projectId), {
+          actionId: ActionIdSchema.parse(request.actionId),
+        })
+        .then((response) => response.data)
+    case 'conversation.search':
+      return service.searchProjectConversations(
+        ProjectIdSchema.parse(request.projectId),
+        ConversationSearchQuerySchema.parse({
+          q: request.query,
+          archive: request.archive,
+          provider: request.provider,
+          status: request.status,
+          limit: request.limit,
+          cursor: request.cursor,
+        }),
+        { maximumResultsBytes: supervisorRowsByteBudget },
+      )
+    case 'conversation.pin':
+    case 'conversation.rename':
+    case 'conversation.restore': {
+      const conversationId = ConversationIdSchema.parse(request.conversationId)
+      service.getSupervisorConversation(
+        MachineIdSchema.parse(request.machineId),
+        ProjectIdSchema.parse(request.projectId),
+        conversationId,
+      )
+      const action = { actionId: ActionIdSchema.parse(request.actionId) }
+      if (request.operation === 'conversation.pin') {
+        const mutation = request.pinned
+          ? service.pinConversation(conversationId, action)
+          : service.unpinConversation(conversationId, action)
+        return mutation.then((response) => response.data)
+      }
+      if (request.operation === 'conversation.rename') {
+        return service
+          .renameConversation(conversationId, {
+            ...action,
+            title: ManualConversationTitleSchema.parse(request.title),
+          })
+          .then((response) => response.data)
+      }
+      return service
+        .unarchiveConversation(conversationId, action)
+        .then((response) => response.data)
+    }
     case 'conversation.recent': {
       const recent = service.listRecentSupervisorConversations(
         MachineIdSchema.parse(request.machineId),
@@ -150,4 +239,51 @@ export function executeSupervisorB1Operation(
           )
     }
   }
+}
+
+function boundedProjectCreationData(
+  data:
+    | Awaited<ReturnType<HostService['createProject']>>['data']
+    | Awaited<ReturnType<HostService['createRemoteProject']>>['data'],
+  machineId: string,
+  requestId = `sreq_${'x'.repeat(96)}`,
+): unknown {
+  const frameBytes = (value: unknown) =>
+    supervisorJsonBytes({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId,
+      ok: true,
+      data: value,
+    })
+  if (frameBytes(data) <= supervisorTransportLimits.maximumFrameBytes) {
+    return data
+  }
+  const location = data.project.locations.find(
+    (candidate) => candidate.machineId === machineId,
+  )
+  if (location === undefined) {
+    throw new Error('Created Project has no Location on the target Machine')
+  }
+  const projected = {
+    ...data,
+    project: {
+      ...data.project,
+      locations: [location],
+      _projection: {
+        type: 'target_location_only',
+        reason: 'frame_size_exceeded',
+        completeSizeEstimate: supervisorJsonBytes(data.project),
+        omittedLocationCount: data.project.locations.length - 1,
+      },
+    },
+  }
+  if (frameBytes(projected) > supervisorTransportLimits.maximumFrameBytes) {
+    throw new HostServiceError(
+      'invalid_request',
+      'Project creation response exceeds the Supervisor frame budget',
+      422,
+    )
+  }
+  return supervisorProjectCreateDataSchema.parse(projected)
 }

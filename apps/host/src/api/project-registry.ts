@@ -106,6 +106,7 @@ export class ProjectRegistry {
   async create(
     path: string,
     name?: string,
+    beforeCreate?: (project: ProjectRecord) => void,
   ): Promise<{ readonly project: ProjectRecord; readonly created: boolean }> {
     let rootPath: string
     try {
@@ -142,6 +143,7 @@ export class ProjectRegistry {
       createdAt: timestamp,
       updatedAt: timestamp,
     }
+    beforeCreate?.(projectRecordForFrameEstimate(project))
     this.#writeDurable(() => this.#persistence?.createProject(project))
     this.#retain(project)
     return {
@@ -159,6 +161,7 @@ export class ProjectRegistry {
     machineId: MachineId,
     canonicalPath: string,
     name?: string,
+    beforeCreate?: (project: ProjectRecord) => void,
   ): Promise<{
     readonly project: ProjectRecord
     readonly location: DurableProjectLocation
@@ -216,6 +219,7 @@ export class ProjectRegistry {
       createdAt: timestamp,
       updatedAt: timestamp,
     }
+    beforeCreate?.(projectRecordForFrameEstimate(project))
     try {
       this.#writeDurable(() => this.#persistence?.createProject(project))
     } catch (error) {
@@ -728,6 +732,24 @@ export class ProjectRegistry {
       updatedAt: project.updatedAt,
     })
   }
+}
+
+/** A synchronous size estimate before the new Project is written. */
+function projectRecordForFrameEstimate(project: DurableProject): ProjectRecord {
+  return ProjectRecordSchema.parse({
+    projectId: project.projectId,
+    name: project.name,
+    locations: project.locations.map((location) => ({
+      projectId: location.projectId,
+      machineId: location.machineId,
+      rootPath: location.rootPath,
+      availability: 'unavailable',
+      createdAt: location.createdAt,
+      updatedAt: location.updatedAt,
+    })),
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  })
 }
 
 function locationKey(machineId: MachineId, rootPathKey: string): string {

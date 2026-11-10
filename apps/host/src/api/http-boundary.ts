@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 import {
+  HostErrorCodeSchema,
   protocolVersion,
   SafeErrorEnvelopeSchema,
   type ActionId,
@@ -348,10 +349,12 @@ function toSafeHttpError(error: unknown): HttpBoundaryError {
     )
   }
   if (error instanceof SupervisorClientError) {
+    const parsedReason = HostErrorCodeSchema.safeParse(error.reason)
+    const reason = parsedReason.success ? parsedReason.data : undefined
     switch (error.code) {
       case 'invalid_request':
         return new HttpBoundaryError(
-          'invalid_request',
+          reason ?? 'invalid_request',
           'Remote request is invalid',
           400,
         )
@@ -363,13 +366,13 @@ function toSafeHttpError(error: unknown): HttpBoundaryError {
         )
       case 'not_found':
         return new HttpBoundaryError(
-          'not_found',
+          reason ?? 'not_found',
           'Remote resource was not found',
           404,
         )
       case 'conflict':
         return new HttpBoundaryError(
-          'conflict',
+          reason ?? 'conflict',
           'Remote action is no longer available',
           409,
         )
@@ -387,7 +390,7 @@ function toSafeHttpError(error: unknown): HttpBoundaryError {
         )
       case 'unavailable':
         return new HttpBoundaryError(
-          'runtime_unavailable',
+          reason ?? 'runtime_unavailable',
           'Remote service is unavailable',
           503,
         )

@@ -1,6 +1,7 @@
 export * from './constants.js'
 export * from './client.js'
 export * from './crypto.js'
+export * from './failure.js'
 export * from './protocol.js'
 export * from './relay.js'
 export * from './server.js'

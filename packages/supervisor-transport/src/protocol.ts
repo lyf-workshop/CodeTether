@@ -1,4 +1,11 @@
 import { z } from 'zod'
+import {
+  ConversationSearchQueryTextSchema,
+  HostErrorCodeSchema,
+  ManualConversationTitleSchema,
+  ProjectLocationSchema,
+  ProjectRecordSchema,
+} from '@codetether/protocol'
 
 import {
   supervisorAudience,
@@ -328,6 +335,8 @@ const supervisorRequestBaseSchema = z.object({
   protocolVersion: z.literal(supervisorProtocolVersion),
   requestId: opaqueId('sreq'),
 })
+export const supervisorRequestEnvelopeSchema =
+  supervisorRequestBaseSchema.passthrough()
 
 const supervisorDirectoryLimitSchema = z.number().int().min(1).max(100)
 const supervisorDirectoryCursorSchema = z
@@ -352,6 +361,17 @@ const supervisorActionIdSchema = z
   .string()
   .regex(/^act_[A-Za-z0-9][A-Za-z0-9_-]{5,95}$/u)
 const supervisorProviderSchema = z.enum(['codex', 'claude-code'])
+const supervisorProjectPathSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(4_096)
+  .refine((path) => Buffer.byteLength(path, 'utf8') <= 4_096)
+const supervisorSearchCursorSchema = z
+  .string()
+  .min(20)
+  .max(2_048)
+  .regex(/^csc_[A-Za-z0-9_-]+$/u)
 const supervisorTurnInputSchema = z
   .object({
     type: z.literal('text'),
@@ -370,6 +390,47 @@ const supervisorConversationScope = {
 }
 
 export const supervisorB1OperationSchema = z.discriminatedUnion('operation', [
+  z.strictObject({
+    operation: z.literal('project.create'),
+    machineId: opaqueId('machine'),
+    actionId: supervisorActionIdSchema,
+    path: supervisorProjectPathSchema,
+    name: z.string().trim().min(1).max(240).optional(),
+  }),
+  z.strictObject({
+    operation: z.literal('project.remove'),
+    projectId: opaqueId('proj'),
+    actionId: supervisorActionIdSchema,
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.search'),
+    projectId: opaqueId('proj'),
+    query: ConversationSearchQueryTextSchema,
+    archive: z.enum(['active', 'archived', 'all']).default('active'),
+    provider: supervisorProviderSchema.optional(),
+    status: z
+      .enum(['idle', 'running', 'waiting', 'completed', 'failed'])
+      .optional(),
+    cursor: supervisorSearchCursorSchema.optional(),
+    limit: z.number().int().min(1).max(100).default(25),
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.pin'),
+    ...supervisorConversationScope,
+    actionId: supervisorActionIdSchema,
+    pinned: z.boolean(),
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.rename'),
+    ...supervisorConversationScope,
+    actionId: supervisorActionIdSchema,
+    title: ManualConversationTitleSchema,
+  }),
+  z.strictObject({
+    operation: z.literal('conversation.restore'),
+    ...supervisorConversationScope,
+    actionId: supervisorActionIdSchema,
+  }),
   z.strictObject({
     operation: z.literal('conversation.recent'),
     machineId: opaqueId('machine'),
@@ -414,6 +475,53 @@ export const supervisorB1OperationSchema = z.discriminatedUnion('operation', [
 ])
 export type SupervisorB1Operation = z.output<typeof supervisorB1OperationSchema>
 
+const supervisorProjectCreateProjectionSchema = z.strictObject({
+  type: z.literal('target_location_only'),
+  reason: z.literal('frame_size_exceeded'),
+  completeSizeEstimate: z.number().int().nonnegative().safe(),
+  omittedLocationCount: z.number().int().nonnegative().safe(),
+})
+
+/** A complete Project or an explicitly marked one-location frame projection. */
+export const supervisorProjectCreateDataSchema = z
+  .strictObject({
+    project: ProjectRecordSchema.safeExtend({
+      _projection: supervisorProjectCreateProjectionSchema.optional(),
+    }),
+    location: ProjectLocationSchema.optional(),
+    created: z.boolean(),
+  })
+  .superRefine((data, context) => {
+    if (
+      data.project._projection !== undefined &&
+      data.project.locations.length !== 1
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A projected Project must contain only the target Location',
+        path: ['project', 'locations'],
+      })
+    }
+    if (
+      data.location !== undefined &&
+      (data.location.projectId !== data.project.projectId ||
+        !data.project.locations.some(
+          (location) =>
+            location.machineId === data.location?.machineId &&
+            location.rootPath === data.location?.rootPath,
+        ))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Returned Location must belong to the Project',
+        path: ['location'],
+      })
+    }
+  })
+export type SupervisorProjectCreateData = z.infer<
+  typeof supervisorProjectCreateDataSchema
+>
+
 export const supervisorRequestSchema = z.discriminatedUnion('operation', [
   supervisorRequestBaseSchema
     .extend({ operation: z.literal('host.bootstrap') })
@@ -449,6 +557,7 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       projectId: opaqueId('proj'),
       limit: supervisorDirectoryLimitSchema,
       cursor: supervisorDirectoryCursorSchema.optional(),
+      archived: z.enum(['active', 'archived', 'all']).default('active'),
     })
     .strict(),
   supervisorRequestBaseSchema
@@ -533,18 +642,24 @@ export const supervisorResponseSchema = z
         'internal',
       ])
       .optional(),
+    reason: HostErrorCodeSchema.optional(),
     httpStatus: z.union([z.literal(409), z.literal(422)]).optional(),
   })
   .strict()
   .superRefine((value, context) => {
     if (
       value.ok === (value.code !== undefined) ||
+      (value.ok && value.reason !== undefined) ||
       (value.httpStatus !== undefined && value.code !== 'unsupported')
     ) {
       context.addIssue({ code: 'custom', message: 'Invalid response outcome' })
     }
   })
 export type SupervisorResponse = z.infer<typeof supervisorResponseSchema>
+
+export const supervisorFailureDataSchema = z.object({
+  reason: HostErrorCodeSchema,
+})
 
 export const supervisorServerHandshakeSchema = z.union([
   supervisorChallengeSchema,

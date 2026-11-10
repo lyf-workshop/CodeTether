@@ -7,8 +7,9 @@ import {
   FramedMachineConnection,
   MachineTransportError,
   MachineWireErrorCodeSchema,
+  machineTransportLimits,
 } from '@codetether/machine-transport'
-import { ZodError } from 'zod'
+import { ZodError, z } from 'zod'
 
 import {
   supervisorProtocolVersion,
@@ -21,6 +22,7 @@ import {
   verifySupervisorGrant,
   verifySupervisorHostPresence,
 } from './crypto.js'
+import { supervisorFailureFromError } from './failure.js'
 import {
   signedSupervisorGrantSchema,
   signedSupervisorHostPresenceSchema,
@@ -29,6 +31,7 @@ import {
   supervisorSelectSchema,
   supervisorAuthenticatedSchema,
   supervisorClientAuthenticateSchema,
+  supervisorRequestEnvelopeSchema,
   supervisorRequestSchema,
   type SignedSupervisorGrant,
   type SupervisorGrantPayload,
@@ -72,7 +75,11 @@ export interface SupervisorHostReadSurface {
   listConversations(
     machineId: string,
     projectId: string,
-    page: { readonly limit: number; readonly cursor?: string },
+    page: {
+      readonly limit: number
+      readonly cursor?: string
+      readonly archived: 'active' | 'archived' | 'all'
+    },
   ): unknown | Promise<unknown>
   getConversation(
     machineId: string,
@@ -486,21 +493,47 @@ export class SupervisorServer {
         transport,
       })
       while (!connection.closed) {
-        const request = await connection.receive(supervisorRequestSchema, {
+        const rawRequest = await connection.receive(z.unknown(), {
           timeoutMs: null,
         })
+        const envelope = supervisorRequestEnvelopeSchema.safeParse(rawRequest)
+        if (!envelope.success) {
+          throw new Error('Invalid Supervisor request envelope')
+        }
         if (socket.destroyed || !this.#activations.has(authorizationId)) break
         if (this.#now() >= sessionExpiresAt) {
           await connection.send({
             type: 'supervisor.response',
             protocolVersion: supervisorProtocolVersion,
-            requestId: request.requestId,
+            requestId: envelope.data.requestId,
             ok: false,
             code: 'session_expired',
           })
           break
         }
-        await this.#respond(connection, request, transport, controlAuthorized)
+        const request = supervisorRequestSchema.safeParse(rawRequest)
+        if (!request.success) {
+          this.#options.onDiagnostic?.('supervisor.request.invalid', {
+            transport,
+            reason: 'schema_validation_failed',
+          })
+          await connection.send({
+            type: 'supervisor.response',
+            protocolVersion: supervisorProtocolVersion,
+            requestId: envelope.data.requestId,
+            ok: false,
+            code: 'invalid_request',
+            reason: 'invalid_request',
+            data: { reason: 'invalid_request' },
+          })
+          continue
+        }
+        await this.#respond(
+          connection,
+          request.data,
+          transport,
+          controlAuthorized,
+        )
       }
     } catch (error) {
       const rejectionCode =
@@ -575,6 +608,7 @@ export class SupervisorServer {
             request.projectId,
             {
               limit: request.limit,
+              archived: request.archived,
               ...(request.cursor === undefined
                 ? {}
                 : { cursor: request.cursor }),
@@ -642,49 +676,55 @@ export class SupervisorServer {
         ok: true,
         data,
       }
-      const responseBytes = isControl
-        ? undefined
-        : Buffer.byteLength(JSON.stringify(response), 'utf8')
-      if (
-        responseBytes !== undefined &&
-        responseBytes > supervisorTransportLimits.maximumFrameBytes
-      ) {
-        this.#options.onDiagnostic?.('supervisor.read.frame_too_large', {
-          operation: request.operation,
-          transport,
-          responseBytes,
-        })
-        throw new RangeError('Supervisor read exceeds the frame bound')
+      const responseBytes = Buffer.byteLength(JSON.stringify(response), 'utf8')
+      if (responseBytes > machineTransportLimits.maximumFrameBytes) {
+        this.#options.onDiagnostic?.(
+          isControl
+            ? 'supervisor.write.frame_too_large'
+            : 'supervisor.read.frame_too_large',
+          {
+            operation: request.operation,
+            transport,
+            responseBytes,
+            ...(isControl ? { control: true } : {}),
+          },
+        )
+        throw new RangeError('Supervisor response exceeds the frame bound')
       }
       await connection.send(response)
       this.#options.onDiagnostic?.('supervisor.read', {
         operation: request.operation,
         transport,
         latencyMs: Date.now() - startedAt,
-        ...(responseBytes === undefined ? {} : { responseBytes }),
+        responseBytes,
         ...supervisorReadRequestFields(request),
         ...supervisorReadResultFields(data),
       })
     } catch (error) {
-      const code = supervisorReadErrorCode(error)
+      const failure = supervisorFailureFromError(error)
       this.#options.onDiagnostic?.('supervisor.read.failed', {
         operation: request.operation,
         transport,
         latencyMs: Date.now() - startedAt,
-        code,
+        code: failure.code,
+        ...(failure.reason === undefined ? {} : { reason: failure.reason }),
         ...supervisorReadErrorFields(error),
       })
-      const status = (error as { readonly httpStatus?: unknown } | undefined)
-        ?.httpStatus
       await connection.send({
         type: 'supervisor.response',
         protocolVersion: supervisorProtocolVersion,
         requestId: request.requestId,
         ok: false,
-        code,
-        ...(code === 'unsupported' && (status === 409 || status === 422)
-          ? { httpStatus: status }
-          : {}),
+        code: failure.code,
+        ...(failure.reason === undefined
+          ? {}
+          : {
+              reason: failure.reason,
+              data: { reason: failure.reason },
+            }),
+        ...(failure.httpStatus === undefined
+          ? {}
+          : { httpStatus: failure.httpStatus }),
       })
     }
   }
@@ -703,7 +743,11 @@ function supervisorReadRequestFields(
     case 'machine.get':
     case 'project.list':
     case 'conversation.recent':
+    case 'project.create':
       return { machineId: request.machineId }
+    case 'project.remove':
+    case 'conversation.search':
+      return { projectId: request.projectId }
     case 'project.get':
     case 'conversation.list':
       return {
@@ -715,6 +759,9 @@ function supervisorReadRequestFields(
     case 'conversation.live.read':
     case 'conversation.changes':
     case 'conversation.archive':
+    case 'conversation.pin':
+    case 'conversation.rename':
+    case 'conversation.restore':
     case 'turn.interrupt':
       return {
         machineId: request.machineId,
@@ -739,6 +786,11 @@ function supervisorReadRequestFields(
 
 function isSupervisorControlOperation(request: SupervisorRequest): boolean {
   return (
+    request.operation === 'project.create' ||
+    request.operation === 'project.remove' ||
+    request.operation === 'conversation.pin' ||
+    request.operation === 'conversation.rename' ||
+    request.operation === 'conversation.restore' ||
     request.operation === 'conversation.turn.start' ||
     request.operation === 'conversation.create' ||
     request.operation === 'conversation.archive' ||
@@ -857,34 +909,6 @@ function supervisorReadErrorFields(
     errorClass:
       error.name === 'HostServiceError' ? 'HostServiceError' : 'Error',
   }
-}
-
-function supervisorReadErrorCode(
-  error: unknown,
-):
-  | 'invalid_request'
-  | 'operation_not_allowed'
-  | 'not_found'
-  | 'conflict'
-  | 'unsupported'
-  | 'unavailable'
-  | 'internal' {
-  if (!(error instanceof Error)) return 'internal'
-  const publicCode = (error as Error & { readonly code?: unknown }).code
-  const code = typeof publicCode === 'string' ? publicCode : error.message
-  if (
-    code === 'invalid_request' ||
-    code === 'operation_not_allowed' ||
-    code === 'not_found' ||
-    code === 'conflict' ||
-    code === 'unsupported' ||
-    code === 'unavailable'
-  ) {
-    return code
-  }
-  if (code === 'runtime_unavailable' || code === 'provider_unavailable')
-    return 'unavailable'
-  return 'internal'
 }
 
 class SupervisorRejection extends Error {

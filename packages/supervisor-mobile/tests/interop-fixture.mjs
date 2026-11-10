@@ -193,6 +193,14 @@ const control = {
 function operations(request) {
   const action = recordAction(request)
   if (
+    request.operation === 'project.remove' &&
+    request.actionId.startsWith('act_fixture_reason_')
+  ) {
+    throw Object.assign(new Error('conflict'), {
+      failure: { reason: 'project_has_conversations' },
+    })
+  }
+  if (
     request.operation === 'conversation.archive' &&
     /^act_fixture_busy_archive_(direct|relay)$/u.test(request.actionId)
   ) {

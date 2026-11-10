@@ -1982,7 +1982,11 @@ export class HostService {
   listSupervisorConversations(
     machineId: MachineId,
     projectId: ProjectId,
-    page: { readonly limit: number; readonly cursor?: string },
+    page: {
+      readonly limit: number
+      readonly cursor?: string
+      readonly archived?: 'active' | 'archived' | 'all'
+    },
   ): SupervisorConversationDirectoryPage & { readonly protocolVersion: 1 } {
     const persistence = this.#requireSupervisorDirectoryPersistence()
     const machine = MachineIdSchema.parse(machineId)
@@ -2448,6 +2452,7 @@ export class HostService {
   async createRemoteProject(
     machineId: MachineId,
     request: CreateRemoteProjectRequest,
+    beforeCreate?: (project: ProjectRecord) => void,
   ): Promise<CreateRemoteProjectResponse> {
     const id = MachineIdSchema.parse(machineId)
     return await this.#executeAction(
@@ -2491,6 +2496,7 @@ export class HostService {
             id,
             validated.canonicalPath,
             request.name,
+            beforeCreate,
           )
           const location = result.project.locations.find(
             (candidate) => candidate.machineId === id,
@@ -2579,6 +2585,7 @@ export class HostService {
   async searchProjectConversations(
     projectId: ProjectId,
     query: ConversationSearchQuery,
+    budget: { readonly maximumResultsBytes?: number } = {},
   ): Promise<ConversationSearchResponse> {
     if (this.#persistence === undefined) {
       throw new HostServiceError(
@@ -2607,6 +2614,9 @@ export class HostService {
           ...(options.status === undefined ? {} : { status: options.status }),
           limit: options.limit,
           ...(options.cursor === undefined ? {} : { cursor: options.cursor }),
+          ...(budget.maximumResultsBytes === undefined
+            ? {}
+            : { maximumResultsBytes: budget.maximumResultsBytes }),
         }),
       })
     } catch (error) {
@@ -3320,6 +3330,7 @@ export class HostService {
 
   async createProject(
     request: CreateProjectRequest,
+    beforeCreate?: (project: ProjectRecord) => void,
   ): Promise<CreateProjectResponse> {
     return await this.#executeAction(
       request.actionId,
@@ -3327,7 +3338,11 @@ export class HostService {
       request,
       async () => {
         try {
-          const data = await this.#projects.create(request.path, request.name)
+          const data = await this.#projects.create(
+            request.path,
+            request.name,
+            beforeCreate,
+          )
           return {
             protocolVersion,
             actionId: request.actionId,

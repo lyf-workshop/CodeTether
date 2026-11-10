@@ -15,12 +15,12 @@ internal class DeviceSignerBoundary(
         signature
     } catch (failure: MobileException.Failure) {
         val code = if (failure.code == "authorization_revoked") "authorization_revoked" else "device_identity_unavailable"
-        throw MobileException.Failure(code, null)
+        throw MobileException.Failure(code, null, null)
     } catch (_: Throwable) {
-        throw MobileException.Failure("device_identity_unavailable", null)
+        throw MobileException.Failure("device_identity_unavailable", null, null)
     }
 
     private fun requireAuthorization() {
-        if (!isAuthorized()) throw MobileException.Failure("authorization_revoked", null)
+        if (!isAuthorized()) throw MobileException.Failure("authorization_revoked", null, null)
     }
 }

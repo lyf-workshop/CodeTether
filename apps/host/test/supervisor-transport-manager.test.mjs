@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import test from 'node:test'
 
 import { MachineProviderLifecycleSchema } from '@codetether/protocol'
@@ -25,6 +25,11 @@ import {
 } from '../dist/api/supervisor-transport-manager.js'
 import { isLoopbackSupervisorHost } from '@codetether/supervisor-transport'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
+import { executeSupervisorB1Operation } from '../dist/api/supervisor-operations.js'
+import { HostService } from '../dist/api/host-service.js'
+import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
+import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
+import { ConversationStore } from '../dist/persistence/index.js'
 
 const hostId = `host_${'h'.repeat(32)}`
 const deviceId = `dev_${'d'.repeat(32)}`
@@ -240,6 +245,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
     project: 0,
     conversations: 0,
     conversation: 0,
+    search: 0,
     history: 0,
     live: 0,
   }
@@ -281,7 +287,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
     },
     listSupervisorConversations: (_machineId, _projectId, page) => {
       reads.conversations += 1
-      assert.deepEqual(page, { limit: 25 })
+      assert.deepEqual(page, { limit: 25, archived: 'active' })
       return {
         protocolVersion: 1,
         conversations: [{ conversationId: `conv_${'c'.repeat(32)}` }],
@@ -294,6 +300,10 @@ test('forced-remote manager reads Host state without using local HTTP product da
         protocolVersion: 1,
         conversation: { conversationId: `conv_${'c'.repeat(32)}` },
       }
+    },
+    searchProjectConversations: async () => {
+      reads.search += 1
+      return { protocolVersion: 1, results: [], hasMore: false }
     },
     readSupervisorConversationHistory: (
       _machineId,
@@ -489,6 +499,54 @@ test('forced-remote manager reads Host state without using local HTTP product da
       ).conversation.conversationId,
       conversationId,
     )
+    assert.deepEqual(
+      await manager.executeRemoteB1Operation(authenticated.sessionId, {
+        operation: 'conversation.search',
+        projectId,
+        query: '搜索词',
+        archive: 'active',
+        limit: 25,
+      }),
+      { protocolVersion: 1, results: [], hasMore: false },
+    )
+    const deniedActionId = 'act_supervisor_read_only_0001'
+    for (const request of [
+      {
+        operation: 'project.create',
+        machineId,
+        actionId: deniedActionId,
+        path: 'C:\\fixture',
+      },
+      { operation: 'project.remove', projectId, actionId: deniedActionId },
+      {
+        operation: 'conversation.pin',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: deniedActionId,
+        pinned: true,
+      },
+      {
+        operation: 'conversation.rename',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: deniedActionId,
+        title: '标题',
+      },
+      {
+        operation: 'conversation.restore',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: deniedActionId,
+      },
+    ]) {
+      await assert.rejects(
+        manager.executeRemoteB1Operation(authenticated.sessionId, request),
+        { code: 'operation_not_allowed' },
+      )
+    }
     assert.equal(
       (
         await manager.readRemoteConversationHistory(
@@ -524,6 +582,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
       project: 1,
       conversations: 1,
       conversation: 1,
+      search: 1,
       history: 1,
       live: 1,
     })
@@ -587,6 +646,444 @@ test('control admission rejects a pairing lineage different from local evidence'
     await fixture.close()
   }
 })
+
+test('Direct control session routes B4a mutations and preserves a specific Host failure reason', async () => {
+  const machineId = `machine_${'m'.repeat(32)}`
+  const projectId = `proj_${'p'.repeat(32)}`
+  const conversationId = `conv_${'c'.repeat(32)}`
+  const calls = []
+  const fixture = await controlActivationFixture({
+    listMachines: () => ({ machines: [{ machineId, kind: 'local' }] }),
+    createProject: async (request) => {
+      calls.push(['createProject', request.actionId])
+      return { data: { project: { projectId }, created: true } }
+    },
+    deleteProject: async (_projectId, request) => {
+      calls.push(['deleteProject', request.actionId])
+      if (request.actionId === 'act_supervisor_conflict_0001') {
+        throw Object.assign(new Error('Project has Conversations'), {
+          code: 'project_has_conversations',
+        })
+      }
+      return { data: { projectId } }
+    },
+    getSupervisorConversation: () => ({ conversation: { conversationId } }),
+    pinConversation: async () => ({
+      data: {
+        conversation: { conversationId, pinnedAt: '2026-11-09T12:00:00.000Z' },
+      },
+    }),
+    unpinConversation: async () => ({
+      data: { conversation: { conversationId } },
+    }),
+    renameConversation: async (_id, request) => ({
+      data: { conversation: { conversationId, title: request.title } },
+    }),
+    unarchiveConversation: async () => ({
+      data: { conversation: { conversationId } },
+    }),
+    searchProjectConversations: async () => ({
+      protocolVersion: 1,
+      results: [],
+      hasMore: false,
+    }),
+  })
+  const activation = fixture.activation(authorizationId)
+  fixture.addEvidence(activation, authorizationId)
+  try {
+    await fixture.manager.activate(activation)
+    const session = await fixture.connect(activation)
+    const send = (request) =>
+      fixture.manager.executeRemoteB1Operation(session.sessionId, request)
+    const actionId = 'act_supervisor_control_0001'
+    const scope = { machineId, projectId, conversationId, actionId }
+    assert.deepEqual(
+      await send({
+        operation: 'project.create',
+        machineId,
+        actionId,
+        path: 'C:\\fixture',
+      }),
+      { project: { projectId }, created: true },
+    )
+    assert.deepEqual(
+      await send({ operation: 'project.remove', projectId, actionId }),
+      { projectId },
+    )
+    assert.equal(
+      (await send({ operation: 'conversation.pin', ...scope, pinned: true }))
+        .conversation.pinnedAt,
+      '2026-11-09T12:00:00.000Z',
+    )
+    assert.deepEqual(
+      await send({ operation: 'conversation.pin', ...scope, pinned: false }),
+      { conversation: { conversationId } },
+    )
+    assert.deepEqual(
+      await send({
+        operation: 'conversation.rename',
+        ...scope,
+        title: '远程标题',
+      }),
+      { conversation: { conversationId, title: '远程标题' } },
+    )
+    assert.deepEqual(
+      await send({ operation: 'conversation.restore', ...scope }),
+      { conversation: { conversationId } },
+    )
+    assert.deepEqual(
+      await send({
+        operation: 'conversation.search',
+        projectId,
+        query: '远程',
+        archive: 'active',
+        limit: 25,
+      }),
+      { protocolVersion: 1, results: [], hasMore: false },
+    )
+    await assert.rejects(
+      send({
+        operation: 'project.remove',
+        projectId,
+        actionId: 'act_supervisor_conflict_0001',
+      }),
+      (error) =>
+        error.code === 'conflict' &&
+        error.reason === 'project_has_conversations',
+    )
+    assert.deepEqual(calls, [
+      ['createProject', actionId],
+      ['deleteProject', actionId],
+      ['deleteProject', 'act_supervisor_conflict_0001'],
+    ])
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('Relay control session routes every B4a operation through an isolated Relay', async () => {
+  const machineId = `machine_${'m'.repeat(32)}`
+  const projectId = `proj_${'p'.repeat(32)}`
+  const conversationId = `conv_${'c'.repeat(32)}`
+  const calls = []
+  const fixture = await controlActivationFixture(
+    {
+      listMachines: () => ({ machines: [{ machineId, kind: 'local' }] }),
+      createProject: async () => {
+        calls.push('project.create')
+        return { data: { project: { projectId }, created: true } }
+      },
+      deleteProject: async () => {
+        calls.push('project.remove')
+        return { data: { projectId } }
+      },
+      getSupervisorConversation: () => ({ conversation: { conversationId } }),
+      pinConversation: async () => {
+        calls.push('conversation.pin')
+        return { data: { conversation: { conversationId } } }
+      },
+      renameConversation: async () => {
+        calls.push('conversation.rename')
+        return { data: { conversation: { conversationId } } }
+      },
+      unarchiveConversation: async () => {
+        calls.push('conversation.restore')
+        return { data: { conversation: { conversationId } } }
+      },
+      searchProjectConversations: async () => {
+        calls.push('conversation.search')
+        return { protocolVersion: 1, results: [], hasMore: false }
+      },
+    },
+    { withRelay: true },
+  )
+  const activation = fixture.activation(authorizationId)
+  fixture.addEvidence(activation, authorizationId)
+  try {
+    await fixture.manager.activate(activation)
+    const session = await fixture.connect(activation, { forceRelay: true })
+    const send = (request) =>
+      fixture.manager.executeRemoteB1Operation(session.sessionId, request)
+    const actionId = 'act_supervisor_relay_control_0001'
+    const scope = { machineId, projectId, conversationId, actionId }
+    for (const request of [
+      { operation: 'project.create', machineId, actionId, path: 'C:\\fixture' },
+      { operation: 'project.remove', projectId, actionId },
+      { operation: 'conversation.pin', ...scope, pinned: true },
+      { operation: 'conversation.rename', ...scope, title: 'Relay 标题' },
+      { operation: 'conversation.restore', ...scope },
+      {
+        operation: 'conversation.search',
+        projectId,
+        query: 'Relay',
+        archive: 'active',
+        limit: 25,
+      },
+    ]) {
+      const result = await send(request)
+      assert.ok(result)
+    }
+    assert.deepEqual(calls, [
+      'project.create',
+      'project.remove',
+      'conversation.pin',
+      'conversation.rename',
+      'conversation.restore',
+      'conversation.search',
+    ])
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('isolated HostService and SQLite preserve B4a writes across Direct, Relay, and restart', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-b4a-host-'))
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  const activePath = join(workspace, 'active-project')
+  const emptyPath = join(workspace, 'empty-project')
+  const latePath = join(workspace, 'late-project')
+  await mkdir(activePath, { recursive: true })
+  await mkdir(emptyPath, { recursive: true })
+  let first
+  let second
+  let fixture
+  try {
+    first = await createDurableB4aHost(
+      databasePath,
+      workspace,
+      '11111111-1111-4111-8111-111111111111',
+    )
+    fixture = await controlActivationFixture(
+      {},
+      {
+        withRelay: true,
+        serviceFactory: (identity) =>
+          new Proxy(first.service, {
+            get(target, property) {
+              if (property === 'getHostIdentity') return () => identity
+              const value = Reflect.get(target, property, target)
+              return typeof value === 'function' ? value.bind(target) : value
+            },
+          }),
+      },
+    )
+    const activation = fixture.activation(authorizationId)
+    fixture.addEvidence(activation, authorizationId)
+    await fixture.manager.activate(activation)
+    const direct = await fixture.connect(activation)
+    const relay = await fixture.connect(activation, { forceRelay: true })
+    const send = (session, request) =>
+      fixture.manager.executeRemoteB1Operation(session.sessionId, request)
+    const machineId = first.service.listMachines().machines[0].machineId
+    const createActive = {
+      operation: 'project.create',
+      machineId,
+      actionId: 'act_b4a_active_create_0001',
+      path: activePath,
+    }
+    const active = await send(direct, createActive)
+    assert.equal(active.created, true)
+    assert.equal(
+      (await send(direct, createActive)).project.projectId,
+      active.project.projectId,
+    )
+    const projectId = active.project.projectId
+    const empty = await send(relay, {
+      operation: 'project.create',
+      machineId,
+      actionId: 'act_b4a_empty_create_0001',
+      path: emptyPath,
+    })
+    assert.equal(empty.created, true)
+    const emptyProjectId = empty.project.projectId
+
+    const conversationId = 'conv_b4a_isolated_0001'
+    const at = '2026-11-09T12:00:00.000Z'
+    const location = active.project.locations.find(
+      (candidate) => candidate.machineId === machineId,
+    )
+    assert.ok(location)
+    first.store.createConversation({
+      conversationId,
+      projectId,
+      machineId,
+      title: '初始标题',
+      titleSource: 'manual',
+      provider: 'codex',
+      cwd: location.rootPath,
+      status: 'completed',
+      createdAt: at,
+      updatedAt: at,
+      lastActivityAt: at,
+    })
+    const scope = { machineId, projectId, conversationId }
+    const pin = {
+      operation: 'conversation.pin',
+      ...scope,
+      actionId: 'act_b4a_pin_0001',
+      pinned: true,
+    }
+    const pinned = await send(direct, pin)
+    assert.ok(pinned.conversation.pinnedAt)
+    assert.equal(
+      (await send(direct, pin)).conversation.pinnedAt,
+      pinned.conversation.pinnedAt,
+    )
+    const rename = {
+      operation: 'conversation.rename',
+      ...scope,
+      actionId: 'act_b4a_rename_0001',
+      title: '远程整理标题',
+    }
+    assert.equal((await send(relay, rename)).conversation.title, rename.title)
+    assert.equal((await send(relay, rename)).conversation.title, rename.title)
+    await first.service.archiveConversation(conversationId, {
+      actionId: 'act_b4a_archive_0001',
+    })
+    const restore = {
+      operation: 'conversation.restore',
+      ...scope,
+      actionId: 'act_b4a_restore_0001',
+    }
+    assert.equal(
+      (await send(relay, restore)).conversation.archivedAt,
+      undefined,
+    )
+    assert.equal(
+      (await send(relay, restore)).conversation.archivedAt,
+      undefined,
+    )
+    const search = await send(relay, {
+      operation: 'conversation.search',
+      projectId,
+      query: '整理标题',
+      archive: 'active',
+      limit: 25,
+    })
+    assert.deepEqual(
+      search.results.map((result) => result.conversation.conversationId),
+      [conversationId],
+    )
+
+    const failedRemove = {
+      operation: 'project.remove',
+      projectId,
+      actionId: 'act_b4a_remove_conflict_0001',
+    }
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        send(relay, failedRemove),
+        (error) =>
+          error.code === 'conflict' &&
+          error.reason === 'project_has_conversations',
+      )
+    }
+    const removeEmpty = {
+      operation: 'project.remove',
+      projectId: emptyProjectId,
+      actionId: 'act_b4a_remove_empty_0001',
+    }
+    assert.equal((await send(direct, removeEmpty)).projectId, emptyProjectId)
+    assert.equal((await send(direct, removeEmpty)).projectId, emptyProjectId)
+
+    const lateCreate = {
+      operation: 'project.create',
+      machineId,
+      actionId: 'act_b4a_late_create_0001',
+      path: latePath,
+    }
+    const firstFailure = await send(direct, lateCreate).then(
+      () => undefined,
+      (error) => error,
+    )
+    assert.ok(firstFailure)
+    await mkdir(latePath)
+    await assert.rejects(send(direct, lateCreate), {
+      code: firstFailure.code,
+    })
+    assert.equal(
+      (
+        await send(relay, {
+          ...lateCreate,
+          actionId: 'act_b4a_late_create_0002',
+        })
+      ).created,
+      true,
+    )
+
+    // Let the Host finish its send callback before closing the Relay tunnel.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    await fixture.close()
+    fixture = undefined
+    await first.service.close()
+    first.store.close()
+    first = undefined
+    second = await createDurableB4aHost(
+      databasePath,
+      workspace,
+      '22222222-2222-4222-8222-222222222222',
+    )
+    assert.equal(
+      (await executeSupervisorB1Operation(second.service, createActive))
+        .created,
+      false,
+    )
+    assert.ok(
+      (await executeSupervisorB1Operation(second.service, pin)).conversation
+        .pinnedAt,
+    )
+    assert.equal(
+      (await executeSupervisorB1Operation(second.service, rename)).conversation
+        .title,
+      rename.title,
+    )
+    assert.equal(
+      (await executeSupervisorB1Operation(second.service, restore)).conversation
+        .archivedAt,
+      undefined,
+    )
+    await assert.rejects(
+      executeSupervisorB1Operation(second.service, removeEmpty),
+      { code: 'not_found' },
+    )
+  } finally {
+    if (fixture !== undefined) await fixture.close()
+    if (first !== undefined) {
+      await first.service.close().catch(() => undefined)
+      first.store.close()
+    }
+    if (second !== undefined) {
+      await second.service.close().catch(() => undefined)
+      second.store.close()
+    }
+    const resolved = await realpath(directory)
+    assert.equal(dirname(resolved), await realpath(tmpdir()))
+    assert.match(basename(resolved), /^codetether-b4a-host-/u)
+    await rm(resolved, { recursive: true, force: true })
+  }
+})
+
+async function createDurableB4aHost(databasePath, workspace, epoch) {
+  const store = ConversationStore.open({ databasePath })
+  const runtime = {
+    provider: 'codex',
+    subscribeEvents: () => () => undefined,
+    subscribeFailures: () => () => undefined,
+    subscribeApprovals: () => () => undefined,
+    close: async () => undefined,
+  }
+  const service = new HostService({
+    runtime,
+    workspacePolicy: await WorkspacePolicy.create([workspace]),
+    publisher: new HostEventPublisher({ epoch }),
+    persistence: store,
+    hostVersion: '0.0.0-b4a-test',
+    now: () => new Date('2026-11-09T12:00:00.000Z'),
+  })
+  return { service, store }
+}
 
 test('an activated renewal permanently blocks predecessor activation and admission', async () => {
   const fixture = await controlActivationFixture()
@@ -652,7 +1149,10 @@ test('revoking an old control pairing disconnects its lineage and preserves a ne
   }
 })
 
-async function controlActivationFixture() {
+async function controlActivationFixture(
+  serviceOverrides = {},
+  { withRelay = false, serviceFactory } = {},
+) {
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
   })
@@ -672,8 +1172,32 @@ async function controlActivationFixture() {
   const enabled = []
   const revocations = []
   let admissionRoot
+  let relay
+  let relayRoot
+  if (withRelay) {
+    relayRoot = await mkdtemp(
+      join(tmpdir(), 'codetether-host-b4a-control-relay-'),
+    )
+    const relayStore = new RelayStateStore(join(relayRoot, 'relay-state'))
+    const relayTls = await generateRelayPinnedTlsIdentity(relayStore.identity)
+    relay = new RelayService({
+      stateStore: relayStore,
+      tls: relayTls,
+      host: '127.0.0.1',
+      port: 0,
+      managementHost: '127.0.0.1',
+      managementPort: 0,
+      heartbeatIntervalMs: 500,
+      heartbeatTimeoutMs: 2_000,
+      logger: { log() {} },
+    })
+    await relay.start()
+  }
   const manager = await SupervisorTransportManager.create({
-    service: { getHostIdentity: () => identity },
+    service: serviceFactory?.(identity) ?? {
+      getHostIdentity: () => identity,
+      ...serviceOverrides,
+    },
     persistence: {
       getHostPresenceConfiguration: () => undefined,
       getHostSupervisorAuthorizationEvidence: (id) => evidence.get(id),
@@ -705,7 +1229,17 @@ async function controlActivationFixture() {
     port: 0,
     clientBuildIdentity: 'test-host',
     controlPlaneOrigin,
+    ...(relay === undefined
+      ? {}
+      : {
+          relay: {
+            endpoint: `tls+pinned://127.0.0.1:${String(relay.listeningAddress.port)}/`,
+            relayId: relay.relayId,
+            relayFingerprint: relay.relayFingerprint,
+          },
+        }),
   })
+  if (withRelay) await waitFor(() => manager.presence().relay !== null)
   const originalFetch = globalThis.fetch
   globalThis.fetch = async (_url, init) => {
     const challenge = JSON.parse(Buffer.from(init.body).toString('utf8'))
@@ -770,7 +1304,7 @@ async function controlActivationFixture() {
         transportTlsFingerprint: presence.transportTlsFingerprint,
         controlPlaneOrigin,
         directEndpoints: presence.directEndpoints,
-        relay: null,
+        relay: presence.relay,
         iat: now,
         exp: now + 300,
         protocolVersion: 2,
@@ -848,7 +1382,7 @@ async function controlActivationFixture() {
         ),
       }
     },
-    async connect(activation) {
+    async connect(activation, { forceRelay = false } = {}) {
       const pending = await manager.beginRemote({
         ...activation,
         hostId,
@@ -856,7 +1390,9 @@ async function controlActivationFixture() {
         hostIdentityGeneration: 1,
         deviceId,
         deviceKeyGeneration: 1,
+        forceRelay,
       })
+      if (forceRelay) assert.equal(pending.transport, 'relay')
       return await manager.authenticateRemote(pending.connectionId, {
         accessToken: 'test-token',
         deviceProof: 'test-proof',
@@ -865,6 +1401,9 @@ async function controlActivationFixture() {
     async close() {
       globalThis.fetch = originalFetch
       await manager.close()
+      if (relay !== undefined) await relay.close()
+      if (relayRoot !== undefined)
+        await rm(relayRoot, { recursive: true, force: true })
     },
   }
 }
@@ -908,7 +1447,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     fingerprint: hostFingerprint,
     identityGeneration: 1,
   }
-  const reads = { machines: 0, detail: 0, history: 0, live: 0 }
+  const reads = { machines: 0, detail: 0, search: 0, history: 0, live: 0 }
   const machineRows = Array.from({ length: 48 }, (_, index) => ({
     machineId: `machine_${'m'.repeat(32)}${index || ''}`,
     displayName: '设备'.repeat(120),
@@ -960,6 +1499,10 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       protocolVersion: 1,
       conversation: { conversationId: `conv_${'c'.repeat(32)}` },
     }),
+    searchProjectConversations: async () => {
+      reads.search += 1
+      return { protocolVersion: 1, results: [], hasMore: false }
+    },
     readSupervisorConversationHistory: () => {
       reads.history += 1
       return {
@@ -1162,6 +1705,54 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
       (await conversationDetailResponse.json()).conversation.conversationId,
       conversationId,
     )
+    assert.deepEqual(
+      await manager.executeRemoteB1Operation(authenticated.sessionId, {
+        operation: 'conversation.search',
+        projectId,
+        query: '搜索词',
+        archive: 'active',
+        limit: 25,
+      }),
+      { protocolVersion: 1, results: [], hasMore: false },
+    )
+    const relayDeniedActionId = 'act_supervisor_relay_read_0001'
+    for (const request of [
+      {
+        operation: 'project.create',
+        machineId,
+        actionId: relayDeniedActionId,
+        path: 'C:\\fixture',
+      },
+      { operation: 'project.remove', projectId, actionId: relayDeniedActionId },
+      {
+        operation: 'conversation.pin',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: relayDeniedActionId,
+        pinned: true,
+      },
+      {
+        operation: 'conversation.rename',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: relayDeniedActionId,
+        title: '标题',
+      },
+      {
+        operation: 'conversation.restore',
+        machineId,
+        projectId,
+        conversationId,
+        actionId: relayDeniedActionId,
+      },
+    ]) {
+      await assert.rejects(
+        manager.executeRemoteB1Operation(authenticated.sessionId, request),
+        { code: 'operation_not_allowed' },
+      )
+    }
     const historyResponse = await originalFetch(
       `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations/${conversationId}/history?limit=20`,
     )
@@ -1176,6 +1767,7 @@ test('forced Relay HTTP admission stays single-session while Direct fallback rem
     assert.equal(liveBody.marker, 'relay-live')
     assert.equal(reads.machines, 1)
     assert.equal(reads.detail, 1)
+    assert.equal(reads.search, 1)
     assert.equal(reads.history, 1)
     assert.equal(reads.live, 1)
     manager.closeRemote(authenticated.sessionId)

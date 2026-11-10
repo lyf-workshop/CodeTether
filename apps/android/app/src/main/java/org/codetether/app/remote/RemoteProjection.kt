@@ -78,6 +78,53 @@ internal fun JSONObject.project(machineId: String, available: Boolean): RemotePr
     return RemoteProject(text("projectId"), machineId, text("name"), available, count("conversationCount") ?: invalidResponse())
 }
 
+internal fun JSONObject.createdProject(machineId: String): RemoteProjectCreateResult {
+    val project = obj("project")
+    val projectId = project.text("projectId")
+    val locations = project.rows("locations", 64).map { row ->
+        if (row.text("projectId") != projectId) invalidResponse()
+        RemoteProjectLocation(projectId, row.text("machineId"), row.text("rootPath"), row.text("availability"))
+    }
+    if (locations.none { it.machineId == machineId }) invalidResponse()
+    optJSONObject("location")?.let { location ->
+        if (location.text("machineId") != machineId ||
+            locations.none { it.machineId == machineId && it.rootPath == location.text("rootPath") }) invalidResponse()
+    }
+    val projection = project.optJSONObject("_projection")?.let { marker ->
+        if (marker.text("type") != "target_location_only" || marker.text("reason") != "frame_size_exceeded") invalidResponse()
+        if (locations.size != 1 || locations[0].machineId != machineId) invalidResponse()
+        RemoteProjectProjection(
+            marker.count("omittedLocationCount") ?: invalidResponse(),
+            marker.count("completeSizeEstimate") ?: invalidResponse(),
+        )
+    }
+    return RemoteProjectCreateResult(projectId, project.text("name"), flag("created"), locations, projection)
+}
+
+internal fun JSONObject.conversationMetadata(): RemoteConversationMetadata {
+    val pinnedAt = optionalText("pinnedAt")
+    val archivedAt = optionalText("archivedAt")
+    if (pinnedAt != null && archivedAt != null) invalidResponse()
+    return RemoteConversationMetadata(scope(), text("title"), text("provider"), text("status"), pinnedAt, archivedAt, text("lastActivityAt"))
+}
+
+internal fun JSONObject.searchPage(projectId: String): RemoteSearchPage {
+    val results = rows("results", 100).map { row ->
+        val conversation = row.obj("conversation").conversationMetadata()
+        if (conversation.target.projectId != projectId) invalidResponse()
+        val field = row.text("matchedField")
+        if (field !in setOf("title", "user_input")) invalidResponse()
+        val preview = row.optionalText("matchPreview")
+        val turnId = row.optionalText("matchedTurnId")
+        if ((field == "title" && (preview != null || turnId != null)) ||
+            (field == "user_input" && (preview == null || turnId == null))) invalidResponse()
+        RemoteSearchMatch(conversation, field, preview, turnId)
+    }
+    val next = optionalText("nextCursor")
+    if (flag("hasMore") != (next != null) || (next != null && results.isEmpty())) invalidResponse()
+    return RemoteSearchPage(results, next)
+}
+
 internal fun JSONObject.conversation(): RemoteConversation = RemoteConversation(
     target = scope(),
     title = text("title"),

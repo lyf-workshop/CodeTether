@@ -5,6 +5,7 @@ import { MachineTransportError } from '@codetether/machine-transport'
 import { CompactSign, exportJWK, generateKeyPair } from 'jose'
 
 import {
+  ConnectedSupervisorSession,
   SupervisorClientError,
   SupervisorServer,
   canonicalJsonBytes,
@@ -13,7 +14,11 @@ import {
   supervisorClientAuthenticateSchema,
   supervisorGrantDigest,
   supervisorGrantProofType,
+  supervisorB1OperationSchema,
+  supervisorFailureFromError,
+  supervisorProjectCreateDataSchema,
   supervisorRequestSchema,
+  supervisorResponseSchema,
 } from '../dist/index.js'
 
 const ids = {
@@ -219,6 +224,507 @@ test('Supervisor read failures log only safe operation and error metadata', asyn
         errorClass: 'Error',
       },
     ])
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('B4a operation schemas default to active conversations and bound new input', () => {
+  const scope = {
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  const actionId = `act_${'a'.repeat(32)}`
+  const request = (operation) => ({
+    type: 'supervisor.request',
+    protocolVersion: 1,
+    requestId: `sreq_${'r'.repeat(32)}`,
+    ...operation,
+  })
+  assert.equal(
+    supervisorRequestSchema.parse(
+      request({
+        operation: 'conversation.list',
+        machineId: scope.machineId,
+        projectId: scope.projectId,
+        limit: 25,
+      }),
+    ).archived,
+    'active',
+  )
+  assert.equal(
+    supervisorB1OperationSchema.parse({
+      operation: 'conversation.search',
+      projectId: scope.projectId,
+      query: '  RECONNECT  ',
+    }).limit,
+    25,
+  )
+  assert.equal(
+    supervisorB1OperationSchema.parse({
+      operation: 'conversation.search',
+      projectId: scope.projectId,
+      query: '  RECONNECT  ',
+    }).archive,
+    'active',
+  )
+  for (const operation of [
+    {
+      operation: 'project.create',
+      machineId: scope.machineId,
+      actionId,
+      path: '/tmp/project',
+    },
+    { operation: 'project.remove', projectId: scope.projectId, actionId },
+    { operation: 'conversation.pin', ...scope, actionId, pinned: true },
+    {
+      operation: 'conversation.rename',
+      ...scope,
+      actionId,
+      title: 'Cafe\u0301',
+    },
+    { operation: 'conversation.restore', ...scope, actionId },
+    {
+      operation: 'conversation.search',
+      projectId: scope.projectId,
+      query: 'hello',
+    },
+  ]) {
+    assert.equal(
+      supervisorRequestSchema.safeParse(request(operation)).success,
+      true,
+    )
+  }
+  assert.equal(
+    supervisorB1OperationSchema.parse({
+      operation: 'conversation.rename',
+      ...scope,
+      actionId,
+      title: 'Cafe\u0301',
+    }).title,
+    'Café',
+  )
+  assert.equal(
+    supervisorRequestSchema.safeParse(
+      request({
+        operation: 'project.create',
+        machineId: scope.machineId,
+        actionId,
+        path: '你'.repeat(1_366),
+      }),
+    ).success,
+    false,
+  )
+  assert.equal(
+    supervisorRequestSchema.safeParse(
+      request({
+        operation: 'conversation.search',
+        projectId: scope.projectId,
+        query: 'x'.repeat(257),
+      }),
+    ).success,
+    false,
+  )
+  assert.equal(
+    supervisorRequestSchema.safeParse(
+      request({
+        operation: 'conversation.pin',
+        ...scope,
+        actionId,
+        pinned: true,
+        unexpected: 'not allowed',
+      }),
+    ).success,
+    false,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      reason: 'project_has_conversations',
+      data: { reason: 'project_has_conversations' },
+    }).success,
+    true,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      reason: '/private/path',
+    }).success,
+    false,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      reason: 'project_has_conversations',
+    }).success,
+    true,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: false,
+      code: 'conflict',
+      data: { reason: '/private/path', opaque: true },
+    }).success,
+    true,
+  )
+  assert.equal(
+    supervisorResponseSchema.safeParse({
+      type: 'supervisor.response',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      ok: true,
+      reason: 'conflict',
+      data: {},
+    }).success,
+    false,
+  )
+})
+
+test('B4a error mapping preserves safe Host reasons and canonical fallbacks', () => {
+  const failure = (code, reason, httpStatus) =>
+    Object.assign(new Error('private path and title'), {
+      code,
+      ...(reason === undefined ? {} : { failure: { reason } }),
+      httpStatus,
+    })
+  assert.deepEqual(
+    supervisorFailureFromError(failure('project_has_conversations')),
+    { code: 'conflict', reason: 'project_has_conversations' },
+  )
+  assert.deepEqual(
+    supervisorFailureFromError(
+      failure('invalid_request', 'project_location_invalid'),
+    ),
+    { code: 'invalid_request', reason: 'project_location_invalid' },
+  )
+  assert.deepEqual(supervisorFailureFromError(failure('machine_unreachable')), {
+    code: 'unavailable',
+    reason: 'machine_unreachable',
+  })
+  assert.deepEqual(
+    supervisorFailureFromError(failure('unsupported', undefined, 422)),
+    { code: 'unsupported', reason: 'unsupported', httpStatus: 422 },
+  )
+  assert.deepEqual(supervisorFailureFromError(failure('/private/path')), {
+    code: 'internal',
+  })
+})
+
+test('Supervisor client reads the top-level reason and accepts legacy failure data', async () => {
+  const request = async (response) => {
+    let sent
+    const connection = {
+      async send(frame) {
+        sent = frame
+      },
+      async receive(schema) {
+        return schema.parse({
+          type: 'supervisor.response',
+          protocolVersion: 1,
+          requestId: sent.requestId,
+          ok: false,
+          code: 'conflict',
+          ...response,
+        })
+      },
+      end() {},
+    }
+    const session = new ConnectedSupervisorSession(
+      connection,
+      '2099-01-01T00:00:00.000Z',
+    )
+    try {
+      await session.readHostBootstrap()
+      assert.fail('expected Supervisor failure')
+    } catch (error) {
+      assert.ok(error instanceof SupervisorClientError)
+      return error.reason
+    } finally {
+      session.close()
+    }
+  }
+  assert.equal(
+    await request({
+      reason: 'project_has_conversations',
+      data: { reason: '/private/path' },
+    }),
+    'project_has_conversations',
+  )
+  assert.equal(
+    await request({
+      data: { reason: 'project_has_conversations', detail: 'legacy' },
+    }),
+    'project_has_conversations',
+  )
+})
+
+test('B4a project create data makes a reduced Location list explicit', () => {
+  const projectId = `proj_${'p'.repeat(32)}`
+  const location = {
+    projectId,
+    machineId: `machine_${'m'.repeat(32)}`,
+    rootPath: '/tmp/project',
+    availability: 'available',
+    createdAt: '2026-09-24T12:00:00.000Z',
+    updatedAt: '2026-09-24T12:00:00.000Z',
+  }
+  const project = {
+    projectId,
+    name: 'Project',
+    locations: [location],
+    createdAt: location.createdAt,
+    updatedAt: location.updatedAt,
+  }
+  assert.equal(
+    supervisorProjectCreateDataSchema.safeParse({
+      project,
+      location,
+      created: true,
+    }).success,
+    true,
+  )
+  const projected = {
+    project: {
+      ...project,
+      _projection: {
+        type: 'target_location_only',
+        reason: 'frame_size_exceeded',
+        completeSizeEstimate: 20_000,
+        omittedLocationCount: 2,
+      },
+    },
+    location,
+    created: false,
+  }
+  assert.equal(
+    supervisorProjectCreateDataSchema.safeParse(projected).success,
+    true,
+  )
+  assert.equal(
+    supervisorProjectCreateDataSchema.safeParse({
+      ...projected,
+      project: {
+        ...projected.project,
+        locations: [
+          location,
+          { ...location, machineId: `machine_${'n'.repeat(32)}` },
+        ],
+      },
+    }).success,
+    false,
+  )
+})
+
+test('B4a read permission allows search but denies all new writes', async () => {
+  const invoked = []
+  const fixture = await createFixture({
+    operations: (request) => {
+      invoked.push(request.operation)
+      return { operation: request.operation }
+    },
+  })
+  const scope = {
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  const actionId = `act_${'a'.repeat(32)}`
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'b4a-read-proof',
+    })
+    assert.deepEqual(
+      await session.executeOperation({
+        operation: 'conversation.search',
+        projectId: scope.projectId,
+        query: 'hello',
+        archive: 'active',
+        limit: 25,
+      }),
+      { operation: 'conversation.search' },
+    )
+    for (const operation of [
+      {
+        operation: 'project.create',
+        machineId: scope.machineId,
+        actionId,
+        path: '/tmp/project',
+      },
+      { operation: 'project.remove', projectId: scope.projectId, actionId },
+      { operation: 'conversation.pin', ...scope, actionId, pinned: true },
+      {
+        operation: 'conversation.rename',
+        ...scope,
+        actionId,
+        title: 'New title',
+      },
+      { operation: 'conversation.restore', ...scope, actionId },
+    ]) {
+      await assert.rejects(session.executeOperation(operation), {
+        code: 'operation_not_allowed',
+      })
+    }
+    assert.deepEqual(invoked, ['conversation.search'])
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('B4a control writes return reasons and check the real 16 KiB frame bound', async () => {
+  const diagnostics = []
+  const fixture = await createFixture({
+    controlEnabled: true,
+    operations: (request) => {
+      if (request.operation === 'project.remove') {
+        throw Object.assign(new Error('private project path'), {
+          code: 'project_has_conversations',
+        })
+      }
+      if (request.operation === 'conversation.rename') {
+        return { title: 'secret'.repeat(4_000) }
+      }
+      return { operation: request.operation }
+    },
+    onDiagnostic: (event, fields) => diagnostics.push({ event, fields }),
+  })
+  const scope = {
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  const actionId = `act_${'a'.repeat(32)}`
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'b4a-control-proof',
+    })
+    assert.deepEqual(
+      await session.executeOperation({
+        operation: 'project.create',
+        machineId: scope.machineId,
+        path: '/tmp/project',
+        actionId,
+      }),
+      { operation: 'project.create' },
+    )
+    await assert.rejects(
+      session.executeOperation({
+        operation: 'project.remove',
+        projectId: scope.projectId,
+        actionId,
+      }),
+      (error) => {
+        assert.equal(error.code, 'conflict')
+        assert.equal(error.reason, 'project_has_conversations')
+        assert.equal(error.message.includes('private'), false)
+        return true
+      },
+    )
+    await assert.rejects(
+      session.executeOperation({
+        operation: 'conversation.rename',
+        ...scope,
+        actionId,
+        title: 'Safe title',
+      }),
+      { code: 'internal' },
+    )
+    assert.deepEqual(
+      await session.executeOperation({
+        operation: 'conversation.pin',
+        ...scope,
+        actionId,
+        pinned: true,
+      }),
+      { operation: 'conversation.pin' },
+    )
+    assert.deepEqual(
+      await session.executeOperation({
+        operation: 'conversation.restore',
+        ...scope,
+        actionId,
+      }),
+      { operation: 'conversation.restore' },
+    )
+    const overflow = diagnostics.find(
+      ({ event }) => event === 'supervisor.write.frame_too_large',
+    )
+    assert.equal(overflow.fields.operation, 'conversation.rename')
+    assert.ok(overflow.fields.responseBytes > 16 * 1024)
+    assert.equal(JSON.stringify(diagnostics).includes('secret'), false)
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('invalid B4a operation fields return invalid_request without closing the session', async () => {
+  const fixture = await createFixture({ controlEnabled: true })
+  const scope = {
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'b4a-invalid-fields-proof',
+    })
+    await assert.rejects(
+      session.executeOperation({
+        operation: 'conversation.rename',
+        ...scope,
+        actionId: `act_${'a'.repeat(32)}`,
+        title: 'x'.repeat(241),
+      }),
+      (error) => {
+        assert.equal(error.code, 'invalid_request')
+        assert.equal(error.reason, 'invalid_request')
+        return true
+      },
+    )
+    assert.deepEqual(
+      await session.executeOperation({
+        operation: 'conversation.pin',
+        ...scope,
+        actionId: `act_${'b'.repeat(32)}`,
+        pinned: true,
+      }),
+      { operation: 'conversation.pin' },
+    )
+    await assert.rejects(
+      session.executeOperation({
+        type: 'invalid.request',
+        operation: 'conversation.search',
+        projectId: scope.projectId,
+        query: 'hello',
+        archive: 'active',
+        limit: 25,
+      }),
+    )
+    await assert.rejects(session.readHostBootstrap())
+    session.close()
   } finally {
     await fixture.server.close()
   }
@@ -651,7 +1157,8 @@ async function createFixture(options = {}) {
         operation: 'conversation.create',
       }),
     },
-    operations: (request) => ({ operation: request.operation }),
+    operations:
+      options.operations ?? ((request) => ({ operation: request.operation })),
   })
   const address = await server.start()
   const grantPayload = {

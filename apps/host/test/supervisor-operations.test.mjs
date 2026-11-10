@@ -314,3 +314,209 @@ test('Supervisor advances past an oversized change and keeps later pages readabl
   assert.equal(next.omittedChanges, 0)
   assert.equal(next.nextOffset, undefined)
 })
+
+test('Supervisor B4a operations reuse the local Host mutations with target-state requests', async () => {
+  const remoteMachineId = 'machine_supervisor_remote_test'
+  const calls = []
+  const service = {
+    listMachines: () => ({
+      machines: [
+        { machineId, kind: 'local' },
+        { machineId: remoteMachineId, kind: 'remote' },
+      ],
+    }),
+    createProject: async (request) => {
+      calls.push(['createProject', request])
+      return { data: { project: { projectId }, created: true } }
+    },
+    createRemoteProject: async (machine, request) => {
+      calls.push(['createRemoteProject', machine, request])
+      return {
+        data: {
+          project: { projectId },
+          location: { machineId: machine },
+          created: false,
+        },
+      }
+    },
+    deleteProject: async (project, request) => {
+      calls.push(['deleteProject', project, request])
+      return { data: { projectId: project } }
+    },
+    getSupervisorConversation: (machine, project, conversation) => {
+      calls.push(['getSupervisorConversation', machine, project, conversation])
+      return { conversation: { conversationId: conversation } }
+    },
+    pinConversation: async (conversation, request) => {
+      calls.push(['pinConversation', conversation, request])
+      return {
+        data: {
+          conversation: { conversationId: conversation, pinnedAt: timestamp },
+        },
+      }
+    },
+    unpinConversation: async (conversation, request) => {
+      calls.push(['unpinConversation', conversation, request])
+      return { data: { conversation: { conversationId: conversation } } }
+    },
+    renameConversation: async (conversation, request) => {
+      calls.push(['renameConversation', conversation, request])
+      return {
+        data: {
+          conversation: { conversationId: conversation, title: request.title },
+        },
+      }
+    },
+    unarchiveConversation: async (conversation, request) => {
+      calls.push(['unarchiveConversation', conversation, request])
+      return { data: { conversation: { conversationId: conversation } } }
+    },
+    searchProjectConversations: async (project, query, budget) => {
+      calls.push(['searchProjectConversations', project, query, budget])
+      return { protocolVersion: 1, results: [], hasMore: false }
+    },
+  }
+  const actionId = 'act_supervisor_organization_0001'
+  const path = 'C:\\fixture\\project'
+  const scope = { machineId, projectId, conversationId, actionId }
+
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'project.create',
+      machineId,
+      actionId,
+      path,
+      name: 'Project',
+    }),
+    { project: { projectId }, created: true },
+  )
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'project.create',
+      machineId: remoteMachineId,
+      actionId,
+      path,
+    }),
+    {
+      project: { projectId },
+      location: { machineId: remoteMachineId },
+      created: false,
+    },
+  )
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'project.remove',
+      projectId,
+      actionId,
+    }),
+    { projectId },
+  )
+  for (const pinned of [true, false]) {
+    const result = await executeSupervisorB1Operation(service, {
+      operation: 'conversation.pin',
+      ...scope,
+      pinned,
+    })
+    assert.equal(result.conversation.conversationId, conversationId)
+  }
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'conversation.rename',
+      ...scope,
+      title: '新标题',
+    }),
+    { conversation: { conversationId, title: '新标题' } },
+  )
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'conversation.restore',
+      ...scope,
+    }),
+    { conversation: { conversationId } },
+  )
+  assert.deepEqual(
+    await executeSupervisorB1Operation(service, {
+      operation: 'conversation.search',
+      projectId,
+      query: '搜索词',
+      archive: 'all',
+      limit: 25,
+    }),
+    { protocolVersion: 1, results: [], hasMore: false },
+  )
+  assert.deepEqual(calls.slice(0, 3), [
+    ['createProject', { actionId, path, name: 'Project' }],
+    ['createRemoteProject', remoteMachineId, { actionId, path }],
+    ['deleteProject', projectId, { actionId }],
+  ])
+  assert.equal(
+    calls.filter(([method]) => method === 'getSupervisorConversation').length,
+    4,
+  )
+  assert.deepEqual(
+    calls
+      .filter(
+        ([method]) =>
+          method === 'pinConversation' || method === 'unpinConversation',
+      )
+      .map(([method]) => method),
+    ['pinConversation', 'unpinConversation'],
+  )
+  const searchCall = calls.find(
+    ([method]) => method === 'searchProjectConversations',
+  )
+  assert.equal(searchCall[1], projectId)
+  assert.equal(searchCall[2].q, '搜索词')
+  assert.equal(searchCall[2].archive, 'all')
+  assert.equal(searchCall[2].limit, 25)
+  assert.equal(searchCall[3].maximumResultsBytes, 12 * 1024)
+})
+
+test('project.create projects only the target Location when the full result exceeds one frame', async () => {
+  const targetMachineId = 'machine_supervisor_project_target'
+  const location = (index) => ({
+    projectId,
+    machineId:
+      index === 0
+        ? targetMachineId
+        : `machine_supervisor_project_other_${String(index)}`,
+    rootPath: `C:\\${'x'.repeat(4_088)}\\${String(index)}`,
+    availability: 'available',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  })
+  const locations = Array.from({ length: 64 }, (_, index) => location(index))
+  const project = {
+    projectId,
+    name: 'Test project',
+    locations,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  }
+  const fullData = { project, location: locations[0], created: true }
+  assert.throws(() => assertFitsFrame(fullData), RangeError)
+
+  const result = await executeSupervisorB1Operation(
+    {
+      listMachines: () => ({ machines: [{ machineId, kind: 'local' }] }),
+      createRemoteProject: async () => ({ data: fullData }),
+    },
+    {
+      operation: 'project.create',
+      machineId: targetMachineId,
+      actionId: 'act_supervisor_large_create_0001',
+      path: 'C:\\fixture',
+    },
+  )
+  assertFitsFrame(result)
+  assert.equal(result.project.projectId, projectId)
+  assert.equal(result.created, true)
+  assert.deepEqual(result.location, locations[0])
+  assert.deepEqual(result.project.locations, [locations[0]])
+  assert.deepEqual(result.project._projection, {
+    type: 'target_location_only',
+    reason: 'frame_size_exceeded',
+    completeSizeEstimate: Buffer.byteLength(JSON.stringify(project), 'utf8'),
+    omittedLocationCount: 63,
+  })
+})

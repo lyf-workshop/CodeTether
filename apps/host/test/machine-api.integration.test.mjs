@@ -7,6 +7,10 @@ import { DatabaseSync } from 'node:sqlite'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
+import {
+  supervisorB1OperationSchema,
+  supervisorTransportLimits,
+} from '@codetether/supervisor-transport'
 
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import {
@@ -15,6 +19,7 @@ import {
   newEpoch,
 } from '../dist/api/host-service.js'
 import { LocalHttpServer } from '../dist/api/local-http-server.js'
+import { executeSupervisorB1Operation } from '../dist/api/supervisor-operations.js'
 import {
   RemoteMachineCoordinatorError,
   RemoteMachineRevocationPendingError,
@@ -765,6 +770,87 @@ test('remote pairing stages private trust before publication and unpair rolls ba
       await server.close().catch(() => undefined)
       service = undefined
     }
+    await service?.close().catch(() => undefined)
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('Supervisor remote Project creation rejects an escaped oversized response before SQLite writes', async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), 'codetether-b4a-project-frame-'),
+  )
+  const workspace = join(directory, 'workspace')
+  const databasePath = join(directory, 'data', 'codetether.sqlite3')
+  await mkdir(workspace, { recursive: true })
+  const persistence = ConversationStore.open({ databasePath })
+  const coordinator = new FakeRemoteMachineCoordinator(persistence)
+  coordinator.machineId = `machine_${'r'.repeat(32)}`
+  coordinator.confirmed.machine.machineId = coordinator.machineId
+  coordinator.confirmed.trust.machineId = coordinator.machineId
+  let service
+  try {
+    service = await createService({
+      workspace,
+      databasePath,
+      runtimes: [new TrackingRuntime('codex')],
+      maxConversations: 1,
+      remoteMachineCoordinator: coordinator,
+      persistence,
+      registerRoot: false,
+    })
+    await service.beginRemoteMachinePairing({
+      actionId: 'act_b4a_frame_pair_0001',
+      address: { host: '192.0.2.10', port: 43_217 },
+      pairingCode: '482731',
+    })
+    await service.confirmRemoteMachinePairing(coordinator.attemptId, {
+      actionId: 'act_b4a_frame_confirm_0001',
+    })
+    await service.updateMachineConnectionAddress(coordinator.machineId, {
+      actionId: 'act_b4a_frame_online_0001',
+      address: { host: '192.0.2.11', port: 43_217 },
+    })
+
+    // Each 250-byte component is a valid POSIX directory name. The remote
+    // Node validates the path; the Windows test Host must never read it.
+    const remotePath = `/projects/${Array.from({ length: 16 }, () =>
+      '\\'.repeat(250),
+    ).join('/')}`
+    assert.ok(Buffer.byteLength(remotePath, 'utf8') <= 4_096)
+    assert.ok(Buffer.byteLength(JSON.stringify(remotePath), 'utf8') > 8_000)
+    coordinator.validationCanonicalPath = remotePath
+    const request = {
+      operation: 'project.create',
+      machineId: coordinator.machineId,
+      actionId: 'act_b4a_frame_create_0001',
+      path: remotePath,
+      name: 'Oversized escaped location',
+    }
+    supervisorB1OperationSchema.parse(request)
+    assert.ok(
+      Buffer.byteLength(
+        JSON.stringify({
+          type: 'supervisor.request',
+          protocolVersion: 1,
+          requestId: `sreq_${'x'.repeat(32)}`,
+          ...request,
+        }),
+        'utf8',
+      ) <= supervisorTransportLimits.maximumFrameBytes,
+    )
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(
+        executeSupervisorB1Operation(service, request),
+        (error) =>
+          error instanceof HostServiceError &&
+          error.code === 'invalid_request' &&
+          error.httpStatus === 422,
+      )
+      assert.deepEqual(persistence.listProjects(), [])
+      assert.deepEqual((await service.listProjects()).projects, [])
+    }
+    assert.equal(coordinator.validationCalls.length, 1)
+  } finally {
     await service?.close().catch(() => undefined)
     await rm(directory, { recursive: true, force: true })
   }

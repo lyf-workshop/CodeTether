@@ -1164,32 +1164,44 @@ test('enrollment abuse reaches a bounded service-side rate limit', async () => {
 test('authentication attempts are bounded by claimed fingerprint as well as network address', async () => {
   await withService(async ({ service, tls }) => {
     const unknownIdentity = generateRelayApplicationIdentity()
-    for (let attempt = 0; attempt < 121; attempt += 1) {
-      const opened = await openChallenge(service, tls.publicKeySpkiFingerprint)
-      await opened.channel.send({
-        type: 'peer.authenticate',
-        protocolVersion: relayProtocolVersion,
-        peerFingerprint: unknownIdentity.publicKeyFingerprint,
-        role: 'controller',
-        clientBuildIdentity: 'test-build',
-        signature: signRelayTranscript(
-          unknownIdentity.privateKeyPem,
-          relayAuthenticationTranscript({
-            challenge: opened.challenge,
-            peerFingerprint: unknownIdentity.publicKeyFingerprint,
-            role: 'controller',
-            clientBuildIdentity: 'test-build',
-          }),
-        ),
-      })
-      const error = await receiveType(opened.channel, 'relay.error')
-      assert.equal(
-        error.code,
-        attempt < 120 ? 'authentication_failed' : 'rate_limited',
-      )
+    // Each TLS handshake takes real time, while the bucket refills continuously.
+    // Keep its clock fixed to verify the 120-attempt ceiling independent of load.
+    const realNow = Date.now
+    const frozenNow = realNow()
+    Date.now = () => frozenNow
+    try {
+      for (let attempt = 0; attempt < 121; attempt += 1) {
+        const opened = await openChallenge(
+          service,
+          tls.publicKeySpkiFingerprint,
+        )
+        await opened.channel.send({
+          type: 'peer.authenticate',
+          protocolVersion: relayProtocolVersion,
+          peerFingerprint: unknownIdentity.publicKeyFingerprint,
+          role: 'controller',
+          clientBuildIdentity: 'test-build',
+          signature: signRelayTranscript(
+            unknownIdentity.privateKeyPem,
+            relayAuthenticationTranscript({
+              challenge: opened.challenge,
+              peerFingerprint: unknownIdentity.publicKeyFingerprint,
+              role: 'controller',
+              clientBuildIdentity: 'test-build',
+            }),
+          ),
+        })
+        const error = await receiveType(opened.channel, 'relay.error')
+        assert.equal(
+          error.code,
+          attempt < 120 ? 'authentication_failed' : 'rate_limited',
+        )
+      }
+      assert.equal(service.metrics().authenticationFailures, 120)
+      assert.equal(service.metrics().rateLimitEvents, 1)
+    } finally {
+      Date.now = realNow
     }
-    assert.equal(service.metrics().authenticationFailures, 120)
-    assert.equal(service.metrics().rateLimitEvents, 1)
   })
 })
 

@@ -547,6 +547,24 @@ test('forced-remote manager reads Host state without using local HTTP product da
         { code: 'operation_not_allowed' },
       )
     }
+    await assert.rejects(
+      manager.updateRemoteConversationModel(authenticated.sessionId, {
+        machineId,
+        projectId,
+        conversationId,
+        actionId: deniedActionId,
+        model: 'gpt-5',
+      }),
+      { code: 'operation_not_allowed' },
+    )
+    await assert.rejects(
+      manager.refreshRemoteConversationModels(authenticated.sessionId, {
+        machineId,
+        projectId,
+        conversationId,
+      }),
+      { code: 'operation_not_allowed' },
+    )
     assert.equal(
       (
         await manager.readRemoteConversationHistory(
@@ -682,6 +700,29 @@ test('Direct control session routes B4a mutations and preserves a specific Host 
     unarchiveConversation: async () => ({
       data: { conversation: { conversationId } },
     }),
+    updateConversationModel: async (id, request) => {
+      calls.push(['updateConversationModel', request.actionId])
+      return {
+        data: {
+          conversation: {
+            conversationId: id,
+            provider: 'codex',
+            currentModel: request.model,
+            currentReasoning: request.reasoning,
+          },
+        },
+      }
+    },
+    refreshConversationModels: async (id) => {
+      calls.push(['refreshConversationModels', id])
+      return {
+        protocolVersion: 1,
+        provider: {
+          provider: 'codex',
+          availableModels: [{ id: 'gpt-5', name: 'GPT-5' }],
+        },
+      }
+    },
     searchProjectConversations: async () => ({
       protocolVersion: 1,
       results: [],
@@ -732,6 +773,33 @@ test('Direct control session routes B4a mutations and preserves a specific Host 
       { conversation: { conversationId } },
     )
     assert.deepEqual(
+      await fixture.manager.updateRemoteConversationModel(session.sessionId, {
+        ...scope,
+        model: 'gpt-5',
+        reasoning: 'high',
+      }),
+      {
+        conversationId,
+        provider: 'codex',
+        currentModel: 'gpt-5',
+        currentReasoning: 'high',
+      },
+    )
+    assert.deepEqual(
+      await fixture.manager.refreshRemoteConversationModels(session.sessionId, {
+        machineId,
+        projectId,
+        conversationId,
+      }),
+      {
+        protocolVersion: 1,
+        provider: {
+          provider: 'codex',
+          availableModels: [{ id: 'gpt-5', name: 'GPT-5' }],
+        },
+      },
+    )
+    assert.deepEqual(
       await send({
         operation: 'conversation.search',
         projectId,
@@ -754,6 +822,8 @@ test('Direct control session routes B4a mutations and preserves a specific Host 
     assert.deepEqual(calls, [
       ['createProject', actionId],
       ['deleteProject', actionId],
+      ['updateConversationModel', actionId],
+      ['refreshConversationModels', conversationId],
       ['deleteProject', 'act_supervisor_conflict_0001'],
     ])
   } finally {

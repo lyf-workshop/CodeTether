@@ -799,6 +799,28 @@ test('read-only Supervisor sessions cannot control Conversations', async () => {
         error instanceof SupervisorClientError &&
         error.code === 'operation_not_allowed',
     )
+    await assert.rejects(
+      session.updateConversationModel({
+        actionId: `act_${'u'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+        model: 'gpt-5.1',
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
+    await assert.rejects(
+      session.refreshConversationModels({
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
     const actionId = `act_${'j'.repeat(32)}`
     const conversation = {
       machineId: `machine_${'m'.repeat(32)}`,
@@ -867,6 +889,136 @@ test('matching signed grant and admission scope permit the fixed control union',
   } finally {
     await fixture.server.close()
   }
+})
+
+test('model update forwards only the scoped model choice and returns its updated Conversation summary', async () => {
+  const received = []
+  const summary = {
+    conversationId: `conv_${'c'.repeat(32)}`,
+    provider: 'codex',
+    currentModel: 'gpt-5.1',
+    currentReasoning: 'high',
+  }
+  const fixture = await createFixture({
+    controlEnabled: true,
+    updateConversationModel: (input) => {
+      received.push(input)
+      return summary
+    },
+  })
+  const request = {
+    actionId: `act_${'u'.repeat(32)}`,
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: summary.conversationId,
+    model: summary.currentModel,
+    reasoning: summary.currentReasoning,
+  }
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'model-control-proof',
+    })
+    assert.deepEqual(await session.updateConversationModel(request), summary)
+    assert.equal(received.length, 1)
+    const { requestId, ...forwarded } = received[0]
+    assert.match(requestId, /^sreq_[A-Za-z0-9_-]+$/u)
+    assert.deepEqual(forwarded, {
+      type: 'supervisor.request',
+      protocolVersion: 1,
+      operation: 'conversation.updateModel',
+      ...request,
+    })
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+})
+
+test('model update request rejects empty choices and Provider switching', () => {
+  const request = {
+    type: 'supervisor.request',
+    protocolVersion: 1,
+    requestId: `sreq_${'r'.repeat(32)}`,
+    operation: 'conversation.updateModel',
+    actionId: `act_${'a'.repeat(32)}`,
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  assert.equal(supervisorRequestSchema.safeParse(request).success, false)
+  assert.equal(
+    supervisorRequestSchema.safeParse({ ...request, model: '   ' }).success,
+    false,
+  )
+  assert.equal(
+    supervisorRequestSchema.safeParse({ ...request, reasoning: 'high' })
+      .success,
+    true,
+  )
+  assert.equal(
+    supervisorRequestSchema.safeParse({
+      ...request,
+      model: 'gpt-5.1',
+      provider: 'claude-code',
+    }).success,
+    false,
+  )
+})
+
+test('explicit model refresh forwards the exact Conversation scope and returns a provider directory', async () => {
+  const received = []
+  const models = {
+    protocolVersion: 1,
+    provider: {
+      provider: 'codex',
+      availableModels: [{ id: 'gpt-5.1', name: 'GPT-5.1' }],
+    },
+  }
+  const fixture = await createFixture({
+    controlEnabled: true,
+    refreshConversationModels: (input) => {
+      received.push(input)
+      return models
+    },
+  })
+  const scope = {
+    machineId: `machine_${'m'.repeat(32)}`,
+    projectId: `proj_${'p'.repeat(32)}`,
+    conversationId: `conv_${'c'.repeat(32)}`,
+  }
+  try {
+    const pending = await connectSupervisorDirect(fixture.clientOptions)
+    const session = await pending.authenticate({
+      accessToken: 'test-access-token',
+      deviceProof: 'model-refresh-proof',
+    })
+    assert.deepEqual(await session.refreshConversationModels(scope), models)
+    assert.equal(received.length, 1)
+    const { requestId, ...forwarded } = received[0]
+    assert.match(requestId, /^sreq_[A-Za-z0-9_-]+$/u)
+    assert.deepEqual(forwarded, {
+      type: 'supervisor.request',
+      protocolVersion: 1,
+      operation: 'conversation.models.refresh',
+      ...scope,
+    })
+    session.close()
+  } finally {
+    await fixture.server.close()
+  }
+  assert.equal(
+    supervisorRequestSchema.safeParse({
+      type: 'supervisor.request',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      operation: 'conversation.models.refresh',
+      ...scope,
+      actionId: `act_${'a'.repeat(32)}`,
+    }).success,
+    false,
+  )
 })
 
 test('a disagreement between signed scope and Control Plane scope fails closed', async () => {
@@ -1156,6 +1308,12 @@ async function createFixture(options = {}) {
         accepted: true,
         operation: 'conversation.create',
       }),
+      updateConversationModel:
+        options.updateConversationModel ??
+        (() => ({ accepted: true, operation: 'conversation.updateModel' })),
+      refreshConversationModels:
+        options.refreshConversationModels ??
+        (() => ({ protocolVersion: 1, provider: { provider: 'codex' } })),
     },
     operations:
       options.operations ?? ((request) => ({ operation: request.operation })),

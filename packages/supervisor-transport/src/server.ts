@@ -122,6 +122,19 @@ export interface SupervisorHostControlSurface {
     readonly model?: string
     readonly reasoning?: string
   }): unknown | Promise<unknown>
+  updateConversationModel(input: {
+    readonly actionId: string
+    readonly machineId: string
+    readonly projectId: string
+    readonly conversationId: string
+    readonly model?: string
+    readonly reasoning?: string
+  }): unknown | Promise<unknown>
+  refreshConversationModels(input: {
+    readonly machineId: string
+    readonly projectId: string
+    readonly conversationId: string
+  }): unknown | Promise<unknown>
 }
 
 export interface SupervisorServerActivation {
@@ -662,6 +675,18 @@ export class SupervisorServer {
           }
           data = await this.#options.control.createConversation(request)
           break
+        case 'conversation.updateModel':
+          if (this.#options.control === undefined) {
+            throw new Error('operation_not_allowed')
+          }
+          data = await this.#options.control.updateConversationModel(request)
+          break
+        case 'conversation.models.refresh':
+          if (this.#options.control === undefined) {
+            throw new Error('operation_not_allowed')
+          }
+          data = await this.#options.control.refreshConversationModels(request)
+          break
         default:
           if (this.#options.operations === undefined) {
             throw new Error('operation_not_allowed')
@@ -759,6 +784,8 @@ function supervisorReadRequestFields(
     case 'conversation.live.read':
     case 'conversation.changes':
     case 'conversation.archive':
+    case 'conversation.updateModel':
+    case 'conversation.models.refresh':
     case 'conversation.pin':
     case 'conversation.rename':
     case 'conversation.restore':
@@ -793,6 +820,8 @@ function isSupervisorControlOperation(request: SupervisorRequest): boolean {
     request.operation === 'conversation.restore' ||
     request.operation === 'conversation.turn.start' ||
     request.operation === 'conversation.create' ||
+    request.operation === 'conversation.updateModel' ||
+    request.operation === 'conversation.models.refresh' ||
     request.operation === 'conversation.archive' ||
     request.operation === 'attention.resolve' ||
     request.operation === 'approval.resolve' ||

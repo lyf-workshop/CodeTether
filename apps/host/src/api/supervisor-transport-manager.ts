@@ -38,6 +38,7 @@ import {
 import {
   ActionIdSchema,
   TimestampSchema,
+  UpdateConversationModelRequestSchema,
   type CreateConversationRequest,
   type StartTurnRequest,
 } from '@codetether/protocol'
@@ -47,6 +48,7 @@ import {
   supervisorBootstrap,
   supervisorMachineDetail,
   supervisorMachineList,
+  supervisorModelCatalog,
 } from './supervisor-machine-reads.js'
 import { executeSupervisorB1Operation } from './supervisor-operations.js'
 import type { ConversationStore } from '../persistence/index.js'
@@ -359,6 +361,37 @@ export class SupervisorTransportManager {
           return await options.service.startTurn(
             request.conversationId as never,
             input,
+          )
+        },
+        updateConversationModel: async (request) => {
+          await options.service.getSupervisorConversation(
+            request.machineId as never,
+            request.projectId as never,
+            request.conversationId as never,
+          )
+          const input = UpdateConversationModelRequestSchema.parse({
+            actionId: request.actionId,
+            ...(request.model === undefined ? {} : { model: request.model }),
+            ...(request.reasoning === undefined
+              ? {}
+              : { reasoning: request.reasoning }),
+          })
+          const updated = await options.service.updateConversationModel(
+            request.conversationId as never,
+            input,
+          )
+          return updated.data.conversation
+        },
+        refreshConversationModels: async (request) => {
+          await options.service.getSupervisorConversation(
+            request.machineId as never,
+            request.projectId as never,
+            request.conversationId as never,
+          )
+          return supervisorModelCatalog(
+            await options.service.refreshConversationModels(
+              request.conversationId as never,
+            ),
           )
         },
         createConversation: async (request) => {
@@ -834,7 +867,9 @@ export class SupervisorTransportManager {
           grant,
           TimestampSchema.parse(new Date().toISOString()),
         )
-        this.#persistence.enableHostSupervisorGrant(grant.payload.authorizationId)
+        this.#persistence.enableHostSupervisorGrant(
+          grant.payload.authorizationId,
+        )
       }
       if (control) {
         const previous =
@@ -1319,6 +1354,35 @@ export class SupervisorTransportManager {
   ): Promise<unknown> {
     return await this.#withRemoteSession(sessionId, (session) =>
       session.createConversation(input),
+    )
+  }
+
+  async updateRemoteConversationModel(
+    sessionId: string,
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+      readonly model?: string
+      readonly reasoning?: string
+    },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.updateConversationModel(input),
+    )
+  }
+
+  async refreshRemoteConversationModels(
+    sessionId: string,
+    input: {
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+    },
+  ): Promise<unknown> {
+    return await this.#withRemoteSession(sessionId, (session) =>
+      session.refreshConversationModels(input),
     )
   }
 

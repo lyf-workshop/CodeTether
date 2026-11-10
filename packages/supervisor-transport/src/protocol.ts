@@ -607,6 +607,26 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
     .strict(),
   supervisorRequestBaseSchema
     .extend({
+      operation: z.literal('conversation.updateModel'),
+      actionId: supervisorActionIdSchema,
+      ...supervisorConversationScope,
+      model: z.string().trim().min(1).max(240).optional(),
+      reasoning: z.string().trim().min(1).max(120).optional(),
+    })
+    .strict()
+    .refine(
+      (request) =>
+        request.model !== undefined || request.reasoning !== undefined,
+      { message: 'A model or reasoning update is required' },
+    ),
+  supervisorRequestBaseSchema
+    .extend({
+      operation: z.literal('conversation.models.refresh'),
+      ...supervisorConversationScope,
+    })
+    .strict(),
+  supervisorRequestBaseSchema
+    .extend({
       operation: z.literal('conversation.create'),
       actionId: supervisorActionIdSchema,
       machineId: opaqueId('machine'),

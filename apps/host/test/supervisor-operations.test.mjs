@@ -15,6 +15,7 @@ import {
   supervisorBootstrap,
   supervisorMachineDetail,
   supervisorMachineList,
+  supervisorModelCatalog,
 } from '../dist/api/supervisor-machine-reads.js'
 import { executeSupervisorB1Operation } from '../dist/api/supervisor-operations.js'
 
@@ -122,6 +123,11 @@ test('Supervisor bounds the machine directory and retains both Providers and con
       id: `model-${index}`,
       label: '模型'.repeat(120),
     })),
+    availableModels: Array.from({ length: 64 }, (_, index) => ({
+      id: `model-${index}`,
+      name: '模型'.repeat(120),
+      description: '说明'.repeat(200),
+    })),
     reasoningOptions: Array.from({ length: 16 }, (_, index) => ({
       id: `${index}${'选'.repeat(116)}`,
       label: '推理'.repeat(60),
@@ -140,8 +146,11 @@ test('Supervisor bounds the machine directory and retains both Providers and con
   const result = supervisorMachineDetail(detail)
   assertFitsFrame(result)
   assert.equal(result[supervisorReadTruncated], true)
+  assert.equal(result._truncated, true)
+  const serializable = JSON.parse(JSON.stringify(result))
+  delete serializable._truncated
   GetMachineResponseSchema.parse({
-    ...JSON.parse(JSON.stringify(result)),
+    ...serializable,
     projects: [],
     conversations: [],
   })
@@ -162,7 +171,51 @@ test('Supervisor bounds the machine directory and retains both Providers and con
       row.reasoningOptions,
       providers[index].reasoningOptions.slice(0, row.reasoningOptions.length),
     )
+    assert.ok(row.availableModels.length > 0)
+    assert.ok(
+      row.availableModels.length < providers[index].availableModels.length,
+    )
+    assert.deepEqual(
+      row.availableModels,
+      providers[index].availableModels.slice(0, row.availableModels.length),
+    )
   }
+
+  const shortCatalog = GetMachineResponseSchema.parse({
+    ...detail,
+    providers: detail.providers.map((provider) => ({
+      ...provider,
+      models: [],
+      reasoningOptions: [],
+      availableModels: provider.availableModels.map(({ id }) => ({
+        id,
+        name: id,
+      })),
+    })),
+  })
+  const capped = supervisorMachineDetail(shortCatalog)
+  assertFitsFrame(capped)
+  assert.equal(capped._truncated, true)
+  assert.deepEqual(
+    capped.providers.map((provider) => provider.availableModels.length),
+    [50, 50],
+  )
+
+  const refreshed = supervisorModelCatalog({
+    protocolVersion: 1,
+    provider: detail.providers[0],
+  })
+  assertFitsFrame(refreshed)
+  assert.equal(refreshed._truncated, true)
+  assert.ok(refreshed.provider.availableModels.length > 0)
+  assert.ok(refreshed.provider.availableModels.length < 64)
+  assert.deepEqual(
+    refreshed.provider.availableModels,
+    detail.providers[0].availableModels.slice(
+      0,
+      refreshed.provider.availableModels.length,
+    ),
+  )
 })
 
 test('Supervisor recent responses keep complete identities and titles in the bounded prefix', () => {

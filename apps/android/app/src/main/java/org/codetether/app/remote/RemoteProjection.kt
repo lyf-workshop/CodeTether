@@ -49,6 +49,7 @@ internal fun JSONObject.machine(detail: JSONObject? = null): RemoteMachine {
         providers = detail?.rows("providers", 8).orEmpty().map { it.provider(canExecute) },
         available = available,
         connection = detail?.optJSONObject("connection")?.optionalText("executionTransport"),
+        modelsTruncated = detail?.opt("_truncated") as? Boolean ?: false,
     )
 }
 
@@ -61,17 +62,38 @@ private fun JSONObject.provider(canExecute: Boolean): RemoteProvider {
         id = text("provider"),
         displayName = text("displayName"),
         status = availability,
-        reasoning = if (capabilities.flag("reasoningControl")) {
-            optJSONArray("reasoningOptions")?.objects(16).orEmpty().map {
-                RemoteReasoning(it.text("id"), it.text("label"))
-            }
-        } else emptyList(),
+        reasoning = if (capabilities.flag("reasoningControl")) reasoningRows() else emptyList(),
         canStart = executable,
         approvals = capabilities.flag("approvals"),
         interrupt = capabilities.flag("interrupt"),
         diff = capabilities.flag("diff"),
+        availableModels = availableModelRows(),
     )
 }
+
+internal fun JSONObject.modelCatalog(truncated: Boolean): RemoteModelCatalog {
+    val capabilities = obj("capabilities")
+    val reasoningControl = capabilities.flag("reasoningControl")
+    return RemoteModelCatalog(
+        providerId = text("provider"),
+        availability = text("availability"),
+        availableModels = availableModelRows(),
+        reasoning = if (reasoningControl) reasoningRows() else emptyList(),
+        modelSelection = capabilities.flag("modelSelection"),
+        reasoningControl = reasoningControl,
+        truncated = truncated,
+    )
+}
+
+private fun JSONObject.availableModelRows(): List<RemoteModel> =
+    optJSONArray("availableModels")?.objects(64).orEmpty().map {
+        RemoteModel(it.text("id"), it.text("name"), it.optionalText("description"))
+    }
+
+private fun JSONObject.reasoningRows(): List<RemoteReasoning> =
+    optJSONArray("reasoningOptions")?.objects(16).orEmpty().map {
+        RemoteReasoning(it.text("id"), it.text("label"))
+    }
 
 internal fun JSONObject.project(machineId: String, available: Boolean): RemoteProject {
     if (text("machineId") != machineId) invalidResponse()
@@ -108,6 +130,29 @@ internal fun JSONObject.conversationMetadata(): RemoteConversationMetadata {
     return RemoteConversationMetadata(scope(), text("title"), text("provider"), text("status"), pinnedAt, archivedAt, text("lastActivityAt"))
 }
 
+internal fun JSONObject.conversationSummary(): RemoteConversationSummary {
+    val pinnedAt = optionalText("pinnedAt")
+    val archivedAt = optionalText("archivedAt")
+    if (pinnedAt != null && archivedAt != null) invalidResponse()
+    return RemoteConversationSummary(
+        target = scope(),
+        title = text("title"),
+        titleSource = text("titleSource"),
+        origin = optionalText("origin"),
+        pinnedAt = pinnedAt,
+        archivedAt = archivedAt,
+        provider = text("provider"),
+        model = optionalText("model"),
+        reasoning = optionalText("reasoning"),
+        currentModel = optionalText("currentModel"),
+        currentReasoning = optionalText("currentReasoning"),
+        status = text("status"),
+        createdAt = text("createdAt"),
+        updatedAt = text("updatedAt"),
+        lastActivityAt = text("lastActivityAt"),
+    )
+}
+
 internal fun JSONObject.searchPage(projectId: String): RemoteSearchPage {
     val results = rows("results", 100).map { row ->
         val conversation = row.obj("conversation").conversationMetadata()
@@ -134,6 +179,8 @@ internal fun JSONObject.conversation(): RemoteConversation = RemoteConversation(
     archived = flag("archived"),
     lastActivityAt = text("lastActivityAt"),
     resumable = text("resumability") == "resumable",
+    currentModel = optionalText("currentModel"),
+    currentReasoning = optionalText("currentReasoning"),
 )
 
 internal fun JSONObject.attention(conversation: RemoteConversation?, provider: RemoteProvider?, control: Boolean): RemoteAttention {
@@ -310,6 +357,8 @@ internal fun RemoteConversationDetail.applyLive(page: RemoteLivePage): RemoteCon
                     status = summary.text("status"),
                     archived = summary.optionalText("archivedAt") != null,
                     lastActivityAt = summary.optionalText("lastActivityAt") ?: conversation.lastActivityAt,
+                    currentModel = summary.optionalText("currentModel"),
+                    currentReasoning = summary.optionalText("currentReasoning"),
                 )
             }
         }

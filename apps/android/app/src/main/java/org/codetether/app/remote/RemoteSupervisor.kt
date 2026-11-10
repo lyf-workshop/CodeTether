@@ -189,6 +189,34 @@ class RemoteSupervisor(private val account: TabletAccount) {
         }
     }
 
+    suspend fun updateConversationModel(
+        target: ConversationTarget,
+        model: String? = null,
+        reasoning: String? = null,
+        actionId: String = newActionId(),
+    ): RemoteConversationSummary = lock.withLock {
+        if (model == null && reasoning == null) throw RemoteFailure("invalid_request")
+        val session = requireControl()
+        b4aMutation(session, actionId, {
+            it.conversationUpdateModel(
+                target.machineId, target.projectId, target.conversationId, actionId, model, reasoning,
+            )
+        }) { data ->
+            data.conversationSummary().also { if (it.target != target) invalidResponse() }
+        }
+    }
+
+    suspend fun refreshConversationModels(target: ConversationTarget): RemoteModelCatalog = lock.withLock {
+        val session = requireControl()
+        val expectedProvider = readConversation(session, target).provider
+        val data = nativeRequest(session) {
+            it.conversationModelsRefresh(target.machineId, target.projectId, target.conversationId)
+        }
+        data.obj("provider").modelCatalog(data.opt("_truncated") as? Boolean ?: false).also {
+            if (it.providerId != expectedProvider) invalidResponse()
+        }
+    }
+
     suspend fun project(project: RemoteProject): RemoteProject = read { session ->
         val row = request(session, "project.get", "machineId" to project.machineId, "projectId" to project.id).obj("project")
         row.project(project.machineId, project.available).also { if (it.id != project.id) invalidResponse() }

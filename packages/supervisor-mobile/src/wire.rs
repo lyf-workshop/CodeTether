@@ -813,6 +813,23 @@ pub(crate) enum Operation {
         conversation_id: String,
         action_id: String,
     },
+    #[serde(rename = "conversation.updateModel")]
+    ConversationUpdateModel {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
+    },
+    #[serde(rename = "conversation.models.refresh")]
+    ConversationModelsRefresh {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+    },
     #[serde(rename = "attention.list")]
     AttentionList {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -864,6 +881,8 @@ impl Operation {
                 | Self::ConversationPin { .. }
                 | Self::ConversationRename { .. }
                 | Self::ConversationRestore { .. }
+                | Self::ConversationUpdateModel { .. }
+                | Self::ConversationModelsRefresh { .. }
                 | Self::AttentionResolve { .. }
                 | Self::ApprovalResolve { .. }
                 | Self::TurnInterrupt { .. }
@@ -1071,6 +1090,29 @@ impl Operation {
                     && !title.trim().is_empty()
                     && title.encode_utf16().count() <= 240
             }
+            ConversationUpdateModel {
+                machine_id,
+                project_id,
+                conversation_id,
+                action_id,
+                model,
+                reasoning,
+            } => {
+                scope(machine_id, project_id, conversation_id)
+                    && action(action_id)
+                    && (model.is_some() || reasoning.is_some())
+                    && model
+                        .as_ref()
+                        .is_none_or(|value| bounded_trimmed(value, 240))
+                    && reasoning
+                        .as_ref()
+                        .is_none_or(|value| bounded_trimmed(value, 120))
+            }
+            ConversationModelsRefresh {
+                machine_id,
+                project_id,
+                conversation_id,
+            } => scope(machine_id, project_id, conversation_id),
             AttentionList {
                 project_id,
                 attention_type,
@@ -1143,7 +1185,7 @@ mod tests {
     const ACTION: &str = "act_fixture_action";
 
     #[test]
-    fn b4a_operations_validate_their_scopes_and_control_permissions() {
+    fn scoped_operations_validate_their_scopes_and_control_permissions() {
         let requests = [
             (
                 json!({"operation":"project.create","machineId":MACHINE,"actionId":ACTION,"path":"C:\\work","name":"Work"}),
@@ -1177,6 +1219,18 @@ mod tests {
                 json!({"operation":"conversation.restore","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION}),
                 true,
             ),
+            (
+                json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"model":"gpt-5.1"}),
+                true,
+            ),
+            (
+                json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"reasoning":"high"}),
+                true,
+            ),
+            (
+                json!({"operation":"conversation.models.refresh","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION}),
+                true,
+            ),
         ];
         for (request, control) in requests {
             let operation: Operation = serde_json::from_value(request).expect("operation shape");
@@ -1186,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn b4a_operations_reject_bad_bounds_and_filters() {
+    fn scoped_operations_reject_bad_bounds_and_filters() {
         let invalid = [
             json!({"operation":"project.create","machineId":MACHINE,"actionId":ACTION,"path":"x".repeat(4097)}),
             json!({"operation":"conversation.list","machineId":MACHINE,"projectId":PROJECT,"limit":50,"archived":"active_only"}),
@@ -1195,6 +1249,12 @@ mod tests {
             json!({"operation":"conversation.search","projectId":PROJECT,"query":"needle","limit":101}),
             json!({"operation":"conversation.rename","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"title":"x".repeat(241)}),
             json!({"operation":"conversation.restore","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":"bad"}),
+            json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION}),
+            json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"model":" "}),
+            json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"reasoning":"x".repeat(121)}),
+            json!({"operation":"conversation.updateModel","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"model":"gpt-5.1","provider":"claude-code"}),
+            json!({"operation":"conversation.models.refresh","machineId":MACHINE,"projectId":PROJECT,"conversationId":"bad"}),
+            json!({"operation":"conversation.models.refresh","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION}),
         ];
         for request in invalid {
             match serde_json::from_value::<Operation>(request) {

@@ -20,9 +20,20 @@ data class RemoteMachine(
     val providers: List<RemoteProvider>,
     val available: Boolean = true,
     val connection: String? = null,
+    val modelsTruncated: Boolean = false,
 )
 
 data class RemoteReasoning(val id: String, val label: String)
+data class RemoteModel(val id: String, val name: String, val description: String?)
+data class RemoteModelCatalog(
+    val providerId: String,
+    val availability: String,
+    val availableModels: List<RemoteModel>,
+    val reasoning: List<RemoteReasoning>,
+    val modelSelection: Boolean,
+    val reasoningControl: Boolean,
+    val truncated: Boolean,
+)
 
 data class RemoteProvider(
     val id: String,
@@ -33,6 +44,7 @@ data class RemoteProvider(
     val approvals: Boolean,
     val interrupt: Boolean,
     val diff: Boolean,
+    val availableModels: List<RemoteModel> = emptyList(),
 )
 
 data class RemoteProject(
@@ -75,6 +87,27 @@ data class RemoteConversation(
     val archived: Boolean,
     val lastActivityAt: String,
     val resumable: Boolean = true,
+    val currentModel: String? = null,
+    val currentReasoning: String? = null,
+)
+
+/** The direct ConversationSummary returned by conversation.updateModel. */
+data class RemoteConversationSummary(
+    val target: ConversationTarget,
+    val title: String,
+    val titleSource: String,
+    val origin: String?,
+    val pinnedAt: String?,
+    val archivedAt: String?,
+    val provider: String,
+    val model: String?,
+    val reasoning: String?,
+    val currentModel: String?,
+    val currentReasoning: String?,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+    val lastActivityAt: String,
 )
 
 data class RemoteConversationMetadata(

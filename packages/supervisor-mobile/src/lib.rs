@@ -264,6 +264,39 @@ impl SupervisorSession {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_update_model(
+        &self,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        model: Option<String>,
+        reasoning: Option<String>,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationUpdateModel {
+            machine_id,
+            project_id,
+            conversation_id,
+            action_id,
+            model,
+            reasoning,
+        })
+    }
+
+    pub fn conversation_models_refresh(
+        &self,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationModelsRefresh {
+            machine_id,
+            project_id,
+            conversation_id,
+        })
+    }
+
     pub fn disconnect(&self) {
         self.closed.cancel();
         if let Ok(mut slot) = self.wire.try_lock() {

@@ -77,6 +77,34 @@ class RemoteProjectionHistoryTest {
         assertEquals(2, replied.history.messages.count { it.role == "assistant" })
     }
 
+    @Test
+    fun conversationUpdatedRefreshesCurrentModelAndReasoningWithoutStartingATurn() {
+        fun updated(model: String, reasoning: String?): JSONObject {
+            val summary = JSONObject()
+                .put("machineId", TARGET.machineId)
+                .put("projectId", TARGET.projectId)
+                .put("conversationId", TARGET.conversationId)
+                .put("status", "idle")
+                .put("currentModel", model)
+            if (reasoning != null) summary.put("currentReasoning", reasoning)
+            return JSONObject()
+                .put("type", "conversation.updated")
+                .put("conversationId", TARGET.conversationId)
+                .put("timestamp", TIMESTAMP)
+                .put("payload", JSONObject().put("conversation", summary))
+        }
+
+        val selected = detail(emptyList()).applyLive(page(updated("gpt-5.1", "high")))
+        assertEquals("gpt-5.1", selected.conversation.currentModel)
+        assertEquals("high", selected.conversation.currentReasoning)
+        assertEquals("idle", selected.conversation.status)
+        assertEquals(2, selected.history.turns.size)
+
+        val cleared = selected.applyLive(page(updated("gpt-5.1", null)))
+        assertEquals("gpt-5.1", cleared.conversation.currentModel)
+        assertEquals(null, cleared.conversation.currentReasoning)
+    }
+
     private fun detail(messages: List<RemoteMessage>): RemoteConversationDetail = RemoteConversationDetail(
         RemoteConversation(TARGET, "Synthetic history", "codex", "running", "created", false, TIMESTAMP),
         RemoteHistory(messages, listOf(

@@ -140,6 +140,8 @@ fn exercise_operations(fixture: &Fixture, mode: ConnectionMode) {
         json!({"operation":"conversation.recent","machineId":machine,"limit":5}),
         json!({"operation":"conversation.changes","machineId":machine,"projectId":project,"conversationId":conversation,"offset":0}),
         json!({"operation":"conversation.archive","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_archive"}),
+        json!({"operation":"conversation.updateModel","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_model","model":"gpt-5.1"}),
+        json!({"operation":"conversation.models.refresh","machineId":machine,"projectId":project,"conversationId":conversation}),
         json!({"operation":"attention.list","status":"open","limit":50}),
         json!({"operation":"attention.resolve","attentionId":"attn_fixture_item","actionId":"act_fixture_attention"}),
         json!({"operation":"approval.resolve","approvalId":"approval_fixture_item","actionId":"act_fixture_approve","decision":"accept"}),
@@ -236,6 +238,23 @@ fn exercise_operations(fixture: &Fixture, mode: ConnectionMode) {
             conversation.into(),
             "act_fixture_conversation_restore".into(),
         ),
+    );
+    assert_operation(
+        "conversation.updateModel",
+        Some("act_fixture_conversation_update_model"),
+        session.conversation_update_model(
+            machine.into(),
+            project.into(),
+            conversation.into(),
+            "act_fixture_conversation_update_model".into(),
+            Some("gpt-5.1".into()),
+            Some("high".into()),
+        ),
+    );
+    assert_operation(
+        "conversation.models.refresh",
+        None,
+        session.conversation_models_refresh(machine.into(), project.into(), conversation.into()),
     );
 
     let reason_action = format!("act_fixture_reason_{}", session.transport());

@@ -157,6 +157,94 @@ fn exercise_operations(fixture: &Fixture, mode: ConnectionMode) {
         }
     }
 
+    let assert_operation =
+        |operation: &str, action_id: Option<&str>, result: Result<String, MobileError>| {
+            let raw = result.unwrap_or_else(|error| panic!("{operation} was rejected: {error}"));
+            let data: Value = serde_json::from_str(&raw).expect("response data is JSON");
+            assert_eq!(data["fixtureOperation"], operation);
+            if let Some(action_id) = action_id {
+                assert_eq!(data["actionId"], action_id);
+            }
+        };
+    assert_operation(
+        "project.create",
+        Some("act_fixture_project_create"),
+        session.project_create(
+            machine.into(),
+            "act_fixture_project_create".into(),
+            "C:\\fixture".into(),
+            Some("Fixture".into()),
+        ),
+    );
+    assert_operation(
+        "project.remove",
+        Some("act_fixture_project_remove"),
+        session.project_remove(project.into(), "act_fixture_project_remove".into()),
+    );
+    assert_operation(
+        "conversation.list",
+        None,
+        session.conversation_list(
+            machine.into(),
+            project.into(),
+            50,
+            None,
+            Some("archived".into()),
+        ),
+    );
+    assert_operation(
+        "conversation.search",
+        None,
+        session.conversation_search(
+            project.into(),
+            "needle".into(),
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    );
+    assert_operation(
+        "conversation.pin",
+        Some("act_fixture_conversation_pin"),
+        session.conversation_pin(
+            machine.into(),
+            project.into(),
+            conversation.into(),
+            "act_fixture_conversation_pin".into(),
+            true,
+        ),
+    );
+    assert_operation(
+        "conversation.rename",
+        Some("act_fixture_conversation_rename"),
+        session.conversation_rename(
+            machine.into(),
+            project.into(),
+            conversation.into(),
+            "act_fixture_conversation_rename".into(),
+            "Renamed fixture".into(),
+        ),
+    );
+    assert_operation(
+        "conversation.restore",
+        Some("act_fixture_conversation_restore"),
+        session.conversation_restore(
+            machine.into(),
+            project.into(),
+            conversation.into(),
+            "act_fixture_conversation_restore".into(),
+        ),
+    );
+
+    let reason_action = format!("act_fixture_reason_{}", session.transport());
+    let error = session
+        .project_remove(project.into(), reason_action)
+        .expect_err("project removal conflict has a Host reason");
+    assert_eq!(error.error_code(), "conflict");
+    assert_eq!(error.reason(), Some("project_has_conversations"));
+
     let busy_action = format!("act_fixture_busy_archive_{}", session.transport());
     let error = session
         .request(

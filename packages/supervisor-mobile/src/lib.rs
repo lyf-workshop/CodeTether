@@ -19,6 +19,7 @@ pub enum MobileError {
     Failure {
         code: String,
         http_status: Option<u16>,
+        reason: Option<String>,
     },
 }
 
@@ -27,6 +28,7 @@ impl MobileError {
         Self::Failure {
             code: code.into(),
             http_status: None,
+            reason: None,
         }
     }
 
@@ -39,6 +41,12 @@ impl MobileError {
     pub fn http_status(&self) -> Option<u16> {
         match self {
             Self::Failure { http_status, .. } => *http_status,
+        }
+    }
+
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Failure { reason, .. } => reason.as_deref(),
         }
     }
 
@@ -139,6 +147,145 @@ impl SupervisorSession {
         }
         let operation: wire::Operation = serde_json::from_str(&operation_json)
             .map_err(|_| MobileError::code("invalid_request"))?;
+        self.request_operation(operation)
+    }
+
+    pub fn project_create(
+        &self,
+        machine_id: String,
+        action_id: String,
+        path: String,
+        name: Option<String>,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ProjectCreate {
+            machine_id,
+            action_id,
+            path,
+            name,
+        })
+    }
+
+    pub fn project_remove(
+        &self,
+        project_id: String,
+        action_id: String,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ProjectRemove {
+            project_id,
+            action_id,
+        })
+    }
+
+    pub fn conversation_list(
+        &self,
+        machine_id: String,
+        project_id: String,
+        limit: u8,
+        cursor: Option<String>,
+        archived: Option<String>,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationList {
+            machine_id,
+            project_id,
+            limit,
+            cursor,
+            archived,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn conversation_search(
+        &self,
+        project_id: String,
+        query: String,
+        archive: Option<String>,
+        provider: Option<String>,
+        status: Option<String>,
+        cursor: Option<String>,
+        limit: Option<u8>,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationSearch {
+            project_id,
+            query,
+            archive,
+            provider,
+            status,
+            cursor,
+            limit,
+        })
+    }
+
+    pub fn conversation_pin(
+        &self,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        pinned: bool,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationPin {
+            machine_id,
+            project_id,
+            conversation_id,
+            action_id,
+            pinned,
+        })
+    }
+
+    pub fn conversation_rename(
+        &self,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        title: String,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationRename {
+            machine_id,
+            project_id,
+            conversation_id,
+            action_id,
+            title,
+        })
+    }
+
+    pub fn conversation_restore(
+        &self,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+    ) -> Result<String, MobileError> {
+        self.request_operation(wire::Operation::ConversationRestore {
+            machine_id,
+            project_id,
+            conversation_id,
+            action_id,
+        })
+    }
+
+    pub fn disconnect(&self) {
+        self.closed.cancel();
+        if let Ok(mut slot) = self.wire.try_lock() {
+            slot.take();
+        }
+    }
+
+    pub fn transport(&self) -> String {
+        self.transport.into()
+    }
+
+    pub fn control(&self) -> String {
+        if self.control { "control" } else { "read" }.into()
+    }
+
+    pub fn expires_at(&self) -> String {
+        self.expires_at.clone()
+    }
+}
+
+impl SupervisorSession {
+    fn request_operation(&self, operation: wire::Operation) -> Result<String, MobileError> {
         operation.validate()?;
         if operation.requires_control() && !self.control {
             return Err(MobileError::code("operation_not_allowed"));
@@ -174,28 +321,6 @@ impl SupervisorSession {
             }
         })
     }
-
-    pub fn disconnect(&self) {
-        self.closed.cancel();
-        if let Ok(mut slot) = self.wire.try_lock() {
-            slot.take();
-        }
-    }
-
-    pub fn transport(&self) -> String {
-        self.transport.into()
-    }
-
-    pub fn control(&self) -> String {
-        if self.control { "control" } else { "read" }.into()
-    }
-
-    pub fn expires_at(&self) -> String {
-        self.expires_at.clone()
-    }
-}
-
-impl SupervisorSession {
     pub fn close(&self) {
         self.disconnect();
     }

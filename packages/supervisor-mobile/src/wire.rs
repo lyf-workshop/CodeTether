@@ -577,6 +577,7 @@ struct Response {
     ok: bool,
     data: Option<Value>,
     code: Option<String>,
+    reason: Option<String>,
     http_status: Option<u16>,
 }
 
@@ -600,39 +601,55 @@ impl Session {
         }
         send(&mut self.0, &request).await?;
         let response: Response = parse(receive(&mut self.0, budget).await?)?;
-        if response.kind != "supervisor.response"
-            || response.protocol_version != 1
-            || response.request_id != request_id
-            || response.ok == response.code.is_some()
-            || response.http_status.is_some_and(|status| {
-                !matches!(status, 409 | 422) || response.code.as_deref() != Some("unsupported")
-            })
-        {
+        response_outcome(response, &request_id)
+    }
+}
+
+fn response_outcome(
+    response: Response,
+    request_id: &str,
+) -> Result<Result<Value, MobileError>, MobileError> {
+    if response.kind != "supervisor.response"
+        || response.protocol_version != 1
+        || response.request_id != request_id
+        || response.ok == response.code.is_some()
+        || (response.ok && response.reason.is_some())
+        || response.http_status.is_some_and(|status| {
+            !matches!(status, 409 | 422) || response.code.as_deref() != Some("unsupported")
+        })
+    {
+        return Err(MobileError::protocol());
+    }
+    if let Some(code) = response.code {
+        if !matches!(
+            code.as_str(),
+            "invalid_request"
+                | "operation_not_allowed"
+                | "not_found"
+                | "conflict"
+                | "unsupported"
+                | "unavailable"
+                | "session_expired"
+                | "internal"
+        ) {
             return Err(MobileError::protocol());
         }
-        if let Some(code) = response.code {
-            if !matches!(
-                code.as_str(),
-                "invalid_request"
-                    | "operation_not_allowed"
-                    | "not_found"
-                    | "conflict"
-                    | "unsupported"
-                    | "unavailable"
-                    | "session_expired"
-                    | "internal"
-            ) {
-                return Err(MobileError::protocol());
-            }
-            let expired = code == "session_expired";
-            let error = MobileError::Failure {
-                code,
-                http_status: response.http_status,
-            };
-            return if expired { Err(error) } else { Ok(Err(error)) };
-        }
-        Ok(Ok(response.data.unwrap_or(Value::Null)))
+        let expired = code == "session_expired";
+        let error = MobileError::Failure {
+            code,
+            http_status: response.http_status,
+            reason: response.reason.or_else(|| {
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("reason"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            }),
+        };
+        return if expired { Err(error) } else { Ok(Err(error)) };
     }
+    Ok(Ok(response.data.unwrap_or(Value::Null)))
 }
 
 #[derive(Deserialize, Serialize)]
@@ -668,6 +685,19 @@ pub(crate) enum Operation {
         machine_id: String,
         project_id: String,
     },
+    #[serde(rename = "project.create")]
+    ProjectCreate {
+        machine_id: String,
+        action_id: String,
+        path: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    #[serde(rename = "project.remove")]
+    ProjectRemove {
+        project_id: String,
+        action_id: String,
+    },
     #[serde(rename = "conversation.list")]
     ConversationList {
         machine_id: String,
@@ -675,6 +705,23 @@ pub(crate) enum Operation {
         limit: u8,
         #[serde(skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        archived: Option<String>,
+    },
+    #[serde(rename = "conversation.search")]
+    ConversationSearch {
+        project_id: String,
+        query: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        archive: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        limit: Option<u8>,
     },
     #[serde(rename = "conversation.get")]
     ConversationGet {
@@ -743,6 +790,29 @@ pub(crate) enum Operation {
         conversation_id: String,
         action_id: String,
     },
+    #[serde(rename = "conversation.pin")]
+    ConversationPin {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        pinned: bool,
+    },
+    #[serde(rename = "conversation.rename")]
+    ConversationRename {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+        title: String,
+    },
+    #[serde(rename = "conversation.restore")]
+    ConversationRestore {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        action_id: String,
+    },
     #[serde(rename = "attention.list")]
     AttentionList {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -786,9 +856,14 @@ impl Operation {
     pub fn requires_control(&self) -> bool {
         matches!(
             self,
-            Self::ConversationCreate { .. }
+            Self::ProjectCreate { .. }
+                | Self::ProjectRemove { .. }
+                | Self::ConversationCreate { .. }
                 | Self::ConversationTurnStart { .. }
                 | Self::ConversationArchive { .. }
+                | Self::ConversationPin { .. }
+                | Self::ConversationRename { .. }
+                | Self::ConversationRestore { .. }
                 | Self::AttentionResolve { .. }
                 | Self::ApprovalResolve { .. }
                 | Self::TurnInterrupt { .. }
@@ -834,12 +909,67 @@ impl Operation {
                 machine_id,
                 project_id,
             } => machine(machine_id) && project(project_id),
+            ProjectCreate {
+                machine_id,
+                action_id,
+                path,
+                name,
+            } => {
+                machine(machine_id)
+                    && action(action_id)
+                    && (1..=4096).contains(&path.len())
+                    && name.as_ref().is_none_or(|value| {
+                        !value.trim().is_empty() && value.encode_utf16().count() <= 240
+                    })
+            }
+            ProjectRemove {
+                project_id,
+                action_id,
+            } => project(project_id) && action(action_id),
             ConversationList {
                 machine_id,
                 project_id,
                 limit,
                 cursor,
-            } => machine(machine_id) && project(project_id) && directory_page(limit, cursor),
+                archived,
+            } => {
+                machine(machine_id)
+                    && project(project_id)
+                    && directory_page(limit, cursor)
+                    && archived
+                        .as_deref()
+                        .is_none_or(|value| matches!(value, "active" | "archived" | "all"))
+            }
+            ConversationSearch {
+                project_id,
+                query,
+                archive,
+                provider,
+                status,
+                cursor,
+                limit,
+            } => {
+                project(project_id)
+                    && !query.trim().is_empty()
+                    && query.encode_utf16().count() <= 256
+                    && archive
+                        .as_deref()
+                        .is_none_or(|value| matches!(value, "active" | "archived" | "all"))
+                    && provider
+                        .as_deref()
+                        .is_none_or(|value| matches!(value, "codex" | "claude-code"))
+                    && status.as_deref().is_none_or(|value| {
+                        matches!(
+                            value,
+                            "idle" | "running" | "waiting" | "completed" | "failed"
+                        )
+                    })
+                    && cursor.as_ref().is_none_or(|value| {
+                        (20..=2048).contains(&value.len())
+                            && value.strip_prefix("csc_").is_some_and(is_url_token)
+                    })
+                    && limit.is_none_or(|value| (1..=100).contains(&value))
+            }
             ConversationGet {
                 machine_id,
                 project_id,
@@ -916,6 +1046,31 @@ impl Operation {
                 conversation_id,
                 action_id,
             } => scope(machine_id, project_id, conversation_id) && action(action_id),
+            ConversationPin {
+                machine_id,
+                project_id,
+                conversation_id,
+                action_id,
+                ..
+            }
+            | ConversationRestore {
+                machine_id,
+                project_id,
+                conversation_id,
+                action_id,
+            } => scope(machine_id, project_id, conversation_id) && action(action_id),
+            ConversationRename {
+                machine_id,
+                project_id,
+                conversation_id,
+                action_id,
+                title,
+            } => {
+                scope(machine_id, project_id, conversation_id)
+                    && action(action_id)
+                    && !title.trim().is_empty()
+                    && title.encode_utf16().count() <= 240
+            }
             AttentionList {
                 project_id,
                 attention_type,
@@ -975,4 +1130,172 @@ fn valid_live_cursor(cursor: &str) -> bool {
             && (sequence == "0" || !sequence.starts_with('0'))
             && sequence.bytes().all(|byte| byte.is_ascii_digit())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{response_outcome, Operation, Response};
+    use serde_json::{json, Value};
+
+    const MACHINE: &str = "machine_1234567890abcdef";
+    const PROJECT: &str = "proj_1234567890abcdef";
+    const CONVERSATION: &str = "conv_1234567890abcdef";
+    const ACTION: &str = "act_fixture_action";
+
+    #[test]
+    fn b4a_operations_validate_their_scopes_and_control_permissions() {
+        let requests = [
+            (
+                json!({"operation":"project.create","machineId":MACHINE,"actionId":ACTION,"path":"C:\\work","name":"Work"}),
+                true,
+            ),
+            (
+                json!({"operation":"project.remove","projectId":PROJECT,"actionId":ACTION}),
+                true,
+            ),
+            (
+                json!({"operation":"conversation.list","machineId":MACHINE,"projectId":PROJECT,"limit":50}),
+                false,
+            ),
+            (
+                json!({"operation":"conversation.list","machineId":MACHINE,"projectId":PROJECT,"limit":50,"archived":"archived"}),
+                false,
+            ),
+            (
+                json!({"operation":"conversation.search","projectId":PROJECT,"query":"needle"}),
+                false,
+            ),
+            (
+                json!({"operation":"conversation.pin","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"pinned":true}),
+                true,
+            ),
+            (
+                json!({"operation":"conversation.rename","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"title":"New title"}),
+                true,
+            ),
+            (
+                json!({"operation":"conversation.restore","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION}),
+                true,
+            ),
+        ];
+        for (request, control) in requests {
+            let operation: Operation = serde_json::from_value(request).expect("operation shape");
+            operation.validate().expect("valid operation");
+            assert_eq!(operation.requires_control(), control);
+        }
+    }
+
+    #[test]
+    fn b4a_operations_reject_bad_bounds_and_filters() {
+        let invalid = [
+            json!({"operation":"project.create","machineId":MACHINE,"actionId":ACTION,"path":"x".repeat(4097)}),
+            json!({"operation":"conversation.list","machineId":MACHINE,"projectId":PROJECT,"limit":50,"archived":"active_only"}),
+            json!({"operation":"conversation.search","projectId":PROJECT,"query":"x".repeat(257)}),
+            json!({"operation":"conversation.search","projectId":PROJECT,"query":"needle","cursor":"bad"}),
+            json!({"operation":"conversation.search","projectId":PROJECT,"query":"needle","limit":101}),
+            json!({"operation":"conversation.rename","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":ACTION,"title":"x".repeat(241)}),
+            json!({"operation":"conversation.restore","machineId":MACHINE,"projectId":PROJECT,"conversationId":CONVERSATION,"actionId":"bad"}),
+        ];
+        for request in invalid {
+            match serde_json::from_value::<Operation>(request) {
+                Ok(operation) => assert!(operation.validate().is_err()),
+                Err(_) => {}
+            }
+        }
+    }
+
+    #[test]
+    fn omitted_archive_filter_uses_the_hosts_active_default() {
+        let request: Operation = serde_json::from_value(json!({
+            "operation":"conversation.list",
+            "machineId":MACHINE,
+            "projectId":PROJECT,
+            "limit":50
+        }))
+        .expect("list request without an archive filter");
+        let value = serde_json::to_value(request).expect("serialize list request");
+        assert!(value.get("archived").is_none());
+
+        let request: Operation = serde_json::from_value(json!({
+            "operation":"conversation.list",
+            "machineId":MACHINE,
+            "projectId":PROJECT,
+            "limit":50,
+            "archived":"all"
+        }))
+        .expect("explicit all request");
+        let value = serde_json::to_value(request).expect("serialize list request");
+        assert_eq!(value["archived"], "all");
+    }
+
+    #[test]
+    fn failure_reason_is_exposed_from_the_response_envelope() {
+        let response: Response = serde_json::from_value(json!({
+            "type":"supervisor.response",
+            "protocolVersion":1,
+            "requestId":"sreq_fixture",
+            "ok":false,
+            "code":"conflict",
+            "reason":"project_has_conversations"
+        }))
+        .expect("failure response");
+        let error = response_outcome(response, "sreq_fixture")
+            .expect("valid frame")
+            .expect_err("failure result");
+        assert_eq!(error.error_code(), "conflict");
+        assert_eq!(error.reason(), Some("project_has_conversations"));
+
+        let data_only: Response = serde_json::from_value(json!({
+            "type":"supervisor.response",
+            "protocolVersion":1,
+            "requestId":"sreq_fixture",
+            "ok":false,
+            "code":"conflict",
+            "data":{"reason":"legacy_data_reason"}
+        }))
+        .expect("failure response with legacy data");
+        let error = response_outcome(data_only, "sreq_fixture")
+            .expect("valid frame")
+            .expect_err("failure result");
+        assert_eq!(error.reason(), Some("legacy_data_reason"));
+
+        let both: Response = serde_json::from_value(json!({
+            "type":"supervisor.response",
+            "protocolVersion":1,
+            "requestId":"sreq_fixture",
+            "ok":false,
+            "code":"conflict",
+            "reason":"project_has_conversations",
+            "data":{"reason":"legacy_data_reason"}
+        }))
+        .expect("failure response with both reason locations");
+        let error = response_outcome(both, "sreq_fixture")
+            .expect("valid frame")
+            .expect_err("failure result");
+        assert_eq!(error.reason(), Some("project_has_conversations"));
+
+        let response: Response = serde_json::from_value(json!({
+            "type":"supervisor.response",
+            "protocolVersion":1,
+            "requestId":"sreq_fixture",
+            "ok":true,
+            "data":{"reason":"ordinary_data"}
+        }))
+        .expect("success response");
+        let data: Value = response_outcome(response, "sreq_fixture")
+            .expect("valid frame")
+            .expect("success result");
+        assert_eq!(data["reason"], "ordinary_data");
+
+        let invalid_success: Response = serde_json::from_value(json!({
+            "type":"supervisor.response",
+            "protocolVersion":1,
+            "requestId":"sreq_fixture",
+            "ok":true,
+            "reason":"project_has_conversations",
+            "data":{}
+        }))
+        .expect("syntactically valid response");
+        assert!(response_outcome(invalid_success, "sreq_fixture").is_err());
+    }
 }

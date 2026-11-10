@@ -43,6 +43,27 @@ data class RemoteProject(
     val conversationCount: Int = 0,
 )
 
+data class RemoteProjectLocation(
+    val projectId: String,
+    val machineId: String,
+    val rootPath: String,
+    val availability: String,
+)
+
+data class RemoteProjectProjection(
+    val omittedLocationCount: Int,
+    val completeSizeEstimate: Int,
+)
+
+/** A projected result contains only the requested Machine's location. */
+data class RemoteProjectCreateResult(
+    val projectId: String,
+    val name: String,
+    val created: Boolean,
+    val locations: List<RemoteProjectLocation>,
+    val projection: RemoteProjectProjection?,
+)
+
 data class ConversationTarget(val machineId: String, val projectId: String, val conversationId: String)
 
 data class RemoteConversation(
@@ -54,6 +75,28 @@ data class RemoteConversation(
     val archived: Boolean,
     val lastActivityAt: String,
     val resumable: Boolean = true,
+)
+
+data class RemoteConversationMetadata(
+    val target: ConversationTarget,
+    val title: String,
+    val provider: String,
+    val status: String,
+    val pinnedAt: String?,
+    val archivedAt: String?,
+    val lastActivityAt: String,
+)
+
+data class RemoteSearchMatch(
+    val conversation: RemoteConversationMetadata,
+    val matchedField: String,
+    val matchPreview: String?,
+    val matchedTurnId: String?,
+)
+
+data class RemoteSearchPage(
+    val results: List<RemoteSearchMatch>,
+    val nextCursor: String?,
 )
 
 data class RemoteAttention(
@@ -136,11 +179,23 @@ class RemoteFailure(
     val httpStatus: Int? = null,
     val removed: Boolean = false,
     val uncertainActionId: String? = null,
-) : Exception(remoteFailureMessage(code, httpStatus, removed, uncertainActionId))
+    val reason: String? = null,
+) : Exception(remoteFailureMessage(code, httpStatus, removed, uncertainActionId, reason))
 
-private fun remoteFailureMessage(code: String, status: Int?, removed: Boolean, uncertainActionId: String?): String {
+private fun remoteFailureMessage(code: String, status: Int?, removed: Boolean, uncertainActionId: String?, reason: String?): String {
     if (removed) return "这台电脑已移除了此设备。要继续使用，请在电脑上生成新的配对码。"
     if (uncertainActionId != null) return "暂时无法确认这次操作的结果。请重新打开会话查看状态。"
+    when (reason) {
+        "project_has_conversations" -> return "项目中还有会话，先处理这些会话后再移除项目。"
+        "project_location_has_conversations" -> return "此位置还有会话，先处理这些会话后再移除位置。"
+        "project_location_invalid" -> return "项目文件夹路径无效，请检查路径后重试。"
+        "project_location_missing" -> return "找不到项目文件夹，请确认它仍在这台电脑上。"
+        "project_location_inaccessible", "project_location_unavailable" -> return "目前无法访问项目文件夹，请检查这台电脑上的文件夹。"
+        "project_location_conflict" -> return "此文件夹已属于另一个项目。"
+        "project_unavailable" -> return "项目目前不可用，请检查这台电脑上的项目文件夹。"
+        "conversation_archived" -> return "会话已归档，请先恢复后再操作。"
+        "machine_unreachable" -> return "这台电脑目前离线，请重新连接后重试。"
+    }
     if (code == "archive_busy") return "会话正在运行或等待批准，工作结束后才能归档。"
     if (status == 409 || code == "conflict") return "当前操作与会话状态冲突。请等正在运行的工作结束后再试。"
     return when (code) {

@@ -109,11 +109,84 @@ class RemoteSupervisor(private val account: TabletAccount) {
         archived: Boolean = false,
         status: String? = null,
     ): List<RemoteConversation> = read { session ->
-        pages(session, "conversation.list", "conversations", "machineId" to project.machineId, "projectId" to project.id) {
+        pages(session, "conversation.list", "conversations", "machineId" to project.machineId,
+            "projectId" to project.id, "archived" to if (archived) "archived" else "active") {
             it.conversation().also { conversation ->
                 if (conversation.target.machineId != project.machineId || conversation.target.projectId != project.id) invalidResponse()
             }
         }.filter { it.archived == archived && (status == null || it.status == status) }
+    }
+
+    suspend fun createProject(
+        machineId: String,
+        path: String,
+        name: String? = null,
+        actionId: String = newActionId(),
+    ): RemoteProjectCreateResult = lock.withLock {
+        val session = requireControl()
+        b4aMutation(session, actionId, { it.projectCreate(machineId, actionId, path, name) }) {
+            it.createdProject(machineId)
+        }
+    }
+
+    suspend fun removeProject(projectId: String, actionId: String = newActionId()): Unit = lock.withLock {
+        val session = requireControl()
+        b4aMutation(session, actionId, { it.projectRemove(projectId, actionId) }) {
+            if (it.text("projectId") != projectId) invalidResponse()
+        }
+    }
+
+    suspend fun searchProjectConversations(
+        projectId: String,
+        query: String,
+        archive: String = "active",
+        provider: String? = null,
+        status: String? = null,
+        cursor: String? = null,
+        limit: Int = 25,
+    ): RemoteSearchPage = read { session ->
+        if (limit !in 1..100) throw RemoteFailure("invalid_request")
+        nativeRequest(session) {
+            it.conversationSearch(projectId, query, archive, provider, status, cursor, limit.toUByte())
+        }.searchPage(projectId)
+    }
+
+    suspend fun pinConversation(
+        target: ConversationTarget,
+        pinned: Boolean,
+        actionId: String = newActionId(),
+    ): RemoteConversationMetadata = lock.withLock {
+        val session = requireControl()
+        b4aMutation(session, actionId, {
+            it.conversationPin(target.machineId, target.projectId, target.conversationId, actionId, pinned)
+        }) { data ->
+            data.obj("conversation").conversationMetadata().also { if (it.target != target) invalidResponse() }
+        }
+    }
+
+    suspend fun renameConversation(
+        target: ConversationTarget,
+        title: String,
+        actionId: String = newActionId(),
+    ): RemoteConversationMetadata = lock.withLock {
+        val session = requireControl()
+        b4aMutation(session, actionId, {
+            it.conversationRename(target.machineId, target.projectId, target.conversationId, actionId, title)
+        }) { data ->
+            data.obj("conversation").conversationMetadata().also { if (it.target != target) invalidResponse() }
+        }
+    }
+
+    suspend fun restoreConversation(
+        target: ConversationTarget,
+        actionId: String = newActionId(),
+    ): RemoteConversationMetadata = lock.withLock {
+        val session = requireControl()
+        b4aMutation(session, actionId, {
+            it.conversationRestore(target.machineId, target.projectId, target.conversationId, actionId)
+        }) { data ->
+            data.obj("conversation").conversationMetadata().also { if (it.target != target) invalidResponse() }
+        }
     }
 
     suspend fun project(project: RemoteProject): RemoteProject = read { session ->
@@ -418,15 +491,23 @@ class RemoteSupervisor(private val account: TabletAccount) {
     }
 
     private suspend fun request(session: Attached, operation: String, vararg fields: Pair<String, Any?>): JSONObject {
+        val input = json("operation" to operation, *fields).toString()
+        return nativeRequest(session) { it.request(input) }
+    }
+
+    private suspend fun nativeRequest(
+        session: Attached,
+        hasProtocolVersion: Boolean = true,
+        call: (SupervisorSession) -> String,
+    ): JSONObject {
         currentCoroutineContext().ensureActive()
         if (!session.usable) throw RemoteFailure("connection_closed")
-        val input = json("operation" to operation, *fields).toString()
         val output = suspendCancellableCoroutine<String> { continuation ->
             continuation.invokeOnCancellation { session.cancelWire() }
             Dispatchers.IO.dispatch(continuation.context, Runnable {
                 if (!continuation.isActive) return@Runnable
                 val result = try {
-                    session.native.request(input)
+                    call(session.native)
                 } catch (failure: MobileException.Failure) {
                     continuation.resumeWithException(failure.asRemoteFailure())
                     return@Runnable
@@ -441,10 +522,25 @@ class RemoteSupervisor(private val account: TabletAccount) {
             })
         }
         return try {
-            JSONObject(output).protocol()
+            JSONObject(output).let { if (hasProtocolVersion) it.protocol() else it }
         } catch (_: JSONException) {
             invalidResponse()
         }
+    }
+
+    private suspend fun <T> b4aMutation(
+        session: Attached,
+        actionId: String,
+        call: (SupervisorSession) -> String,
+        decode: (JSONObject) -> T,
+    ): T = try {
+        decode(nativeRequest(session, hasProtocolVersion = false, call = call))
+    } catch (failure: RemoteFailure) {
+        if (failure.code in reconnectErrors) releaseConnection()
+        if (failure.code in uncertainErrors) {
+            throw RemoteFailure(failure.code, failure.httpStatus, uncertainActionId = actionId, reason = failure.reason)
+        }
+        throw failure
     }
 
     private suspend fun mutate(session: Attached, operation: String, vararg fields: Pair<String, Any?>): JSONObject {
@@ -453,7 +549,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
             request(session, operation, *fields, "actionId" to actionId)
         } catch (failure: RemoteFailure) {
             if (failure.code in reconnectErrors) releaseConnection()
-            if (failure.code in uncertainErrors) throw RemoteFailure(failure.code, failure.httpStatus, uncertainActionId = actionId)
+            if (failure.code in uncertainErrors) throw RemoteFailure(failure.code, failure.httpStatus, uncertainActionId = actionId, reason = failure.reason)
             throw failure
         }
         if (result.optionalText("actionId") != actionId) throw RemoteFailure("invalid_response", uncertainActionId = actionId)
@@ -481,7 +577,7 @@ private fun textInput(text: String): JSONObject {
     return json("type" to "text", "text" to text)
 }
 
-private fun MobileException.Failure.asRemoteFailure(): RemoteFailure = RemoteFailure(code, httpStatus?.toInt())
+private fun MobileException.Failure.asRemoteFailure(): RemoteFailure = RemoteFailure(code, httpStatus?.toInt(), reason = reason)
 
 private fun AccountFailure.asRemoteFailure(): RemoteFailure = RemoteFailure(when (reason) {
     AccountFailureReason.SIGN_IN_REQUIRED -> "sign_in_required"

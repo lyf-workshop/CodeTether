@@ -17,7 +17,7 @@ class DeviceSignerBoundaryTest {
             GeneralSecurityException("synthetic private detail"),
             IllegalStateException("synthetic private detail"),
             LinkageError("synthetic private detail"),
-            MobileException.Failure("synthetic private detail", null),
+            MobileException.Failure("synthetic private detail", null, null),
         )) {
             val signer = DeviceSignerBoundary({ true }) { throw failure }
             val converted = assertThrows(MobileException.Failure::class.java) { signer.signDer(byteArrayOf(1)) }

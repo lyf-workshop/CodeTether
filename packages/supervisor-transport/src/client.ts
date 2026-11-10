@@ -20,6 +20,7 @@ import {
   signedSupervisorTransportDescriptorSchema,
   signedSupervisorTransportSchema,
   supervisorChallengeSchema,
+  supervisorFailureDataSchema,
   supervisorResponseSchema,
   supervisorServerHandshakeSchema,
   type SignedSupervisorGrant,
@@ -204,11 +205,21 @@ export class ConnectedSupervisorSession {
   async listConversations(
     machineId: string,
     projectId: string,
-    page: { readonly limit: number; readonly cursor?: string },
+    page: {
+      readonly limit: number
+      readonly cursor?: string
+      readonly archived?: 'active' | 'archived' | 'all'
+    },
     signal?: AbortSignal,
   ): Promise<unknown> {
     return await this.#request(
-      { operation: 'conversation.list', machineId, projectId, ...page },
+      {
+        operation: 'conversation.list',
+        machineId,
+        projectId,
+        ...page,
+        archived: page.archived ?? 'all',
+      },
       signal,
     )
   }
@@ -329,6 +340,13 @@ export class ConnectedSupervisorSession {
     return await this.#request(input, signal)
   }
 
+  async executeOperation(
+    input: SupervisorB1Operation,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(input, signal)
+  }
+
   close(): void {
     if (this.#closed) return
     this.#closed = true
@@ -379,7 +397,12 @@ export class ConnectedSupervisorSession {
       throw new SupervisorClientError('protocol_error')
     }
     if (!response.ok) {
-      throw new SupervisorClientError(response.code!, response.httpStatus)
+      const failureData = supervisorFailureDataSchema.safeParse(response.data)
+      throw new SupervisorClientError(
+        response.code!,
+        response.httpStatus,
+        failureData.success ? failureData.data.reason : undefined,
+      )
     }
     return response.data
   }
@@ -389,6 +412,7 @@ export class SupervisorClientError extends Error {
   constructor(
     readonly code: string,
     readonly httpStatus?: 409 | 422,
+    readonly reason?: string,
   ) {
     super(code)
     this.name = 'SupervisorClientError'

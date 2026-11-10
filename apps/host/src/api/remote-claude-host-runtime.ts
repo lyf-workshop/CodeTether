@@ -102,6 +102,8 @@ export interface RemoteClaudeRuntimeSession {
     readonly actionId: string
     readonly turnId: string
     readonly prompt: string
+    readonly model?: 'opus' | 'sonnet' | 'haiku'
+    readonly reasoning?: RemoteClaudeEffort | null
   }): Promise<RemoteClaudeRuntimeTurn>
   close(): Promise<void> | void
 }
@@ -125,6 +127,8 @@ export interface RemoteClaudeHostRuntimeOptions {
   readonly providerInstallationId?: ProviderInstallationId
   readonly installationRevision?: ProviderInstallationRevision
   readonly opener: RemoteClaudeSessionOpener
+  /** Current Node discovery determines whether per-Turn settings are admitted. */
+  readonly supportsTurnOverrides?: () => boolean
   readonly now?: () => Date
 }
 
@@ -137,6 +141,7 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
   readonly installation
   readonly #machineId: MachineId
   readonly #opener: RemoteClaudeSessionOpener
+  readonly #supportsTurnOverrides: () => boolean
   readonly #now: () => Date
   readonly #sessions = new Map<string, RemoteClaudeRuntimeSession>()
   readonly #eventListeners = new Set<(event: AgentEvent) => void>()
@@ -167,6 +172,7 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
             installationRevision: options.installationRevision,
           }
     this.#opener = options.opener
+    this.#supportsTurnOverrides = options.supportsTurnOverrides ?? (() => false)
     this.#now = options.now ?? (() => new Date())
   }
 
@@ -202,7 +208,7 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     } & ProviderRuntimeContext,
   ): Promise<ProviderConversationResult> {
     this.#assertOpen()
-    assertModelUnsupported(options.model)
+    parseRemoteClaudeModel(options.model, this.#supportsTurnOverrides())
     const effort = parseRemoteClaudeEffort(options.reasoning)
     const identity = requiredContext(options, this.#machineId)
     return await this.#openAndRetainSession(
@@ -230,7 +236,7 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     } & ProviderRuntimeContext,
   ): Promise<ProviderConversationResult> {
     this.#assertOpen()
-    assertModelUnsupported(options.model)
+    parseRemoteClaudeModel(options.model, this.#supportsTurnOverrides())
     const effort = parseRemoteClaudeEffort(options.reasoning)
     const identity = requiredContext(options, this.#machineId)
     const decoded = decodeRemoteProviderSessionId(
@@ -244,7 +250,7 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
       } else {
         if (
           existing.conversationId !== identity.conversationId ||
-          existing.effort !== effort
+          (!this.#supportsTurnOverrides() && existing.effort !== effort)
         ) {
           throw new ProviderConversationUnavailableError(
             this.provider,
@@ -292,14 +298,15 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
     } & ProviderRuntimeContext,
   ): Promise<ProviderTurnResult> {
     this.#assertOpen()
-    assertModelUnsupported(options.model)
+    const supportsTurnOverrides = this.#supportsTurnOverrides()
+    const model = parseRemoteClaudeModel(options.model, supportsTurnOverrides)
     const effort = parseRemoteClaudeEffort(options.reasoning)
     const identity = requiredTurnContext(options, this.#machineId)
     const session = this.#sessions.get(options.providerThreadId)
     if (
       session === undefined ||
       session.conversationId !== identity.conversationId ||
-      session.effort !== effort
+      (!supportsTurnOverrides && session.effort !== effort)
     ) {
       throw new ProviderConversationUnavailableError(
         this.provider,
@@ -314,6 +321,12 @@ export class RemoteClaudeHostRuntime implements AgentHostRuntime {
       actionId: identity.actionId,
       turnId: identity.turnId,
       prompt: options.input,
+      ...(supportsTurnOverrides
+        ? {
+            ...(model === undefined ? {} : { model }),
+            reasoning: effort ?? null,
+          }
+        : {}),
     })
     const pump = this.#pumpTurn(turn, options.providerThreadId, providerTurnId)
     this.#turnPumps.add(pump)
@@ -847,10 +860,18 @@ function remoteProviderTurnId(machineId: MachineId, turnId: string): string {
   ).toString('base64url')}`
 }
 
-function assertModelUnsupported(model: string | undefined): void {
-  if (model !== undefined) {
+function parseRemoteClaudeModel(
+  model: string | undefined,
+  supportsTurnOverrides: boolean,
+): 'opus' | 'sonnet' | 'haiku' | undefined {
+  if (model === undefined) return undefined
+  if (!supportsTurnOverrides) {
     throw new TypeError('Remote Claude Code model selection is unavailable')
   }
+  if (!['opus', 'sonnet', 'haiku'].includes(model)) {
+    throw new TypeError('Remote Claude Code model is unsupported')
+  }
+  return model as 'opus' | 'sonnet' | 'haiku'
 }
 
 function parseRemoteClaudeEffort(

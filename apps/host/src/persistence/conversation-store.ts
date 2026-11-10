@@ -5637,7 +5637,10 @@ function remoteProviderExecutionFoundation(
     return (
       enabled.has('streaming') &&
       [...enabled].every(
-        (capability) => capability === 'streaming' || capability === 'resume',
+        (capability) =>
+          capability === 'streaming' ||
+          capability === 'resume' ||
+          capability === 'modelSelection',
       )
     )
   }
@@ -5648,6 +5651,7 @@ function remoteProviderExecutionFoundation(
       (capability) =>
         required.includes(capability as (typeof required)[number]) ||
         capability === 'resume' ||
+        capability === 'modelSelection' ||
         capability === 'reasoningControl',
     ) &&
     (descriptor.capabilities.reasoningControl

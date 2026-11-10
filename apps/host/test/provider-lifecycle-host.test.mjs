@@ -1591,6 +1591,148 @@ test('remote model controls fail closed before Node session control exists', asy
   assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
 })
 
+test('remote Codex model controls use the live Node catalog and reach the next Turn', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t, {
+    modelSelection: true,
+  })
+  const created = await fixture.service.createConversation({
+    actionId: 'act_d2_remote_model_create',
+    projectId: fixture.projectId,
+    machineId: remoteMachineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  const refreshed = await fixture.service.refreshConversationModels(conversationId)
+  assert.deepEqual(
+    refreshed.provider.availableModels.map(({ id }) => id),
+    ['gpt-primary', 'gpt-secondary'],
+  )
+  assert.equal(fixture.coordinator.modelListCalls.length, 1)
+
+  const beforeInvalid = fixture.persistence.getConversation(conversationId)
+  await assert.rejects(
+    fixture.service.updateConversationModel(conversationId, {
+      actionId: 'act_d2_remote_model_invalid',
+      model: 'gpt-absent',
+    }),
+    (error) =>
+      error instanceof HostServiceError && error.code === 'invalid_request',
+  )
+  assert.deepEqual(fixture.persistence.getConversation(conversationId), beforeInvalid)
+  await assert.rejects(
+    fixture.service.updateConversationModel(conversationId, {
+      actionId: 'act_d2_remote_reasoning_unsupported',
+      reasoning: 'high',
+    }),
+    (error) =>
+      error instanceof HostServiceError && error.code === 'operation_not_allowed',
+  )
+  assert.deepEqual(fixture.persistence.getConversation(conversationId), beforeInvalid)
+
+  const selected = await fixture.service.updateConversationModel(conversationId, {
+    actionId: 'act_d2_remote_model_primary',
+    model: 'gpt-primary',
+  })
+  assert.equal(selected.data.conversation.currentModel, 'gpt-primary')
+  assert.equal(selected.data.conversation.currentReasoning, undefined)
+  const first = await fixture.service.startTurn(conversationId, {
+    actionId: 'act_d2_remote_model_first_turn',
+    input: { type: 'text', text: 'Use the selected remote model.' },
+  })
+  await waitFor(
+    () => fixture.persistence.getTurn(first.data.turn.turnId)?.status === 'completed',
+    'selected remote Turn completion',
+  )
+  assert.equal(fixture.coordinator.remoteTurnCalls[0].model, 'gpt-primary')
+  assert.equal(fixture.coordinator.remoteTurnCalls[0].reasoning, undefined)
+  const firstHistory = fixture.persistence.getTurn(first.data.turn.turnId)
+
+  const changed = await fixture.service.updateConversationModel(conversationId, {
+    actionId: 'act_d2_remote_model_secondary',
+    model: 'gpt-secondary',
+  })
+  assert.equal(changed.data.conversation.currentModel, 'gpt-secondary')
+  assert.equal(changed.data.conversation.currentReasoning, undefined)
+  assert.deepEqual(fixture.persistence.getTurn(first.data.turn.turnId), firstHistory)
+  const second = await fixture.service.startTurn(conversationId, {
+    actionId: 'act_d2_remote_model_second_turn',
+    input: { type: 'text', text: 'Use the next remote model.' },
+  })
+  await waitFor(
+    () => fixture.persistence.getTurn(second.data.turn.turnId)?.status === 'completed',
+    'next remote Turn completion',
+  )
+  assert.equal(fixture.coordinator.remoteTurnCalls[1].model, 'gpt-secondary')
+  assert.equal(Object.hasOwn(fixture.coordinator.remoteTurnCalls[1], 'reasoning'), false)
+})
+
+test('remote model update rejects a Turn admitted while catalog refresh waits', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t, {
+    modelSelection: true,
+  })
+  const created = await fixture.service.createConversation({
+    actionId: 'act_d2_remote_model_race_create',
+    projectId: fixture.projectId,
+    machineId: remoteMachineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  fixture.coordinator.modelListGate = deferred()
+  fixture.coordinator.turnCompletionGate = deferred()
+  const pendingUpdate = fixture.service.updateConversationModel(conversationId, {
+    actionId: 'act_d2_remote_model_race_update',
+    model: 'gpt-primary',
+  })
+  await waitFor(
+    () => fixture.coordinator.modelListCalls.length === 1,
+    'pending remote catalog read',
+  )
+  const started = await fixture.service.startTurn(conversationId, {
+    actionId: 'act_d2_remote_model_race_turn',
+    input: { type: 'text', text: 'Run while catalog is pending.' },
+  })
+  fixture.coordinator.modelListGate.resolve()
+  await assert.rejects(
+    pendingUpdate,
+    (error) => error instanceof HostServiceError && error.code === 'conflict',
+  )
+  assert.equal(fixture.persistence.getConversation(conversationId).model, undefined)
+  assert.equal(fixture.coordinator.remoteTurnCalls[0].model, undefined)
+  fixture.coordinator.turnCompletionGate.resolve()
+  await waitFor(
+    () => fixture.persistence.getTurn(started.data.turn.turnId)?.status === 'completed',
+    'racing remote Turn completion',
+  )
+})
+
+test('remote catalog failure leaves the selected model and history untouched', async (t) => {
+  const fixture = await createRemoteUninitializedFixture(t, {
+    modelSelection: true,
+  })
+  const created = await fixture.service.createConversation({
+    actionId: 'act_d2_remote_catalog_failure_create',
+    projectId: fixture.projectId,
+    machineId: remoteMachineId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  const before = fixture.persistence.getConversation(conversationId)
+  fixture.coordinator.modelListError = new Error('Node model list failed')
+  await assert.rejects(
+    fixture.service.updateConversationModel(conversationId, {
+      actionId: 'act_d2_remote_catalog_failure_update',
+      model: 'gpt-primary',
+    }),
+    (error) => error instanceof HostServiceError,
+  )
+  await assert.rejects(
+    fixture.service.refreshConversationModels(conversationId),
+    (error) => error instanceof HostServiceError,
+  )
+  assert.deepEqual(fixture.persistence.getConversation(conversationId), before)
+  assert.equal(fixture.coordinator.remoteTurnCalls.length, 0)
+})
+
 test('an offline remote Machine presents persisted backend readiness as last-known with its original timestamp', async (t) => {
   const fixture = await createRemoteUninitializedFixture(t)
   const current = await fixture.service.getMachine(remoteMachineId)
@@ -2787,7 +2929,10 @@ async function createNonDurableDoctorFixture(t) {
   return { service, projectId: project.projectId }
 }
 
-async function createRemoteUninitializedFixture(t) {
+async function createRemoteUninitializedFixture(
+  t,
+  { modelSelection = false } = {},
+) {
   const directory = await mkdtemp(
     join(tmpdir(), 'codetether-phase8b-host-remote-'),
   )
@@ -2850,7 +2995,7 @@ async function createRemoteUninitializedFixture(t) {
   })
   persistence.recordRemoteProviderObservation({
     machineId: remoteMachineId,
-    providers: remoteProviderDescriptors(),
+    providers: remoteProviderDescriptors({ modelSelection }),
     observedAt,
   })
   persistence.recordProviderLifecycle({
@@ -3305,6 +3450,14 @@ class InstallationOwnedRuntime {
 class RemoteFreshSessionCoordinator {
   openCodexCalls = []
   remoteTurnCalls = []
+  modelListCalls = []
+  models = [
+    { id: 'gpt-primary', name: 'GPT Primary', reasoningOptions: ['medium', 'high'] },
+    { id: 'gpt-secondary', name: 'GPT Secondary', reasoningOptions: ['low'] },
+  ]
+  modelListGate
+  modelListError
+  turnCompletionGate
   online = true
   providerObservedAt = observedAt
   #remoteRoot
@@ -3345,6 +3498,18 @@ class RemoteFreshSessionCoordinator {
     )
   }
 
+  async listRemoteProviderModels(machine, trust, input) {
+    assert.equal(machine.machineId, remoteMachineId)
+    assert.equal(trust.machineId, remoteMachineId)
+    assert.equal(input.provider, 'codex')
+    assert.equal(input.providerInstallationId, remoteInstallationId)
+    assert.equal(input.expectedInstallationRevision, remoteRevision)
+    this.modelListCalls.push(input)
+    if (this.modelListGate) await this.modelListGate.promise
+    if (this.modelListError) throw this.modelListError
+    return this.models
+  }
+
   async validateProjectLocation(machine, trust, path) {
     assert.equal(machine.machineId, remoteMachineId)
     assert.equal(trust.machineId, remoteMachineId)
@@ -3371,10 +3536,12 @@ class RemoteFreshSessionCoordinator {
       },
       startTurn: async (turn) => {
         this.remoteTurnCalls.push(turn)
+        const completionGate = this.turnCompletionGate
         return {
           async *events() {
             yield { type: 'message.delta', text: 'fresh', sequence: 1 }
             yield { type: 'message.completed', sequence: 2 }
+            if (completionGate) await completionGate.promise
             yield { type: 'turn.completed', sequence: 3 }
           },
         }
@@ -3388,7 +3555,7 @@ class RemoteFreshSessionCoordinator {
   async close() {}
 }
 
-function remoteProviderDescriptors() {
+function remoteProviderDescriptors({ modelSelection = false } = {}) {
   const unavailableCapabilities = {
     streaming: false,
     resume: false,
@@ -3413,6 +3580,7 @@ function remoteProviderDescriptors() {
         ...unavailableCapabilities,
         streaming: true,
         resume: false,
+        modelSelection,
       },
     },
     {

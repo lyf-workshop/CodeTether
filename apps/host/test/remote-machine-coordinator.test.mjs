@@ -45,6 +45,7 @@ async function fixture(options = {}) {
   let providerSessionTranscriptCalls = 0
   let openCodexCalls = 0
   let openClaudeCalls = 0
+  let modelListCalls = 0
   let closedCodexSessions = 0
   let activeDiscoveries = 0
   let maximumActiveDiscoveries = 0
@@ -267,6 +268,26 @@ async function fixture(options = {}) {
           },
         }
       : {}),
+    ...(options.modelListEnabled === true
+      ? {
+          async listRemoteProviderModels(input) {
+            modelListCalls += 1
+            if (options.modelListHandler !== undefined) {
+              return await options.modelListHandler(input)
+            }
+            if (options.modelListError !== undefined) {
+              throw options.modelListError
+            }
+            return [
+              {
+                id: 'gpt-remote',
+                name: 'GPT Remote',
+                reasoningOptions: ['medium'],
+              },
+            ]
+          },
+        }
+      : {}),
     ...(options.claudeExecutionEnabled === true
       ? {
           async openClaudeSession(input) {
@@ -338,6 +359,9 @@ async function fixture(options = {}) {
       },
       get openClaude() {
         return openClaudeCalls
+      },
+      get modelList() {
+        return modelListCalls
       },
       get maximumActiveDiscoveries() {
         return maximumActiveDiscoveries
@@ -1623,6 +1647,90 @@ test('an authenticated Provider rejection is not retried across healthy endpoint
       after.endpoints.every((endpoint) => endpoint.lastFailureAt === undefined),
       true,
     )
+  } finally {
+    await f.close(coordinator)
+  }
+})
+
+test('remote model catalog binds the authenticated Machine and installation without retrying an authenticated rejection', async () => {
+  const requested = []
+  let rejectCatalog = false
+  const f = await fixture({
+    discoveryEnabled: true,
+    executionEnabled: true,
+    modelListEnabled: true,
+    async discoveryHandler() {
+      const discovery = remoteProviderDiscovery(true)
+      discovery.providers[0].capabilities.modelSelection = true
+      return discovery
+    },
+    async modelListHandler(input) {
+      requested.push(input)
+      if (rejectCatalog) {
+        throw new MachineTransportError(
+          'provider_unavailable',
+          'private catalog detail',
+          { peerAuthenticated: true },
+        )
+      }
+      return [
+        { id: 'gpt-remote', name: 'GPT Remote', reasoningOptions: ['medium'] },
+      ]
+    },
+  })
+  let coordinator
+  try {
+    coordinator = await SecureRemoteMachineCoordinator.create({
+      persistence: f.store,
+      transport: f.transport,
+      heartbeatIntervalMs: 60_000,
+      reconnectMaximumDelayMs: 20,
+    })
+    const candidate = await coordinator.beginPairing({
+      address: { host: '172.20.1.51', port: 4319 },
+      pairingCode: '123456',
+    })
+    const confirmed = await coordinator.confirmPairing(
+      candidate.pairingAttemptId,
+      (staged) => f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+    )
+    await waitFor(() => f.counts.discovery >= 1, 'model catalog discovery')
+    const alternate = { host: '172.20.1.52', port: 4319 }
+    f.store.recordTrustedMachineAuthentication(
+      confirmed.machine.machineId,
+      alternate,
+      new Date().toISOString(),
+      'manual',
+    )
+    const machine = f.store.getMachine(confirmed.machine.machineId)
+    const trust = f.store.getTrustedMachinePeer(confirmed.machine.machineId)
+    assert.ok(machine)
+    assert.ok(trust)
+    const input = {
+      provider: 'codex',
+      providerInstallationId: 'pinst_coordinatorfixture01',
+      expectedInstallationRevision: 'prev_coordinatorfixture01',
+    }
+    const models = await coordinator.listRemoteProviderModels(machine, trust, input)
+    assert.deepEqual(models.map(({ id }) => id), ['gpt-remote'])
+    assert.equal(requested[0].peer.machine.machineId, machine.machineId)
+    assert.equal(requested[0].peer.machine.nodeId, trust.nodeIdentity)
+    assert.equal(requested[0].provider, input.provider)
+    assert.equal(requested[0].providerInstallationId, input.providerInstallationId)
+    assert.equal(requested[0].expectedInstallationRevision, input.expectedInstallationRevision)
+
+    rejectCatalog = true
+    await assert.rejects(
+      coordinator.listRemoteProviderModels(machine, trust, input),
+      (error) =>
+        error instanceof RemoteMachineCoordinatorError &&
+        error.code === 'provider_unavailable' &&
+        error.message === 'Remote Provider execution failed',
+    )
+    assert.equal(f.counts.modelList, 2)
+    const after = f.store.getTrustedMachinePeer(machine.machineId)
+    assert.ok(after)
+    assert.equal(after.endpoints.every((endpoint) => endpoint.lastFailureAt === undefined), true)
   } finally {
     await f.close(coordinator)
   }

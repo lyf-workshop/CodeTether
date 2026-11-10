@@ -65,6 +65,8 @@ import {
   MachineTransportConversationIdSchema,
   MachineTransportProjectIdSchema,
   MachineTransportTurnIdSchema,
+  listRemoteProviderModels,
+  listRemoteProviderModelsOverStream,
   ReconnectWakeCoordinator,
   RemoteClaudeProviderIdentitySchema,
   RemoteCodexProviderIdentitySchema,
@@ -74,6 +76,7 @@ import {
   type TrustedRemotePeer,
   type ValidatedRemoteProjectLocation,
   type RemoteProviderDiscovery,
+  type RemoteProviderModel,
   type RemoteProviderSessionDiscoveryPage,
   type RemoteClaudeSession as MachineTransportRemoteClaudeSession,
   type RemoteCodexSession as MachineTransportRemoteCodexSession,
@@ -187,6 +190,15 @@ export interface RemoteMachineCoordinator extends RemoteMachineStatusSource {
     machineId: MachineId,
     observedAt: Timestamp,
   ): boolean
+  listRemoteProviderModels?(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+    },
+  ): Promise<readonly RemoteProviderModel[]>
   /**
    * Wakes existing connectivity workers only. It never opens a Provider
    * session, starts a Turn, or changes durable Machine trust.
@@ -428,6 +440,8 @@ interface CoordinatorTransport {
   connectTrustedOverStream?: typeof connectTrustedRemoteMachineOverStream
   openCodexSessionOverStream?: typeof openRemoteCodexSessionOverStream
   openClaudeSessionOverStream?: typeof openRemoteClaudeSessionOverStream
+  listRemoteProviderModels?: typeof listRemoteProviderModels
+  listRemoteProviderModelsOverStream?: typeof listRemoteProviderModelsOverStream
 }
 
 export interface RelayMachineTransport {
@@ -602,6 +616,8 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
       connectTrustedOverStream: connectTrustedRemoteMachineOverStream,
       openCodexSessionOverStream: openRemoteCodexSessionOverStream,
       openClaudeSessionOverStream: openRemoteClaudeSessionOverStream,
+      listRemoteProviderModels,
+      listRemoteProviderModelsOverStream,
     }
     this.#connectRelay = options.connectRelay ?? connectRelayControl
     this.#relayTransport = options.relayTransport
@@ -1622,6 +1638,132 @@ export class SecureRemoteMachineCoordinator implements RemoteMachineCoordinator 
     discovery.task = task
     this.#providerDiscoveryTasks.set(id, discovery)
     return task
+  }
+
+  async listRemoteProviderModels(
+    machine: DurableMachine,
+    trust: DurableTrustedMachinePeer,
+    input: {
+      readonly provider: AgentProvider
+      readonly providerInstallationId: ProviderInstallationId
+      readonly expectedInstallationRevision: ProviderInstallationRevision
+    },
+  ): Promise<readonly RemoteProviderModel[]> {
+    const id = MachineIdSchema.parse(machine.machineId)
+    return await this.#serializeMachineOperation(id, async () => {
+      const current = this.#requireCurrentActiveTrust(machine, trust)
+      if (!this.providerExecutionAvailable(id, input.provider)) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Provider execution is unavailable on this Machine',
+        )
+      }
+      const descriptor = providerDescriptorForSelectedInstallation(
+        this.#persistence
+          .getRemoteProviderObservation(id)
+          ?.providers.find(({ provider }) => provider === input.provider),
+        this.#persistence.getProviderLifecycle(id, input.provider),
+      )
+      if (descriptor?.capabilities.modelSelection !== true) {
+        throw new RemoteMachineCoordinatorError(
+          'remote_execution_unavailable',
+          'Remote Provider model controls are unavailable on this Machine',
+        )
+      }
+      const controller = await this.#loadController(current.trust)
+      let lastError: unknown
+      if (this.#transportPolicy !== 'relay_only') {
+        for (const endpoint of current.trust.endpoints) {
+          try {
+            this.#recordAttempt(id)
+            const models = await (
+              this.#transport.listRemoteProviderModels ??
+              listRemoteProviderModels
+            )({
+              peer: trustedPeer(
+                current.machine,
+                current.trust,
+                endpoint.address,
+              ),
+              controller,
+              provider: input.provider,
+              providerInstallationId: input.providerInstallationId,
+              expectedInstallationRevision: input.expectedInstallationRevision,
+            })
+            const authenticatedAt = TimestampSchema.parse(
+              this.#now().toISOString(),
+            )
+            this.#persistence.recordTrustedMachineAuthentication(
+              id,
+              endpoint.address,
+              authenticatedAt,
+            )
+            this.#directStates.set(id, 'online')
+            this.#lastExecutionTransports.set(id, 'direct')
+            return models
+          } catch (error) {
+            lastError = error
+            if (
+              error instanceof MachineTransportError &&
+              error.peerAuthenticated
+            ) {
+              throw coordinatorError(error)
+            }
+            this.#persistence.recordTrustedMachineEndpointFailure(
+              id,
+              endpoint.address,
+              TimestampSchema.parse(this.#now().toISOString()),
+            )
+            this.#directStates.set(id, connectionStateFor(error))
+            if (isPermanentConnectionError(error)) throw coordinatorError(error)
+          }
+        }
+      }
+      if (
+        this.#transportPolicy !== 'direct_only' &&
+        this.#relayTransport?.status(id).internetExecutionEnabled === true
+      ) {
+        let stream: Duplex | undefined
+        try {
+          const relayGeneration = this.#requireCurrentRelayGeneration(id)
+          this.#recordAttempt(id)
+          stream = await this.#relayTransport.openMachineChannel(current.trust)
+          const models = await (
+            this.#transport.listRemoteProviderModelsOverStream ??
+            listRemoteProviderModelsOverStream
+          )({
+            peer: trustedPeer(current.machine, current.trust),
+            controller,
+            stream,
+            provider: input.provider,
+            providerInstallationId: input.providerInstallationId,
+            expectedInstallationRevision: input.expectedInstallationRevision,
+          })
+          this.#assertCurrentRelayGeneration(id, relayGeneration)
+          stream = undefined
+          this.#persistence.recordTrustedMachineRelayAuthentication(
+            id,
+            TimestampSchema.parse(this.#now().toISOString()),
+          )
+          this.#lastExecutionTransports.set(id, 'relay')
+          this.#markRelayVerified(id, relayGeneration)
+          return models
+        } catch (error) {
+          stream?.destroy()
+          if (
+            error instanceof MachineTransportError &&
+            error.peerAuthenticated
+          ) {
+            throw coordinatorError(error)
+          }
+          if (isPermanentConnectionError(error)) throw coordinatorError(error)
+          throw this.#relayFailure(error, 'relay_channel_open_failed')
+        }
+      }
+      throw coordinatorError(
+        lastError ?? new Error('No trusted endpoint is available'),
+      )
+    })
   }
 
   async openCodexSession(
@@ -3684,12 +3826,16 @@ function remoteProviderExecutionProfileAvailable(
       descriptor.availability === 'available' &&
       descriptor.capabilities.streaming &&
       enabled.every(
-        (capability) => capability === 'resume' || capability === 'streaming',
+        (capability) =>
+          capability === 'modelSelection' ||
+          capability === 'resume' ||
+          capability === 'streaming',
       )
     )
   }
   const allowed = new Set([
     'fileRead',
+    'modelSelection',
     'reasoningControl',
     'resume',
     'search',
@@ -4011,6 +4157,10 @@ function remoteCodexRuntimeSession(
         actionId: MachineTransportActionIdSchema.parse(input.actionId),
         turnId: MachineTransportTurnIdSchema.parse(input.turnId),
         prompt: input.prompt,
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.reasoning === undefined
+          ? {}
+          : { reasoning: input.reasoning }),
       })
       return {
         events: async function* () {
@@ -4067,6 +4217,10 @@ function remoteClaudeRuntimeSession(
         actionId: MachineTransportActionIdSchema.parse(input.actionId),
         turnId: MachineTransportTurnIdSchema.parse(input.turnId),
         prompt: input.prompt,
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.reasoning === undefined
+          ? {}
+          : { reasoning: input.reasoning }),
       })
       return {
         events: async function* () {

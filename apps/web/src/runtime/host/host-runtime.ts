@@ -360,6 +360,11 @@ export class HostRuntime {
     return this.#client.listMachines(options)
   }
 
+  /** Fresh Host-owned state for the update installation preflight. */
+  readUpdatePreflight(options?: { readonly signal?: AbortSignal }) {
+    return this.#client.snapshot(options)
+  }
+
   getOnboarding(options?: { readonly signal?: AbortSignal }) {
     return this.#client.getOnboarding(options)
   }

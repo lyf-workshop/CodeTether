@@ -16,6 +16,13 @@ import { tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { artifactFilename, scanReleaseContents, sha256 } from './release.mjs'
 import { buildIdentity, repository } from './identity.mjs'
+import {
+  updateBaseUrl,
+  updateFragment,
+  updateReleaseEnabled,
+  updaterArtifact,
+  signedUpdaterTauriConfig,
+} from './update-manifest.mjs'
 
 export async function reserveArtifact(path) {
   const handle = await open(path, 'wx', 0o600)
@@ -60,9 +67,24 @@ async function main() {
   const directory = join(repository, 'output', 'release', identity.commit)
   await mkdir(directory, { recursive: true })
   if (component === 'desktop') {
-    // Tauri's native signing integration consumes secure environment/CI inputs.
-    // No credential value is serialized into a generated config or manifest.
-    pnpm(['desktop:build'])
+    const signedUpdate = updateReleaseEnabled()
+    if (signedUpdate && !['windows', 'macos'].includes(platform))
+      throw new Error('Desktop updates support only Windows and macOS')
+    const updateUrl = signedUpdate
+      ? updateBaseUrl(process.env.CODETETHER_UPDATE_BASE_URL)
+      : null
+    // Tauri consumes the private signing inputs from the process environment.
+    // Its bundler also needs the public key in the ephemeral config override.
+    if (signedUpdate) {
+      pnpm(['desktop:sidecar'])
+      pnpm([
+        '--dir',
+        'apps/desktop',
+        'tauri:build',
+        '--config',
+        JSON.stringify(signedUpdaterTauriConfig()),
+      ])
+    } else pnpm(['desktop:build'])
     const kinds =
       platform === 'windows'
         ? [['nsis', 'exe']]
@@ -109,8 +131,85 @@ async function main() {
         { flag: 'wx' },
       )
     }
+    if (signedUpdate) {
+      const { filename } = updaterArtifact(
+        platform,
+        architecture,
+        identity.version,
+      )
+      const sourceFolder = platform === 'windows' ? 'nsis' : 'macos'
+      const sourceDirectory = join(
+        repository,
+        'apps',
+        'desktop',
+        'src-tauri',
+        'target',
+        'release',
+        'bundle',
+        sourceFolder,
+      )
+      const suffix = platform === 'windows' ? '.exe' : '.app.tar.gz'
+      const matches = (await readdir(sourceDirectory)).filter(
+        (name) =>
+          name.endsWith(suffix) &&
+          !name.endsWith('.sig') &&
+          (platform === 'macos' || name.includes(identity.version)),
+      )
+      if (matches.length !== 1)
+        throw new Error(
+          'Expected exactly one current native Desktop updater artifact',
+        )
+      const source = join(sourceDirectory, matches[0])
+      const signatureSource = `${source}.sig`
+      const signature = (await readFile(signatureSource, 'utf8')).trim()
+      const alphaDirectory = join(directory, 'alpha')
+      const versionDirectory = join(alphaDirectory, identity.version)
+      await mkdir(versionDirectory, { recursive: true })
+      await copyFile(
+        source,
+        join(versionDirectory, filename),
+        constants.COPYFILE_EXCL,
+      )
+      await copyFile(
+        signatureSource,
+        join(versionDirectory, `${filename}.sig`),
+        constants.COPYFILE_EXCL,
+      )
+      if (platform === 'macos') {
+        // The DMG remains the manual first-install package. The app archive is
+        // the signed updater payload used by the Rust plugin.
+        const dmg = artifactFilename(
+          { component: 'desktop', platform, architecture, artifactType: 'dmg' },
+          identity.version,
+        )
+        await copyFile(
+          join(directory, dmg),
+          join(versionDirectory, dmg),
+          constants.COPYFILE_EXCL,
+        )
+      }
+      const notes =
+        process.env.CODETETHER_UPDATE_NOTES ??
+        `CodeTether ${identity.version} 更新。`
+      const fragment = updateFragment({
+        platform,
+        architecture,
+        version: identity.version,
+        commit: identity.commit,
+        baseUrl: updateUrl,
+        signature,
+        notes,
+      })
+      await writeFile(
+        join(alphaDirectory, `update-${platform}-${architecture}.json`),
+        `${JSON.stringify(fragment, null, 2)}\n`,
+        { flag: 'wx' },
+      )
+    }
     process.stdout.write(
-      'Desktop built. Run native installed lifecycle/privacy validation before publishing a manifest receipt.\n',
+      signedUpdate
+        ? 'Desktop and signed updater files built. Validate the installed package before publishing alpha/latest.json.\n'
+        : 'Desktop built. Run native installed lifecycle/privacy validation before publishing a manifest receipt.\n',
     )
     return
   }

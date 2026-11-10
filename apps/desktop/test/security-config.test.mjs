@@ -20,14 +20,24 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     ),
   )
   const developmentConfig = JSON.parse(
-    await readFile(resolve(desktopDirectory, 'src-tauri', 'tauri.dev.conf.json'), 'utf8'),
+    await readFile(
+      resolve(desktopDirectory, 'src-tauri', 'tauri.dev.conf.json'),
+      'utf8',
+    ),
   )
   const [pairingOwner, pairingDevice] = await Promise.all(
     ['pairing-check-owner', 'pairing-check-device'].map(async (name) =>
-      JSON.parse(await readFile(
-        resolve(desktopDirectory, 'src-tauri', 'capabilities', `${name}.json`),
-        'utf8',
-      )),
+      JSON.parse(
+        await readFile(
+          resolve(
+            desktopDirectory,
+            'src-tauri',
+            'capabilities',
+            `${name}.json`,
+          ),
+          'utf8',
+        ),
+      ),
     ),
   )
   const projectDirectoryPermission = await readFile(
@@ -66,6 +76,15 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     ),
     'utf8',
   )
+  const desktopUpdatePermission = await readFile(
+    resolve(
+      desktopDirectory,
+      'src-tauri',
+      'permissions',
+      'desktop-update.toml',
+    ),
+    'utf8',
+  )
 
   assert.deepEqual(capability.permissions, [
     'allow-project-directory-picker',
@@ -73,6 +92,7 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     'allow-attention-notifications',
     'allow-product-device-key-store',
     'allow-host-identity-key-store',
+    'allow-desktop-update',
     'core:event:allow-listen',
     'core:event:allow-unlisten',
     'core:window:allow-is-focused',
@@ -83,11 +103,24 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
   ])
   assert.doesNotMatch(
     JSON.stringify(capability.permissions),
-    /notification:default/u,
+    /notification:default|updater:|process:/u,
+  )
+  assert.match(
+    desktopUpdatePermission,
+    /commands\.allow = \["update_state", "update_check", "update_download", "update_install"\]/u,
+  )
+  assert.doesNotMatch(
+    desktopUpdatePermission,
+    /filesystem|shell|process|clipboard|updater:/iu,
   )
   assert.deepEqual(config.app.security.capabilities, ['main'])
+  assert.deepEqual(config.plugins.updater.endpoints, [])
+  assert.equal(config.plugins.updater.pubkey, '')
+  assert.equal(config.plugins.updater.windows.installMode, 'passive')
   assert.deepEqual(developmentConfig.app.security.capabilities, [
-    'main', 'pairing-check-owner', 'pairing-check-device',
+    'main',
+    'pairing-check-owner',
+    'pairing-check-device',
   ])
   assert.deepEqual(pairingOwner.windows, ['main'])
   assert.deepEqual(pairingOwner.permissions, ['allow-open-pairing-diagnostic'])

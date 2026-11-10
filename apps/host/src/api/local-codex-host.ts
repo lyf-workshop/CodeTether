@@ -76,6 +76,7 @@ export interface LocalCodexHostOptions {
   readonly allowedWorkspaceRoots?: readonly string[]
   readonly allowedOrigins: readonly string[]
   readonly hostVersion: string
+  readonly productVersion?: string
   readonly port?: number
   readonly executable?: string
   readonly disableHooks?: boolean
@@ -135,6 +136,9 @@ export async function startLocalCodexHost(
           ...(options.databasePath === undefined
             ? {}
             : { databasePath: options.databasePath }),
+          ...(options.productVersion === undefined
+            ? {}
+            : { productVersion: options.productVersion }),
         })
   const localMachine = persistence
     ?.listMachines()

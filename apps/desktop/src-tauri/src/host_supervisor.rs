@@ -40,6 +40,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(350);
 const MAX_BOOTSTRAP_BYTES: u64 = 64 * 1024;
 const MAX_SMOKE_EXIT_DELAY_MS: u64 = 3_900_000;
 const DESKTOP_RESUMED_EVENT: &str = "codetether://desktop-resumed";
+const UNSUPPORTED_SCHEMA_EXIT_CODE: i32 = 42;
 
 const RELAY_ENVIRONMENT: [(&str, Option<&str>, &str); 3] = [
     (
@@ -289,12 +290,17 @@ impl HostSupervisor {
         };
         // Inherit a runtime override as one set. An incomplete set must reach
         // the Host's validator unchanged, never mix with the bundled identity.
-        let command = if RELAY_ENVIRONMENT.iter().any(|(name, _, _)| std::env::var_os(name).is_some()) {
+        let command = if RELAY_ENVIRONMENT
+            .iter()
+            .any(|(name, _, _)| std::env::var_os(name).is_some())
+        {
             command
         } else {
-            RELAY_ENVIRONMENT.iter().fold(command, |command, (name, compiled, default)| {
-                command.env(name, compiled.unwrap_or(default))
-            })
+            RELAY_ENVIRONMENT
+                .iter()
+                .fold(command, |command, (name, compiled, default)| {
+                    command.env(name, compiled.unwrap_or(default))
+                })
         };
         let (mut events, child) = command
             .spawn()
@@ -549,8 +555,8 @@ fn wait_for_readiness_with_probe(
 ) -> Result<(Duration, BootstrapIdentity), StartupFailureKind> {
     let started_at = Instant::now();
     loop {
-        if observation.termination().is_some() {
-            return Err(StartupFailureKind::HostExited);
+        if let Some(code) = observation.termination() {
+            return Err(startup_failure_for_host_exit(code));
         }
         match probe() {
             Readiness::Ready(identity) => {
@@ -561,8 +567,8 @@ fn wait_for_readiness_with_probe(
                 // monitor cannot classify that one termination as unexpected.
                 // Rechecking here guarantees either this path or the monitor
                 // owns the failure transition.
-                if observation.termination().is_some() {
-                    return Err(StartupFailureKind::HostExited);
+                if let Some(code) = observation.termination() {
+                    return Err(startup_failure_for_host_exit(code));
                 }
                 return Ok((started_at.elapsed(), identity));
             }
@@ -575,6 +581,14 @@ fn wait_for_readiness_with_probe(
             return Err(StartupFailureKind::ReadinessTimeout);
         }
         thread::sleep(interval);
+    }
+}
+
+fn startup_failure_for_host_exit(code: Option<i32>) -> StartupFailureKind {
+    if code == Some(UNSUPPORTED_SCHEMA_EXIT_CODE) {
+        StartupFailureKind::DatabaseFromNewerVersion
+    } else {
+        StartupFailureKind::HostExited
     }
 }
 
@@ -1141,6 +1155,68 @@ pub(crate) fn request_app_quit(app: &AppHandle, code: i32) {
     }
 }
 
+pub(crate) fn shutdown_host_for_update(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<DesktopState>()
+        .ok_or_else(|| "Desktop runtime is unavailable".to_owned())?;
+    if state.is_shutting_down() {
+        return Err("Desktop is already shutting down".to_owned());
+    }
+    match state.shutdown_owned_host(SHUTDOWN_TIMEOUT) {
+        ShutdownOutcome::Clean => Ok(()),
+        outcome => Err(format!("owned Host shutdown was not clean: {outcome:?}")),
+    }
+}
+
+pub(crate) fn restore_host_after_update_failure(app: &AppHandle) -> Result<(), String> {
+    let state = app
+        .try_state::<DesktopState>()
+        .ok_or_else(|| "Desktop runtime is unavailable".to_owned())?;
+    if state.is_shutting_down() {
+        return Err("Desktop is already shutting down".to_owned());
+    }
+    if lock(&state.host)
+        .as_ref()
+        .and_then(HostSupervisor::pid)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let mut last_error = String::new();
+    for attempt in 0..3 {
+        match HostSupervisor::start(app) {
+            Ok(host) => {
+                let observation = host.observation();
+                let ready =
+                    wait_for_readiness(&observation, STARTUP_TIMEOUT, env!("CODETETHER_BUILD_ID"));
+                match ready {
+                    Ok((_, identity)) => {
+                        state.set_host_epoch(identity.epoch);
+                        *lock(&state.host) = Some(host);
+                        return Ok(());
+                    }
+                    Err(failure) => {
+                        last_error = format!("replacement Host did not become ready: {failure:?}");
+                    }
+                }
+            }
+            Err(error) => last_error = error.diagnostic(),
+        }
+        if attempt < 2 {
+            thread::sleep(Duration::from_millis(300));
+        }
+    }
+    Err(last_error)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn allow_restart_after_update(app: &AppHandle) {
+    if let Some(state) = app.try_state::<DesktopState>() {
+        state.begin_shutdown();
+        state.allow_exit();
+    }
+}
+
 pub(crate) fn show_main_window(app: &AppHandle) -> Result<bool, String> {
     let Some(state) = app.try_state::<DesktopState>() else {
         return Ok(false);
@@ -1206,9 +1282,14 @@ fn handle_unexpected_host_exit(app: AppHandle) {
     if !state.begin_failure_shutdown() {
         return;
     }
+    let failure = state
+        .host_process()
+        .and_then(|(_, observation)| observation.termination())
+        .map(startup_failure_for_host_exit)
+        .unwrap_or(StartupFailureKind::HostExited);
     if state.snapshot().system != SystemState::SessionEnding {
         show_main_window_for_failure(&app);
-        show_runtime_failure(&app, StartupFailureKind::HostExited);
+        show_runtime_failure(&app, failure);
     }
     let state = state.inner().clone();
     thread::spawn(move || finish_owned_shutdown(state, app, 1));
@@ -1245,6 +1326,7 @@ fn finish_desktop_initialization(
         state.surface_initialized.store(true, Ordering::Release);
         lock(&state.lifecycle).mark_window_visible();
         log_lifecycle_event("desktop_ready", &state, serde_json::json!({}));
+        crate::desktop_update::finish_successful_startup(&app);
         #[cfg(windows)]
         crate::notification_links::handle_arguments(&app, &std::env::args().collect::<Vec<_>>());
         Ok::<(), (StartupFailureKind, String)>(())
@@ -1332,6 +1414,7 @@ pub fn run_desktop() {
                 );
             }
         }));
+    let builder = crate::desktop_update::install_plugin(builder);
     #[cfg(windows)]
     let builder = builder.plugin(tauri_plugin_deep_link::init());
     let app = builder.plugin(tauri_plugin_notification::init())
@@ -1355,10 +1438,15 @@ pub fn run_desktop() {
             crate::host_identity_key_store::host_identity_key_public,
             crate::host_identity_key_store::host_identity_key_sign,
             crate::host_identity_key_store::host_identity_key_destroy,
+            crate::desktop_update::update_state,
+            crate::desktop_update::update_check,
+            crate::desktop_update::update_download,
+            crate::desktop_update::update_install,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             crate::macos_lifecycle::protect_background_runtime();
+            crate::desktop_update::initialize(app.handle());
             let host = match HostSupervisor::start(app.handle()) {
                 Ok(host) => host,
                 Err(error) => {
@@ -1624,6 +1712,22 @@ mod tests {
         assert_eq!(
             StartError::PortConflict.failure_kind(),
             StartupFailureKind::PortConflict,
+        );
+    }
+
+    #[test]
+    fn newer_database_exit_has_a_dedicated_startup_failure() {
+        assert_eq!(
+            startup_failure_for_host_exit(Some(UNSUPPORTED_SCHEMA_EXIT_CODE)),
+            StartupFailureKind::DatabaseFromNewerVersion,
+        );
+        assert_eq!(
+            startup_failure_for_host_exit(Some(1)),
+            StartupFailureKind::HostExited
+        );
+        assert_eq!(
+            startup_failure_for_host_exit(None),
+            StartupFailureKind::HostExited
         );
     }
 

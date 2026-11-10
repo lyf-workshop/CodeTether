@@ -1,6 +1,6 @@
 {
   "name": "codetether-v2",
-  "version": "0.1.0-alpha.0",
+  "version": "0.1.0-alpha.3",
   "private": true,
   "license": "SEE LICENSE IN LICENSE",
   "type": "module",
@@ -19,6 +19,9 @@
     "release:node:linux-arm64": "node apps/distribution/src/build.mjs node linux arm64",
     "release:node:macos-arm64": "node apps/distribution/src/build.mjs node macos arm64",
     "release:manifest": "node apps/distribution/src/release.mjs",
+    "release:update-manifest": "node apps/distribution/src/update-manifest.mjs",
+    "version:set": "node apps/distribution/src/version.mjs set",
+    "version:check": "node apps/distribution/src/version.mjs check",
     "dev": "pnpm --filter @codetether/web dev",
     "build": "pnpm -r --workspace-concurrency=1 --if-present build",
     "typecheck": "pnpm -r --workspace-concurrency=1 --if-present typecheck",

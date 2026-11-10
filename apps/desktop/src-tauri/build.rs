@@ -23,6 +23,8 @@ fn main() {
     println!("cargo:rustc-env=CODETETHER_BUILD_ID={build_id}");
 
     println!("cargo:rerun-if-env-changed=VITE_CODETETHER_CONTROL_PLANE_URL");
+    println!("cargo:rerun-if-env-changed=CODETETHER_UPDATE_BASE_URL");
+    println!("cargo:rerun-if-env-changed=CODETETHER_UPDATE_PUBKEY");
     let relay_variables = [
         "CODETETHER_SUPERVISOR_RELAY_ENDPOINT",
         "CODETETHER_SUPERVISOR_RELAY_ID",
@@ -35,7 +37,9 @@ fn main() {
     assert!(
         relay_overrides.iter().all(Option::is_none)
             || relay_overrides.iter().all(|value| {
-                value.as_ref().and_then(|value| value.to_str())
+                value
+                    .as_ref()
+                    .and_then(|value| value.to_str())
                     .is_some_and(|value| !value.trim().is_empty())
             }),
         "Configure all three build-time Relay settings together"
@@ -106,6 +110,10 @@ fn main() {
             "host_identity_key_public",
             "host_identity_key_sign",
             "host_identity_key_destroy",
+            "update_state",
+            "update_check",
+            "update_download",
+            "update_install",
         ]));
 
     tauri_build::try_build(attributes).expect("failed to run CodeTether desktop build script")

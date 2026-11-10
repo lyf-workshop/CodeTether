@@ -5,6 +5,7 @@ pub enum StartupFailureKind {
     ExistingCodeTetherHost,
     PortConflict,
     HostExited,
+    DatabaseFromNewerVersion,
     ReadinessTimeout,
     ProtocolIncompatible,
     TrayUnavailable,
@@ -25,6 +26,9 @@ impl StartupFailureKind {
             }
             Self::PortConflict => "本地端口 4317 已被其他程序占用。请释放该端口后重试。",
             Self::HostExited => "CodeTether 本地服务意外退出。请重新启动 CodeTether。",
+            Self::DatabaseFromNewerVersion => {
+                "这份本机数据来自更新版本的 CodeTether，当前版本不能打开。请安装更新的版本，或按说明恢复更新前的备份。"
+            }
             Self::ReadinessTimeout => "CodeTether 本地服务启动超时。请查看诊断日志后重试。",
             Self::ProtocolIncompatible => {
                 "桌面程序与本地服务版本不兼容。请重新安装同一版本的 CodeTether。"
@@ -106,6 +110,7 @@ mod tests {
             StartupFailureKind::ExistingCodeTetherHost,
             StartupFailureKind::PortConflict,
             StartupFailureKind::HostExited,
+            StartupFailureKind::DatabaseFromNewerVersion,
             StartupFailureKind::ReadinessTimeout,
             StartupFailureKind::ProtocolIncompatible,
             StartupFailureKind::TrayUnavailable,
@@ -113,7 +118,7 @@ mod tests {
         ]
         .map(StartupFailureKind::message);
 
-        assert_eq!(messages.len(), 9);
+        assert_eq!(messages.len(), 10);
         assert!(messages.iter().all(|message| !message.is_empty()));
         assert!(messages.iter().all(|message| !message.contains("JSON-RPC")));
     }

@@ -14,6 +14,7 @@ import type {
   NotificationClickIntent,
   NotificationIntent,
 } from '../notifications/desktop-notification-model.js'
+import { productVersion } from '../product-version.js'
 
 export interface DirectoryPicker {
   readonly available: boolean
@@ -73,6 +74,48 @@ export interface BackgroundRuntimeCapability {
 export interface ProviderGuidanceCapability {
   readonly available: boolean
   open(provider: ProviderId): Promise<void>
+}
+
+export type DesktopUpdateStatus =
+  | 'unconfigured'
+  | 'latest'
+  | 'checking'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'checkFailed'
+  | 'downloadFailed'
+  | 'signatureFailed'
+  | 'installFailed'
+
+export interface DesktopUpdateSnapshot {
+  readonly status: DesktopUpdateStatus
+  readonly currentVersion: string
+  readonly availableVersion?: string
+  readonly notes?: string
+  readonly progressPercent?: number
+  readonly lastCheckedAt?: number
+  readonly updatedTo?: string
+}
+
+export interface DesktopUpdateProgress {
+  readonly downloadedBytes: number
+  readonly totalBytes: number | null
+  readonly progressPercent: number | null
+}
+
+export interface DesktopUpdaterCapability {
+  readonly available: boolean
+  state(): Promise<DesktopUpdateSnapshot>
+  check(): Promise<DesktopUpdateSnapshot>
+  download(
+    onProgress: (progress: DesktopUpdateProgress) => void,
+  ): Promise<DesktopUpdateSnapshot>
+  install(): Promise<DesktopUpdateSnapshot>
+  subscribe(
+    listener: (snapshot: DesktopUpdateSnapshot) => void,
+  ): Promise<() => void>
 }
 
 export interface HostIdentityKeyDescription {
@@ -153,12 +196,14 @@ export interface NativeCapabilities {
   readonly notifications: DesktopNotifications
   readonly backgroundRuntime: BackgroundRuntimeCapability
   readonly providerGuidance: ProviderGuidanceCapability
+  readonly desktopUpdater: DesktopUpdaterCapability
   readonly hostIdentity: HostIdentityCapability
   readonly productDeviceIdentity: ProductDeviceIdentityCapability
 }
 
 interface TauriCoreModule {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
+  Channel?: new <T>() => { onmessage: (message: T) => void }
 }
 
 type TauriCoreLoader = () => Promise<TauriCoreModule>
@@ -255,6 +300,16 @@ const unavailableProviderGuidance: ProviderGuidanceCapability = {
     Promise.reject(new Error('Native Provider guidance is unavailable.')),
 }
 
+const unavailableDesktopUpdater: DesktopUpdaterCapability = {
+  available: false,
+  state: () =>
+    Promise.resolve({ status: 'unconfigured', currentVersion: productVersion }),
+  check: () => Promise.reject(new Error('Desktop updater is unavailable.')),
+  download: () => Promise.reject(new Error('Desktop updater is unavailable.')),
+  install: () => Promise.reject(new Error('Desktop updater is unavailable.')),
+  subscribe: () => Promise.resolve(() => undefined),
+}
+
 const unavailableHostIdentity: HostIdentityCapability = {
   available: false,
   createKey: () =>
@@ -302,6 +357,7 @@ export function createNativeCapabilities(
       notifications: unavailableDesktopNotifications,
       backgroundRuntime: unavailableBackgroundRuntime,
       providerGuidance: unavailableProviderGuidance,
+      desktopUpdater: unavailableDesktopUpdater,
       hostIdentity: unavailableHostIdentity,
       productDeviceIdentity: unavailableProductDeviceIdentity,
     }
@@ -559,6 +615,42 @@ export function createNativeCapabilities(
     },
   }
 
+  const desktopUpdater: DesktopUpdaterCapability = {
+    available: true,
+    async state() {
+      const { invoke } = await loadCore()
+      return parseDesktopUpdateSnapshot(await invoke<unknown>('update_state'))
+    },
+    async check() {
+      const { invoke } = await loadCore()
+      return parseDesktopUpdateSnapshot(await invoke<unknown>('update_check'))
+    },
+    async download(onProgress) {
+      const { invoke, Channel } = await loadCore()
+      if (Channel === undefined) {
+        throw new Error('Desktop update progress channel is unavailable.')
+      }
+      const channel = new Channel<DesktopUpdateProgress>()
+      channel.onmessage = (progress) => onProgress(progress)
+      return parseDesktopUpdateSnapshot(
+        await invoke<unknown>('update_download', { channel }),
+      )
+    },
+    async install() {
+      const { invoke } = await loadCore()
+      return parseDesktopUpdateSnapshot(await invoke<unknown>('update_install'))
+    },
+    async subscribe(listener) {
+      const { listen } = await loadEvent()
+      return await listen<unknown>(
+        'codetether://update-state',
+        ({ payload }) => {
+          listener(parseDesktopUpdateSnapshot(payload))
+        },
+      )
+    },
+  }
+
   const hostIdentity: HostIdentityCapability = {
     available: true,
     async createKey() {
@@ -643,12 +735,63 @@ export function createNativeCapabilities(
     notifications,
     backgroundRuntime,
     providerGuidance,
+    desktopUpdater,
     hostIdentity,
     productDeviceIdentity,
   }
 }
 
 export const nativeCapabilities = createNativeCapabilities()
+
+const desktopUpdateStatuses = new Set<DesktopUpdateStatus>([
+  'unconfigured',
+  'latest',
+  'checking',
+  'available',
+  'downloading',
+  'downloaded',
+  'installing',
+  'checkFailed',
+  'downloadFailed',
+  'signatureFailed',
+  'installFailed',
+])
+
+function parseDesktopUpdateSnapshot(value: unknown): DesktopUpdateSnapshot {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('Desktop update state is invalid.')
+  }
+  const record = value as Record<string, unknown>
+  if (
+    typeof record.status !== 'string' ||
+    !desktopUpdateStatuses.has(record.status as DesktopUpdateStatus) ||
+    typeof record.currentVersion !== 'string' ||
+    record.currentVersion.length === 0
+  ) {
+    throw new Error('Desktop update state is invalid.')
+  }
+  return {
+    status: record.status as DesktopUpdateStatus,
+    currentVersion: record.currentVersion,
+    ...(typeof record.availableVersion === 'string'
+      ? { availableVersion: record.availableVersion }
+      : {}),
+    ...(typeof record.notes === 'string'
+      ? { notes: Array.from(record.notes).slice(0, 2000).join('') }
+      : {}),
+    ...(typeof record.progressPercent === 'number' &&
+    Number.isFinite(record.progressPercent)
+      ? { progressPercent: Math.max(0, Math.min(100, record.progressPercent)) }
+      : {}),
+    ...(typeof record.lastCheckedAt === 'number' &&
+    Number.isFinite(record.lastCheckedAt)
+      ? { lastCheckedAt: record.lastCheckedAt }
+      : {}),
+    ...(typeof record.updatedTo === 'string'
+      ? { updatedTo: record.updatedTo }
+      : {}),
+  }
+}
 
 function readDocumentWindowState(): DesktopWindowState {
   if (typeof document === 'undefined') {

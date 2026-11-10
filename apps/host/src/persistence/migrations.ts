@@ -219,6 +219,13 @@ const migrations: readonly Migration[] = [
 
 export const currentSchemaVersion = migrations.at(-1)?.version ?? 0
 
+export class UnsupportedSqliteSchemaMigrationError extends Error {
+  constructor(version: number, name: string) {
+    super(`Unsupported SQLite schema migration ${String(version)} (${name})`)
+    this.name = 'UnsupportedSqliteSchemaMigrationError'
+  }
+}
+
 export function migrateDatabase(database: DatabaseSync): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -239,9 +246,7 @@ export function migrateDatabase(database: DatabaseSync): void {
       row.version !== expected.version ||
       row.name !== expected.name
     ) {
-      throw new Error(
-        `Unsupported SQLite schema migration ${String(row.version)} (${row.name})`,
-      )
+      throw new UnsupportedSqliteSchemaMigrationError(row.version, row.name)
     }
   }
 

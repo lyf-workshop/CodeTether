@@ -1,6 +1,6 @@
 # 任务：B4b 文件夹浏览（远程管理第 2 轮）
 
-在 Mac 上运行。接着在 `main` 上做（当前是 `4801ef1`）。B4b 实现 `folder.list` 操作，让平板和 iPad 能浏览远程电脑的文件夹，从而添加项目时可以选择文件夹而不是输入路径。提交推送到 `feat/b4b-folder-browse`，不推 `main`、不合并、不打标签。
+在 Mac 上运行（需要实测 macOS TCC 授权行为，整个任务放在 Mac 上）。接着在 `main` 上做（当前是 `4801ef1`）。B4b 实现 `folder.list` 操作，让平板和 iPad 能浏览远程电脑的文件夹，从而添加项目时可以选择文件夹而不是输入路径。提交推送到 `feat/b4b-folder-browse`，不推 `main`、不合并、不打标签。
 
 依据（都用 `git show` 读）：
 

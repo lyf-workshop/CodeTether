@@ -414,104 +414,132 @@ export const supervisorB1OperationSchema = z.discriminatedUnion('operation', [
 ])
 export type SupervisorB1Operation = z.output<typeof supervisorB1OperationSchema>
 
-export const supervisorRequestSchema = z.discriminatedUnion('operation', [
-  supervisorRequestBaseSchema
-    .extend({ operation: z.literal('host.bootstrap') })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({ operation: z.literal('machine.list') })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('machine.get'),
-      machineId: opaqueId('machine'),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('project.list'),
-      machineId: opaqueId('machine'),
-      limit: supervisorDirectoryLimitSchema,
-      cursor: supervisorDirectoryCursorSchema.optional(),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('project.get'),
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.list'),
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      limit: supervisorDirectoryLimitSchema,
-      cursor: supervisorDirectoryCursorSchema.optional(),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.get'),
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      conversationId: opaqueId('conv'),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.history'),
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      conversationId: opaqueId('conv'),
-      limit: z.number().int().min(1).max(50),
-      cursor: supervisorHistoryCursorSchema.optional(),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.live.read'),
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      conversationId: opaqueId('conv'),
-      cursor: supervisorLiveCursorSchema,
-      limit: z.number().int().min(1).max(64),
-      waitMs: z.number().int().min(0).max(15_000),
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('action.get'),
-      actionId: supervisorActionIdSchema,
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.turn.start'),
-      actionId: supervisorActionIdSchema,
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      conversationId: opaqueId('conv'),
-      input: supervisorTurnInputSchema,
-    })
-    .strict(),
-  supervisorRequestBaseSchema
-    .extend({
-      operation: z.literal('conversation.create'),
-      actionId: supervisorActionIdSchema,
-      machineId: opaqueId('machine'),
-      projectId: opaqueId('proj'),
-      provider: supervisorProviderSchema,
-      input: supervisorTurnInputSchema,
-      model: z.string().trim().min(1).max(240).optional(),
-      reasoning: z.string().trim().min(1).max(120).optional(),
-    })
-    .strict(),
-  ...supervisorB1OperationSchema.options.map((operation) =>
-    operation.extend(supervisorRequestBaseSchema.shape),
-  ),
-])
+export const supervisorRequestSchema = z
+  .discriminatedUnion('operation', [
+    supervisorRequestBaseSchema
+      .extend({ operation: z.literal('host.bootstrap') })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({ operation: z.literal('machine.list') })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('machine.get'),
+        machineId: opaqueId('machine'),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('project.list'),
+        machineId: opaqueId('machine'),
+        limit: supervisorDirectoryLimitSchema,
+        cursor: supervisorDirectoryCursorSchema.optional(),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('project.get'),
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.list'),
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        limit: supervisorDirectoryLimitSchema,
+        cursor: supervisorDirectoryCursorSchema.optional(),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.get'),
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        conversationId: opaqueId('conv'),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.history'),
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        conversationId: opaqueId('conv'),
+        limit: z.number().int().min(1).max(50),
+        cursor: supervisorHistoryCursorSchema.optional(),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.live.read'),
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        conversationId: opaqueId('conv'),
+        cursor: supervisorLiveCursorSchema,
+        limit: z.number().int().min(1).max(64),
+        waitMs: z.number().int().min(0).max(15_000),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('action.get'),
+        actionId: supervisorActionIdSchema,
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.turn.start'),
+        actionId: supervisorActionIdSchema,
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        conversationId: opaqueId('conv'),
+        input: supervisorTurnInputSchema,
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.updateModel'),
+        actionId: supervisorActionIdSchema,
+        ...supervisorConversationScope,
+        model: z.string().trim().min(1).max(240).optional(),
+        reasoning: z.string().trim().min(1).max(120).optional(),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.models.refresh'),
+        ...supervisorConversationScope,
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.create'),
+        actionId: supervisorActionIdSchema,
+        machineId: opaqueId('machine'),
+        projectId: opaqueId('proj'),
+        provider: supervisorProviderSchema,
+        input: supervisorTurnInputSchema,
+        model: z.string().trim().min(1).max(240).optional(),
+        reasoning: z.string().trim().min(1).max(120).optional(),
+      })
+      .strict(),
+    ...supervisorB1OperationSchema.options.map((operation) =>
+      operation.extend(supervisorRequestBaseSchema.shape),
+    ),
+  ])
+  .superRefine((request, context) => {
+    if (
+      request.operation === 'conversation.updateModel' &&
+      request.model === undefined &&
+      request.reasoning === undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A model or reasoning update is required',
+      })
+    }
+  })
 export type SupervisorRequest = z.infer<typeof supervisorRequestSchema>
 
 export const supervisorResponseSchema = z

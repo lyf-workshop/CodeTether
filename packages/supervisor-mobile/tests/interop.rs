@@ -137,6 +137,8 @@ fn exercise_operations(fixture: &Fixture, mode: ConnectionMode) {
         json!({"operation":"action.get","actionId":"act_fixture_query"}),
         json!({"operation":"conversation.turn.start","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_reply","input":{"type":"text","text":"reply"}}),
         json!({"operation":"conversation.create","machineId":machine,"projectId":project,"actionId":"act_fixture_create","provider":"codex","input":{"type":"text","text":"new conversation"}}),
+        json!({"operation":"conversation.updateModel","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_model","model":"gpt-5.1","reasoning":"high"}),
+        json!({"operation":"conversation.models.refresh","machineId":machine,"projectId":project,"conversationId":conversation}),
         json!({"operation":"conversation.recent","machineId":machine,"limit":5}),
         json!({"operation":"conversation.changes","machineId":machine,"projectId":project,"conversationId":conversation,"offset":0}),
         json!({"operation":"conversation.archive","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_archive"}),
@@ -155,6 +157,16 @@ fn exercise_operations(fixture: &Fixture, mode: ConnectionMode) {
         if let Some(action_id) = request.get("actionId") {
             assert_eq!(&data["actionId"], action_id, "{operation} changed actionId");
         }
+    }
+
+    for request in [
+        json!({"operation":"conversation.updateModel","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_missing_model"}),
+        json!({"operation":"conversation.updateModel","machineId":machine,"projectId":project,"conversationId":conversation,"actionId":"act_fixture_empty_model","model":""}),
+    ] {
+        let error = session
+            .request(request.to_string())
+            .expect_err("invalid model update is rejected before transport");
+        assert_eq!(error.error_code(), "invalid_request");
     }
 
     let busy_action = format!("act_fixture_busy_archive_{}", session.transport());

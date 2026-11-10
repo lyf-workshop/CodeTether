@@ -908,6 +908,45 @@ export async function startRemoteConversationTurn(options: {
   )
 }
 
+export async function updateRemoteConversationModel(options: {
+  readonly hostId: string
+  readonly machineId: string
+  readonly projectId: string
+  readonly conversationId: string
+  readonly actionId: string
+  readonly model?: string
+  readonly reasoning?: string
+}): Promise<Record<string, unknown>> {
+  const session = requireRemoteSupervisorSession(options.hostId)
+  return await readJson(
+    `${hostBaseUrl}/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/model`,
+    {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        actionId: options.actionId,
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.reasoning === undefined
+          ? {}
+          : { reasoning: options.reasoning }),
+      }),
+    },
+  )
+}
+
+export async function refreshRemoteConversationModels(options: {
+  readonly hostId: string
+  readonly machineId: string
+  readonly projectId: string
+  readonly conversationId: string
+}): Promise<Record<string, unknown>> {
+  const session = requireRemoteSupervisorSession(options.hostId)
+  return await postLocalJson(
+    `/api/v1/remote-supervisor/sessions/${encodeURIComponent(session.sessionId)}/machines/${encodeURIComponent(options.machineId)}/projects/${encodeURIComponent(options.projectId)}/conversations/${encodeURIComponent(options.conversationId)}/models/refresh`,
+    {},
+  )
+}
+
 export async function createRemoteConversation(options: {
   readonly hostId: string
   readonly machineId: string

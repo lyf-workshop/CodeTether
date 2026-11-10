@@ -307,6 +307,7 @@ test('forced-remote manager reads Host state without using local HTTP product da
     port: 0,
     clientBuildIdentity: 'test-host',
   })
+  let localHttp
   const originalFetch = globalThis.fetch
   try {
     const now = Math.floor(Date.now() / 1_000)
@@ -487,8 +488,38 @@ test('forced-remote manager reads Host state without using local HTTP product da
       history: 1,
       live: 1,
     })
+    localHttp = new LocalHttpServer({
+      service: {
+        ...service,
+        publisher: { subscribe: () => () => undefined },
+        close() {},
+      },
+      allowedOrigins: [],
+      heartbeatMs: 60_000,
+      supervisorTransport: manager,
+    })
+    const localBaseUrl = await localHttp.start(0)
+    const modelRoute = `${localBaseUrl}/api/v1/remote-supervisor/sessions/${authenticated.sessionId}/machines/${machineId}/projects/${projectId}/conversations/${conversationId}`
+    for (const [method, suffix, body] of [
+      ['POST', '/models/refresh', {}],
+      [
+        'PATCH',
+        '/model',
+        { actionId: `act_${'a'.repeat(32)}`, model: 'gpt-5.1' },
+      ],
+    ]) {
+      const response = await originalFetch(`${modelRoute}${suffix}`, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      const result = await response.json()
+      assert.equal(response.status, 403, JSON.stringify(result))
+    }
+    assert.equal(reads.conversation, 1)
   } finally {
     globalThis.fetch = originalFetch
+    await localHttp?.close()
     await manager.close()
   }
 })
@@ -515,6 +546,114 @@ test('control activation rejects missing, mismatched, and revoked local evidence
     await assert.rejects(fixture.manager.activate(activation))
     assert.deepEqual(fixture.enabled, [])
   } finally {
+    await fixture.close()
+  }
+})
+
+test('control Supervisor model proxy enforces exact Conversation scope', async () => {
+  const machineId = `machine_${'m'.repeat(32)}`
+  const projectId = `proj_${'p'.repeat(32)}`
+  const conversationId = `conv_${'c'.repeat(32)}`
+  const actionId = `act_${'a'.repeat(32)}`
+  const calls = { scope: 0, refresh: 0, update: 0 }
+  const service = {
+    getSupervisorConversation(machine, project, conversation) {
+      calls.scope++
+      if (
+        machine !== machineId ||
+        project !== projectId ||
+        conversation !== conversationId
+      ) {
+        throw new Error('not_found')
+      }
+      return { protocolVersion: 1, conversation: { conversationId } }
+    },
+    refreshConversationModels(conversation) {
+      assert.equal(conversation, conversationId)
+      calls.refresh++
+      return {
+        protocolVersion: 1,
+        provider: {
+          provider: 'codex',
+          availableModels: [{ id: 'gpt-5.1', name: 'GPT-5.1' }],
+        },
+      }
+    },
+    updateConversationModel(conversation, request) {
+      assert.equal(conversation, conversationId)
+      assert.deepEqual(request, { actionId, model: 'gpt-5.1' })
+      calls.update++
+      return {
+        protocolVersion: 1,
+        actionId,
+        status: 'completed',
+        data: { conversation: { conversationId, currentModel: 'gpt-5.1' } },
+      }
+    },
+  }
+  const fixture = await controlActivationFixture(service)
+  const activation = fixture.activation(authorizationId)
+  fixture.addEvidence(activation, authorizationId)
+  let localHttp
+  try {
+    await fixture.manager.activate(activation)
+    const { sessionId, control } = await fixture.connect(activation)
+    assert.equal(control, 'control')
+    localHttp = new LocalHttpServer({
+      service: {
+        ...fixture.service,
+        publisher: { subscribe: () => () => undefined },
+        close() {},
+      },
+      allowedOrigins: [],
+      heartbeatMs: 60_000,
+      supervisorTransport: fixture.manager,
+    })
+    const localBaseUrl = await localHttp.start(0)
+    const modelRoute = (project) =>
+      `${localBaseUrl}/api/v1/remote-supervisor/sessions/${sessionId}/machines/${machineId}/projects/${project}/conversations/${conversationId}`
+    const refresh = await fixture.httpFetch(
+      `${modelRoute(projectId)}/models/refresh`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+    const refreshed = await refresh.json()
+    assert.equal(refresh.status, 200, JSON.stringify(refreshed))
+    assert.equal(refreshed.provider.availableModels[0].id, 'gpt-5.1')
+    const update = await fixture.httpFetch(`${modelRoute(projectId)}/model`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ actionId, model: 'gpt-5.1' }),
+    })
+    const updated = await update.json()
+    assert.equal(update.status, 200, JSON.stringify(updated))
+    assert.equal(updated.data.conversation.currentModel, 'gpt-5.1')
+    const wrongProject = `proj_${'x'.repeat(32)}`
+    for (const [method, suffix, body] of [
+      ['POST', '/models/refresh', {}],
+      [
+        'PATCH',
+        '/model',
+        { actionId: `act_${'b'.repeat(32)}`, model: 'gpt-5.1' },
+      ],
+    ]) {
+      const response = await fixture.httpFetch(
+        `${modelRoute(wrongProject)}${suffix}`,
+        {
+          method,
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      )
+      const result = await response.json()
+      assert.equal(response.status, 404, JSON.stringify(result))
+    }
+    assert.deepEqual(calls, { scope: 4, refresh: 1, update: 1 })
+  } finally {
+    await localHttp?.close()
     await fixture.close()
   }
 })
@@ -612,7 +751,7 @@ test('revoking an old control pairing disconnects its lineage and preserves a ne
   }
 })
 
-async function controlActivationFixture() {
+async function controlActivationFixture(serviceOverrides = {}) {
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
   })
@@ -632,8 +771,9 @@ async function controlActivationFixture() {
   const enabled = []
   const revocations = []
   let admissionRoot
+  const service = { getHostIdentity: () => identity, ...serviceOverrides }
   const manager = await SupervisorTransportManager.create({
-    service: { getHostIdentity: () => identity },
+    service,
     persistence: {
       getHostPresenceConfiguration: () => undefined,
       getHostSupervisorAuthorizationEvidence: (id) => evidence.get(id),
@@ -687,6 +827,8 @@ async function controlActivationFixture() {
   }
   return {
     manager,
+    service,
+    httpFetch: originalFetch,
     enabled,
     revoked,
     durableSuccessors,

@@ -823,6 +823,64 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/turns$/u,
       )
+      const supervisorConversationModelRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/model$/u,
+      )
+      const supervisorConversationModelsRefreshRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/models\/refresh$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        supervisorConversationModelsRefreshRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        await this.#http.readValidatedBody(
+          request,
+          RefreshConversationModelsRequestSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.refreshRemoteConversationModels(
+            supervisorConversationModelsRefreshRoute[0]!,
+            {
+              machineId: supervisorConversationModelsRefreshRoute[1]!,
+              projectId: supervisorConversationModelsRefreshRoute[2]!,
+              conversationId: supervisorConversationModelsRefreshRoute[3]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'PATCH' &&
+        supervisorConversationModelRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateConversationModelRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.updateRemoteConversationModel(
+            supervisorConversationModelRoute[0]!,
+            {
+              ...body,
+              machineId: supervisorConversationModelRoute[1]!,
+              projectId: supervisorConversationModelRoute[2]!,
+              conversationId: supervisorConversationModelRoute[3]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'POST' &&
         supervisorConversationTurnRoute !== undefined &&

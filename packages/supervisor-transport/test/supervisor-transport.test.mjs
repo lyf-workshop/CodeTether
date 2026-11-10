@@ -218,6 +218,22 @@ test('read-only Supervisor sessions cannot control Conversations', async () => {
       projectId: `proj_${'p'.repeat(32)}`,
       conversationId: `conv_${'c'.repeat(32)}`,
     }
+    await assert.rejects(
+      session.updateConversationModel({
+        ...conversation,
+        actionId,
+        model: 'gpt-5.1',
+      }),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
+    await assert.rejects(
+      session.refreshConversationModels(conversation),
+      (error) =>
+        error instanceof SupervisorClientError &&
+        error.code === 'operation_not_allowed',
+    )
     for (const request of [
       { operation: 'conversation.archive', ...conversation, actionId },
       {
@@ -275,6 +291,49 @@ test('matching signed grant and admission scope permit the fixed control union',
         input: { type: 'text', text: 'safe' },
       }),
       { accepted: true, operation: 'conversation.create' },
+    )
+    assert.deepEqual(
+      await session.updateConversationModel({
+        actionId: `act_${'e'.repeat(32)}`,
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+        model: 'gpt-5.1',
+        reasoning: 'high',
+      }),
+      { accepted: true, operation: 'conversation.updateModel' },
+    )
+    assert.deepEqual(
+      await session.refreshConversationModels({
+        machineId: `machine_${'m'.repeat(32)}`,
+        projectId: `proj_${'p'.repeat(32)}`,
+        conversationId: `conv_${'c'.repeat(32)}`,
+      }),
+      { accepted: true, operation: 'conversation.models.refresh' },
+    )
+    const updateRequest = {
+      type: 'supervisor.request',
+      protocolVersion: 1,
+      requestId: `sreq_${'r'.repeat(32)}`,
+      operation: 'conversation.updateModel',
+      actionId: `act_${'e'.repeat(32)}`,
+      machineId: `machine_${'m'.repeat(32)}`,
+      projectId: `proj_${'p'.repeat(32)}`,
+      conversationId: `conv_${'c'.repeat(32)}`,
+    }
+    assert.equal(
+      supervisorRequestSchema.safeParse(updateRequest).success,
+      false,
+    )
+    assert.equal(
+      supervisorRequestSchema.safeParse({ ...updateRequest, model: '' })
+        .success,
+      false,
+    )
+    assert.equal(
+      supervisorRequestSchema.safeParse({ ...updateRequest, reasoning: 'high' })
+        .success,
+      true,
     )
     session.close()
   } finally {
@@ -566,6 +625,14 @@ async function createFixture(options = {}) {
       createConversation: () => ({
         accepted: true,
         operation: 'conversation.create',
+      }),
+      updateConversationModel: () => ({
+        accepted: true,
+        operation: 'conversation.updateModel',
+      }),
+      refreshConversationModels: () => ({
+        accepted: true,
+        operation: 'conversation.models.refresh',
       }),
     },
     operations: (request) => ({ operation: request.operation }),

@@ -322,6 +322,43 @@ export class ConnectedSupervisorSession {
     )
   }
 
+  async updateConversationModel(
+    input: {
+      readonly actionId: string
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+      readonly model?: string
+      readonly reasoning?: string
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.updateModel',
+        ...input,
+      },
+      signal,
+    )
+  }
+
+  async refreshConversationModels(
+    input: {
+      readonly machineId: string
+      readonly projectId: string
+      readonly conversationId: string
+    },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return await this.#request(
+      {
+        operation: 'conversation.models.refresh',
+        ...input,
+      },
+      signal,
+    )
+  }
+
   async executeB1Operation(
     input: SupervisorB1Operation,
     signal?: AbortSignal,

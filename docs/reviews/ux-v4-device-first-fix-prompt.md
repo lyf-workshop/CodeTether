@@ -1,128 +1,128 @@
-# 修复提示词：ux/v4-device-first 第 1 轮审核
+# Fix Prompt: ux/v4-device-first Round 1 Review
 
-> 把下面整段交给编码智能体。
+> Give the entire text below to the coding agent.
 
 ---
 
-你在 CodeTether 仓库里修复 `ux/v4-device-first` 第 1 轮审核发现的问题。
+You are fixing findings from the first review of `ux/v4-device-first` in the CodeTether repository.
 
-## 起点
+## Starting Point
 
-- 工作区：`D:/Projects/Software/agenthub-ux-v4-device-first`（已存在，不要新建 worktree）
-- 分支：`ux/v4-device-first`，起点提交 `df91601`。开工前确认 `git rev-parse HEAD` 是 df91601 开头、工作区除 `docs/UX-V4-REVIEW-NOTES.md` 外是干净的；不一致就停下报告。
-- 审核记录（必读）：`D:/Projects/Software/agenthub/docs/reviews/ux-v4-device-first.md`。下面的 M*、S* 编号都指它。
-- 需求和设计：`D:/Projects/Software/agenthub/docs/ux-redesign/04-requirements.md`（第三版）、`02-dev-handoff.md` 和原型页面。
-- 授权说明：Figma 同步暂停期间，`docs/ux-redesign` 的需求和原型是用户授权的临时界面依据（用户 2026-10-19 的决定），本任务覆盖 AGENTS.md 里“Figma 是唯一来源”。AGENTS.md 的其余规则全部照常遵守。
+- Workspace: `D:/Projects/Software/agenthub-ux-v4-device-first` (already exists; do not create another worktree).
+- Branch: `ux/v4-device-first`, starting commit `df91601`. Before working, confirm `git rev-parse HEAD` starts with df91601 and the worktree is clean except for `docs/UX-V4-REVIEW-NOTES.md`; otherwise stop and report.
+- Review record (required reading): `D:/Projects/Software/agenthub/docs/reviews/ux-v4-device-first.md`. All M* and S* IDs below refer to it.
+- Requirements and design: `D:/Projects/Software/agenthub/docs/ux-redesign/04-requirements.md` (third revision), `02-dev-handoff.md`, and prototype pages.
+- Authorization: while Figma synchronization is paused, requirements and prototypes in `docs/ux-redesign` are the user-authorized temporary UI reference (user decision on 2026-10-19). This task overrides AGENTS.md's “Figma is the only source” rule. Follow all other AGENTS.md rules normally.
 
-## 要做的事和提交
+## Work and Commits
 
-每一步一个提交，提交信息用英文 conventional commit，末尾加：
-`Co-Authored-By: Claude Code <noreply@anthropic.com>`（如果你不是 Claude Code，换成你自己的名字，格式不变）。
+One commit per step, with an English conventional commit message and this trailer:
+`Co-Authored-By: Claude Code <noreply@anthropic.com>` (if you are not Claude Code, substitute your own name without changing the format).
 
-1. **M1 恢复“从这台设备移除项目”**（`fix(web): restore per-device project removal`）
-   - 在设备详情页的项目卡片，以及解除配对弹窗被挡住时列出的每个项目旁边，提供“从这台设备移除”。复用 `remove-project-location-dialog.tsx` 和 `runtime.removeProjectLocation`。
-   - 只有这个项目在这台设备上没有会话（含已归档）时才可点；否则显示原因，不显示可点的按钮。
-   - 解除配对弹窗在移除后重新预检，全部移除后变成可解除配对。
-   - 测试：用渲染测试覆盖“本机有会话、配对设备有文件夹”这个场景，能走通到可以解除配对。
-2. **M3、M4、M5 侧栏**（`fix(web): persist sidebar tree and gate add project`）
-   - 展开 / 收起的设备和项目 ID 存 `localStorage`（只存 ID，键名带 `ct-` 前缀，读出时校验，坏数据当空）。当前路径仍自动展开。
-   - Ctrl B（Mac 上 ⌘B）收起 / 展开侧栏，输入法组字中、焦点在输入框里时不触发，和现有快捷键写在同一处。
-   - 侧栏“+”改用 `machineCanAddProject`，不可用时和设备页一样显示原因。
-3. **S1、S2、S16、S17 输入框和创建**（`fix(web): keep composer focus and idempotent create`）
-   - 发送中不再隐藏编辑器（只读即可），发送结束焦点回到编辑器（前提是发送前焦点在输入框里）。
-   - 创建会话：同一选择、上次失败不是 Host 明确拒绝（非 `CodeTetherResponseError`）时复用 actionId，做法照 `live-conversation-actions.ts:137-139`。
-   - 删掉 `composer.tsx:172` 的演示分支，`controller` 改成必填。
-   - 草稿按会话 ID 存 `sessionStorage`，发送成功或归档后删除，不写 `localStorage`。
-4. **M2、S19 删死代码**（`refactor(web): remove unreachable v3 modules`）
-   - 删掉审核记录 S19 列出的模块和 `conversations-page.tsx`、`project-conversations-route.tsx`，同时删或改只为它们存在的测试。`remove-project-location-dialog.tsx` 保留（第 1 步在用）。
-   - 删之前用 import 可达性确认它们确实不被 `main.tsx` 引用；有疑问的不删，写进报告。
-5. **S3、S9、S15、S20 文案**（`fix(web): chinese-only copy and roadmap link`）
-   - 源头字符串改成“AI 工具”“这台电脑”“文件夹”等 04 用语，不在展示层打补丁；`tool-presentation.ts`、`provider-presentation.ts`、`message-markdown.tsx` 里的英文译成中文。
-   - 账号页那句提到其他电脑的话后面加到 `/roadmap` 的链接。
-   - 加一个测试：扫描 `apps/web/src` 的用户可见字符串，出现“智能体”“推理后端”“Provider”“此电脑”时失败（允许 Codex、Claude Code、Relay、Node）。
-6. **S4、S5 列表**（`fix(web): recent projects first and server-side filters`）
-   - 新建会话的项目列表加“最近使用”组（最多 5 个，按 `lastActivityAt`），其余按设备分组。
-   - `status`、`provider` 传给 `listProjectConversations`，并放进查询键。Host 接口已支持，不改 Host。
-7. **S7、S8、S10、S11、S12 设备和项目**（`fix(web): device page polish`）
-   - 项目卡片指标在卡片可见时加载（不依赖悬停）。
-   - 添加项目竞态时显示中文提示“这个文件夹刚被添加过，列表已更新”，并刷新列表。
-   - 原生 checkbox 换成 `packages/ui` 组件（没有就在 `packages/ui` 加一个，带标签和键盘操作）。
-   - 断点和尺寸常量收到一个文件或 tokens。
-   - Host 没就绪时“解除配对”按钮禁用并说明原因。
-8. **S14 已授权的手机和平板**（`feat(web): read-only list of authorized mobile devices`）
-   - 在 设置 › 账号 下加只读列表“已允许访问的手机和平板”：名称、类型、授权时间。数据来自现有协调器已拿到的授权，不新增后端接口，不加开关和按钮。没有授权时整段不显示。
-   - 说明一行：“移除功能会在配对码配对上线时提供”，链到 `/roadmap`。
-9. **S23 / UX-V4-001 首次设置**（`fix(web): separate install runtime and service readiness`）
-   - 按 `docs/UX-V4-REVIEW-NOTES.md` 改，只动 `onboarding-page.tsx`、`onboarding-model.ts`，顺便把 onboarding-page 拆小。验收清单逐条做到。改完后把这个笔记文件里的状态改成“已修复，待复核”，随这个提交一起提交。
-10. **S18、S21、S22 和 S6 记录**（`refactor(web): split large files and add behavior tests`）
-    - Node 文档链接改走 `provider-guidance-link.tsx` 的原生打开方式。
-    - 拆 `previous-conversations-step.tsx`、`workspace-sidebar.tsx`、`conversation-organization-controls.tsx`、`add-project-dialog.tsx`，每个不超过 400 行，只拆不改行为。
-    - 把 `new-conversation-dialog.test.mjs` 里对源码的正则测试换成渲染测试：双击只创建一次、缺首条输入或模型时不能创建、409 时保留草稿且不重发、发送后焦点回到输入框。
-    - S6（批准放在输入框上方的待处理栏，偏离 W6）不用改代码，也不用改文档：本分支没有 `docs/ux-redesign`，这处偏离由审核方记录。
+1. **M1 Restore “Remove project from this device”** (`fix(web): restore per-device project removal`)
+   - Offer “Remove from this device” on device-detail project cards and beside each project listed in a blocked unpairing dialog. Reuse `remove-project-location-dialog.tsx` and `runtime.removeProjectLocation`.
+   - Enable only when this project has no conversations on this device (including archived); otherwise show the reason without an actionable button.
+   - Recheck the unpairing dialog after removal; enable unpairing after all projects are removed.
+   - Test: render-test the case “local conversations, folder on paired device” through to successful eligibility for unpairing.
+2. **M3, M4, M5 Sidebar** (`fix(web): persist sidebar tree and gate add project`)
+   - Store expanded/collapsed device and project IDs in `localStorage` (IDs only, `ct-` key prefix; validate reads, treat corrupt data as empty). Continue automatically expanding the current route.
+   - Ctrl B (⌘B on Mac) collapses/expands the sidebar; ignore IME composition and input focus. Define alongside existing shortcuts.
+   - Sidebar “+” uses `machineCanAddProject`; when unavailable, show the same reason as Devices.
+3. **S1, S2, S16, S17 Composer and Creation** (`fix(web): keep composer focus and idempotent create`)
+   - Keep the editor visible while sending (read-only is sufficient); return focus afterward if it had focus before sending.
+   - Conversation creation: reuse actionId for the same selection when the previous failure was not an explicit Host rejection (not `CodeTetherResponseError`), following `live-conversation-actions.ts:137-139`.
+   - Remove the demo branch at `composer.tsx:172`; make `controller` required.
+   - Store drafts by conversation ID in `sessionStorage`; clear after successful send or archiving; do not use `localStorage`.
+4. **M2, S19 Remove Dead Code** (`refactor(web): remove unreachable v3 modules`)
+   - Delete the modules listed in review S19, plus `conversations-page.tsx` and `project-conversations-route.tsx`; delete or update tests existing only for them. Keep `remove-project-location-dialog.tsx` (used by step 1).
+   - Verify import reachability from `main.tsx` before deletion; leave uncertain modules and report them.
+5. **S3, S9, S15, S20 Copy** (`fix(web): chinese-only copy and roadmap link`)
+   - Use document 04's Chinese terms for “AI tool,” “This computer,” “Folder,” etc. at the string source, without presentation-layer patches; translate English in `tool-presentation.ts`, `provider-presentation.ts`, and `message-markdown.tsx` into Chinese.
+   - Add a `/roadmap` link after the account-page sentence about other computers.
+   - Add a test scanning user-visible strings in `apps/web/src`, failing on the exact strings `智能体`, `推理后端`, `Provider`, or `此电脑` (allow Codex, Claude Code, Relay, Node).
+6. **S4, S5 Lists** (`fix(web): recent projects first and server-side filters`)
+   - Add a “Recently used” group to the New Conversation project list (at most 5, by `lastActivityAt`); group remaining projects by device.
+   - Pass `status` and `provider` to `listProjectConversations` and include them in query keys. Host already supports them; do not modify Host.
+7. **S7, S8, S10, S11, S12 Devices and Projects** (`fix(web): device page polish`)
+   - Load project-card metrics when cards become visible (independent of hover).
+   - For an add-project race, show the Chinese message “This folder was just added; the list has been updated” and refresh the list.
+   - Replace native checkboxes with a `packages/ui` component (add one there if absent, with labels and keyboard support).
+   - Consolidate breakpoints and dimension constants in one file or tokens.
+   - Disable Unpair while Host is not ready and explain why.
+8. **S14 Authorized Phones and Tablets** (`feat(web): read-only list of authorized mobile devices`)
+   - Under Settings › Account, add a read-only “Phones and tablets allowed access” list: name, type, authorization time. Use grants already obtained by the existing coordinator; no new backend API, switches, or buttons. Hide the entire section if no grants exist.
+   - Add “Removal will be available when pairing-code pairing launches,” linked to `/roadmap`.
+9. **S23 / UX-V4-001 First-run Setup** (`fix(web): separate install runtime and service readiness`)
+   - Follow `docs/UX-V4-REVIEW-NOTES.md`; edit only `onboarding-page.tsx` and `onboarding-model.ts`, splitting onboarding-page into smaller files as needed. Fulfill every acceptance item. Update the note's status to “Fixed, awaiting re-review” and include it in this commit.
+10. **S18, S21, S22 and S6 Record** (`refactor(web): split large files and add behavior tests`)
+    - Open Node documentation links using `provider-guidance-link.tsx`'s native mechanism.
+    - Split `previous-conversations-step.tsx`, `workspace-sidebar.tsx`, `conversation-organization-controls.tsx`, and `add-project-dialog.tsx` to at most 400 lines each, without behavior changes.
+    - Replace source-regex tests in `new-conversation-dialog.test.mjs` with render tests: double-click creates only once; missing first input or model prevents creation; 409 retains draft without resend; focus returns to composer after sending.
+    - S6 (approval in the attention bar above the composer, deviating from W6) needs no code or doc change: this branch lacks `docs/ux-redesign`; the reviewer will record the deviation.
 
-11. **M6、M7 对比度**（`fix(ui): meet AA contrast for muted and warning text`）
-    - `globals.css`：浅色 `--ct-text-3` 改为约 `#706b64`，深色改为约 `#928e87`（审核方算过：在 bg、surface、inset 上都 ≥ 4.5）。改完用脚本算一遍所有 `--text-muted`、`--status-idle-text`、`--status-offline-text` 和它们实际所在背景的组合，结果写进报告。
-    - 所有把 `text-warning`、`text-danger` 当文字色的地方改成 `text-warning-text`、`text-danger-text`（先 grep 全部用法，至少 `inbox-page.tsx:228`、`inbox-item.tsx:113,154`）。
-    - `apps/desktop/src-tauri/tauri.conf.json:26` 的窗口底色改成浅色主题的背景色（S32）。这是唯一允许改的 `apps/desktop` 文件。
-12. **M8、S24、S33、S34 待处理**（`fix(web): attention actions and notification body`）
-    - 已完成待查看加“知道了”（`resolveAttention`）。等待批准在这台设备不能批准时，显示一句原因（例如“这台设备上的 AI 工具不支持在这里批准，请打开会话处理”），不加“知道了”：Host 对 approval 类返回 422（`host-service.ts:3220-3225`），不改 Host。
-    - “查看结果”在 `resolveAttention` 失败时也打开会话，并显示失败提示。
-    - Host 已连接但列表查询失败时，换成“待处理列表暂时读不到，请稍后重试”之类的准确说法。
-    - 系统通知正文加设备名：“设备 · 项目”，仍不含会话标题、提示词、命令和路径。
-13. **S25–S30、S35 组件和设置**（`fix(ui): settings and component accessibility`）
-    - “始终开启”用正常色或不显示点；删掉没用的 `backgroundRuntimeAvailable`。
-    - `roadmap-page.tsx` 的 `<main>` 改成 `<section>`。
-    - `Notice` 默认不带 `role`，错误类仍用 `role="alert"`；检查现有调用方需要播报的地方显式加上。
-    - `CommandList`：listbox 里不放标题和状态，空状态移到外面，`aria-expanded` 跟随实际状态。
-    - 通知开关加 `aria-describedby` 指向那一行的说明。
-    - `AttentionRow` 窄屏时按钮换到正文下面。
-    - 重新发送登录码加 30 秒本地冷却，按钮上显示剩余秒数。
+11. **M6, M7 Contrast** (`fix(ui): meet AA contrast for muted and warning text`)
+    - `globals.css`: set light `--ct-text-3` to approximately `#706b64`, dark to approximately `#928e87` (reviewer calculated ≥4.5 on bg, surface, and inset). Then script all actual background combinations for `--text-muted`, `--status-idle-text`, and `--status-offline-text`; report results.
+    - Replace every use of `text-warning`, `text-danger` as text colors with `text-warning-text`, `text-danger-text` (search all usages first; at minimum `inbox-page.tsx:228`, `inbox-item.tsx:113,154`).
+    - Set window background at `apps/desktop/src-tauri/tauri.conf.json:26` to the light theme background (S32). This is the only permitted `apps/desktop` file change.
+12. **M8, S24, S33, S34 Inbox** (`fix(web): attention actions and notification body`)
+    - Add “Got it” (`resolveAttention`) to completed items awaiting review. If approval is unsupported on this device, explain why (e.g. “The AI tool on this device cannot approve here; open the conversation to handle it”); do not add “Got it”: Host returns 422 for approval items (`host-service.ts:3220-3225`); do not change Host.
+    - “View result” opens the conversation even if `resolveAttention` fails, while showing the failure.
+    - If Host is connected but the list query fails, use accurate copy such as “Cannot read the Inbox list right now; retry later.”
+    - Add device name to system notification body: “Device · Project”; still exclude conversation titles, prompts, commands, and paths.
+13. **S25–S30, S35 Components and Settings** (`fix(ui): settings and component accessibility`)
+    - Use normal color or no dot for “Always on”; remove unused `backgroundRuntimeAvailable`.
+    - Change `<main>` to `<section>` in `roadmap-page.tsx`.
+    - `Notice` has no default `role`; errors retain `role="alert"`; review callers and explicitly request announcements where needed.
+    - `CommandList`: keep titles/status outside listbox, move empty state outside, set `aria-expanded` to actual state.
+    - Notification switches' `aria-describedby` points to their row's description.
+    - Move `AttentionRow` buttons below body text on narrow screens.
+    - Add a 30-second local cooldown for resending login codes, showing remaining seconds on the button.
 
-先核实再改：`packages/ui/src/tokens/statuses.ts` 把 `waiting` 统一显示为“等待批准”。查清 Host 的 `waiting` 是否只表示等待批准；不是的话改回中性说法，结论写进报告。
+Verify before changing: `packages/ui/src/tokens/statuses.ts` consistently labels `waiting` “Waiting for approval.” Determine whether Host `waiting` means approval only; otherwise restore a neutral label and report the conclusion.
 
-S13（getMachine 调用次数）先核实：确实是每台设备一次请求，就合并成一次；不是就写进报告。
+Verify S13 (getMachine call count) first: if there is truly one request per device, consolidate into one; otherwise report the finding.
 
-## 不能破坏的规则
+## Rules to Preserve
 
-- `docs/ux-redesign/03-project-plan.md` §6 的不变量。
-- 界面只显示后端真实提供的能力；还没做的只出现在 `/roadmap`。不加假开关、不加“即将上线”。
-- 界面只用中文（Codex、Claude Code、Relay、Node 可以保留英文；“AI 工具”可以）。
-- 不加演示数据；任何演示都不调用真实的登录、删除和 AI 工具执行接口。
-- 远程和本机操作沿用现有门控：actionId 幂等、运行中不能归档、失败不自动重发、409 不重发、停止和审批只对支持的 AI 工具开放。
-- 通知不含会话标题、提示词、命令和路径。
-- AGENTS.md：不用 `style=`、不用 `!important`、颜色只用 tokens、不用 Zustand、通用组件放 `packages/ui`。
-- 不改 `apps/host`、`packages/protocol`、`packages/client`、Control Plane 和 Relay；`apps/desktop` 只允许改第 11 步那一处窗口底色。需要改它们才能完成的，停下写进报告。
+- Invariants in `docs/ux-redesign/03-project-plan.md` §6.
+- UI shows only capabilities truly provided by the backend; unimplemented features appear only in `/roadmap`. No fake switches or “Coming soon.”
+- Chinese-only UI (Codex, Claude Code, Relay, Node may remain English; the Chinese term for “AI tool” is allowed).
+- No demo data; demos must never call real login, deletion, or AI tool execution APIs.
+- Preserve local/remote gating: actionId idempotency, no archiving while running, no automatic resend after failures or 409, Stop and Approval only for supporting AI tools.
+- Notifications exclude conversation titles, prompts, commands, and paths.
+- AGENTS.md: no `style=`, no `!important`, token-only colors, no Zustand, shared components in `packages/ui`.
+- Do not edit `apps/host`, `packages/protocol`, `packages/client`, Control Plane, or Relay; in `apps/desktop`, only the step 11 window background change is allowed. If completing a task requires changes there, stop and report.
 
-## 不能做的事
+## Prohibited Actions
 
-- 不读、不写 `.secrets/`、任何 `.env` 和凭据文件；不读 `~/.claude.json`。
-- 不部署，不推送（包括 `ux/v4-device-first` 和 main），不合并，不打 tag，不替换已安装的 Mac 和 Windows 版本。
-- 不动主工作区 `D:/Projects/Software/agenthub` 根目录下未跟踪的文件（`PHASE8D-*`、`demo-ui-*.html`、`ICON-COLLECTION-PLAN.md`、`docs/MULTI-PROVIDER-STRATEGY.md`、`packages/ui/src/assets/`）。
-- 不用 `git add .`，按文件暂存。不改 git 配置，不跳过 hooks。
-- 不在任何输出、日志、提交里打印环境变量的值。
+- Do not read or write `.secrets/`, any `.env` or credential file; do not read `~/.claude.json`.
+- No deployment, pushes (including `ux/v4-device-first` and main), merges, tags, or replacement of installed Mac/Windows apps.
+- Do not touch untracked files in main workspace `D:/Projects/Software/agenthub` (`PHASE8D-*`, `demo-ui-*.html`, `ICON-COLLECTION-PLAN.md`, `docs/MULTI-PROVIDER-STRATEGY.md`, `packages/ui/src/assets/`).
+- Never use `git add .`; stage by file. Do not change Git configuration or skip hooks.
+- Do not print environment variable values in any output, log, or commit.
 
-## 验证
+## Validation
 
-在工作区根目录依次运行：
+Run sequentially from the workspace root:
 
 ```
 pnpm typecheck
 pnpm lint
 pnpm test
 pnpm build
-npx prettier --list-different --end-of-line auto <本次改动的文件>
+npx prettier --list-different --end-of-line auto <files-changed-in-this-task>
 ```
 
-- `pnpm test` 里 `packages/adapter-claude/test/detection.test.mjs:331` 已知会因为本机的 ANTHROPIC_* 环境变量失败，和本任务无关。请用 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm test` 跑，并在报告里写明。不要修改这个测试。
-- `pnpm format:check` 全仓库会因 CRLF 换行报错，不用管；只看上面那条针对改动文件的检查。
-- 重点检查：第 1 步的场景测试；第 5 步的文案扫描测试；侧栏刷新后展开状态保持；Ctrl B；发送后焦点；第 11 步的对比度计算结果；第 12 步通知正文不含标题的测试。
+- Known unrelated `pnpm test` failure: `packages/adapter-claude/test/detection.test.mjs:331` fails with this machine's ANTHROPIC_* variables. Run `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm test` and document this. Do not modify that test.
+- Repository-wide `pnpm format:check` fails on CRLF endings; ignore that and use the changed-file check above.
+- Focus on: step 1 scenario test; step 5 copy scanner; expanded sidebar state after refresh; Ctrl B; focus after send; step 11 contrast calculation; step 12 test excluding titles from notification bodies.
 
-如果遇到 API 429 或 524：按返回的 Retry-After 等待后重试，每种错误最多重试 3 次，每次记下时间和等待时长；第 3 次后仍失败就停下，在报告里说明停在哪一步。
+For API 429 or 524, wait according to Retry-After before retrying, at most 3 retries per error type; log time and wait duration each time. If still failing after the third retry, stop and report the stopping point.
 
-## 报告格式（中文）
+## Report Format (Chinese)
 
-1. 每一步：提交哈希、改了什么、对应的 M/S 编号。
-2. 检查结果：五条命令的退出码，失败的原样贴出（先把任何形如令牌的字符串替换成 `[REDACTED]`）。
-3. 没做的和原因（包括 S13 的核实结论、因为不能改 Host 而停下的地方）。
-4. 偏离需求或原型的地方。
-5. 所在的“完成”级别（见 `D:/Projects/Software/agenthub/docs/DEVELOPMENT-PROCESS.md` §2）。检查全部通过时是“代码完成”，不要自称“审核通过”。
+1. Each step: commit hash, changes, corresponding M/S IDs.
+2. Check results: exit codes of the five commands; include failures verbatim (first replace token-like strings with `[REDACTED]`).
+3. Unfinished work and reasons (including S13 verification and any work blocked by the prohibition on Host changes).
+4. Deviations from requirements or prototype.
+5. Completion level (see `D:/Projects/Software/agenthub/docs/DEVELOPMENT-PROCESS.md` §2). Passing all checks means “Code complete,” never claim “Review passed.”

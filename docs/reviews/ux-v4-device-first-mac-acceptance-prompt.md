@@ -1,83 +1,83 @@
-# 任务：Mac 安装版验收（v4 电脑端）
+# Task. Mac installed-build acceptance (v4 desktop)
 
-这份提示词在 Mac 上运行。代码以 GitHub 上的 main 为准，提交必须是 `835489dd3c9e7e703ecdfb86b9cd4d2f53391b16`（标签 `v0.1.0-alpha.1`），否则停下报告。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Run this prompt on Mac. Use GitHub main exactly at `835489dd3c9e7e703ecdfb86b9cd4d2f53391b16` (tag `v0.1.0-alpha.1`), otherwise stop/report. UI follows docs/ux-redesign under temporary user authorization overriding AGENTS.md's Figma-only rule.
 
-用户要求：界面检查由智能体直接在安装版上完成，用辅助功能接口和只截 CodeTether 窗口的截图来判断，不把界面判断交回给用户。
+The agent must inspect the installed UI using accessibility interfaces and CodeTether-window-only screenshots, without delegating judgments to the user.
 
-Windows 安装版 15 项已经全部通过。这一轮只验 Mac，不改代码。发现问题时记下来，停在报告，不在这一轮修。
+All 15 Windows installed-build items pass. This round tests Mac only, without code changes. Record problems and stop at the report instead of fixing them.
 
-## 第一部分：准备
+## Part 1. Preparation
 
-1. 拉取代码，`git fetch origin --tags`，在 `v0.1.0-alpha.1` 上新建一个干净的工作区。不要动 Mac 上已有的工作区和它们的未提交改动。
-2. 只读记下现在 Mac 上的安装版：`/Applications/CodeTether.app`（或者实际所在位置）的版本、构建号，以及 `~/Library/Application Support/CodeTether` 里项目、设备、会话的数量。只记数量，不读数据库内容和凭据。
-3. 备份，用户同意替换 Mac 安装版：
-   - 把旧的 `CodeTether.app` 整个复制到 `~/agenthub-archive/mac-install-backup-<日期>/`；
-   - 把 `~/Library/Application Support/CodeTether` 整个复制过去；
-   - 在里面写一个 RESTORE.txt，说明怎么恢复。
-   - 复制完核对文件数和总大小一致。备份不完整就停下。
+1. Fetch `git fetch origin --tags` and create a clean worktree at `v0.1.0-alpha.1`, preserving existing Mac worktrees/uncommitted changes.
+2. Read-only record version/build from `/Applications/CodeTether.app` (or actual path) and project/device/conversation counts in `~/Library/Application Support/CodeTether`. Counts only, no database contents or credentials.
+3. Back up before the authorized Mac replacement.
+   - Copy the complete old `CodeTether.app` to `~/agenthub-archive/mac-install-backup-<date>/`.
+   - Copy the entire `~/Library/Application Support/CodeTether` there.
+   - Write RESTORE.txt with recovery steps.
+   - Compare file counts/total bytes. Stop if incomplete.
 
-## 第二部分：打包
+## Part 2. Packaging
 
-- 打包需要三项环境变量：`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`、`VITE_CODETETHER_CONTROL_PLANE_URL`。值和 Windows 版相同，由用户在 Mac 的终端里设置。智能体只检查有没有设置，不打印、不保存、不再向用户索取。缺少时停下，请用户设置。
-- 运行 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm install --frozen-lockfile`，然后 `pnpm desktop:build`。日志用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer 再保存。
-- 打包前先跑一遍 `pnpm typecheck`、`pnpm lint`、`pnpm test`，记下结果。失败时写进报告，继续打包。
-- 记下 `.app` 和 `.dmg` 的路径、大小和 SHA256。签名是临时签名（`signingIdentity: "-"`），不做公证。
+- Required variables are `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_CODETETHER_CONTROL_PLANE_URL`, matching Windows. The user sets these in Mac terminal. Check presence only, never print/save/request values again. Stop for missing settings.
+- Run `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm install --frozen-lockfile` then `pnpm desktop:build`. Sed-redact `sk-…`, `sb_publishable_…`, Bearer before saving logs.
+- Run `pnpm typecheck`, `pnpm lint`, `pnpm test` before packaging, record failures and continue packaging.
+- Record .app/.dmg paths, sizes, SHA256. Use ad-hoc `signingIdentity: "-"` without notarization.
 
-## 第三部分：安装
+## Part 3. Installation
 
-1. 请用户从菜单栏退出旧的 CodeTether。确认进程都退出了。
-2. 用新的 `.app` 替换 `/Applications/CodeTether.app`。数据目录不动。
-3. 第一次打开时，macOS 可能提示“无法验证开发者”。如果出现，请用户在“系统设置 > 隐私与安全性”里点“仍要打开”。智能体不改 Gatekeeper 设置，不运行 `spctl --master-disable`，不去掉隔离属性以外的任何安全设置。
-4. 打开后只读核对：运行版本是 `git-835489dd3c9e`，Desktop 和 Host 各一个，项目、设备、会话的数量和第一部分记下的一致。
+1. Ask user to exit old CodeTether through menu bar and verify all processes exited.
+2. Replace `/Applications/CodeTether.app` with new .app, preserving data.
+3. If macOS cannot verify developer, ask user to click Open Anyway in System Settings > Privacy & Security. Do not change Gatekeeper, run `spctl --master-disable`, or alter security settings other than quarantine attributes.
+4. Read-only verify `git-835489dd3c9e`, one Desktop/one Host, and unchanged project/device/conversation counts.
 
-## 第四部分：验收清单
+## Part 4. Acceptance checklist
 
-按下面 15 项逐项检查，每项写“通过”“不通过”或“未测”和依据。Mac 上快捷键是 ⌘ 代替 Ctrl。
+Record Pass/Fail/Untested and evidence for all 15. Mac uses ⌘ instead of Ctrl.
 
-| # | 检查 |
+| # | Check |
 |---|---|
-| 1 | 首次设置：安装、运行、服务三项分开显示，主按钮“继续设置”。用单独的数据目录测，不动正式数据 |
-| 2 | 添加一个项目，能看到并导入以前的 Codex / Claude Code 会话 |
-| 3 | 侧栏：展开收起几个设备和项目，重启应用后保持；⌘B 收起和展开 |
-| 4 | 新建会话：选项目和 AI 工具，不要求首条消息；创建后在会话里发第一句 |
-| 5 | 发送后不用鼠标，直接继续打字（AI 工具运行中输入框只读但焦点还在） |
-| 6 | 本机 Codex 会话：停止、批准“允许一次 / 拒绝”、变更面板能用，新增和删除文件能看到逐行差异 |
-| 7 | Claude Code 会话：没有停止、批准按钮，看到说明 |
-| 8 | 待处理页：三类都在，失败和已完成有“知道了”，不能批准的写原因 |
-| 9 | 系统通知：内容是“设备 · 项目”加一句说明，没有会话标题；点开进入那个会话。分别测 CodeTether 在运行时和从菜单栏退出后点通知中心里的通知 |
-| 10 | 设置：浅色、深色、跟随系统切换，重启后保持，启动不闪深蓝 |
-| 11 | 次要文字（时间、脚注）看得清 |
-| 12 | 后续规划页只列没做的功能，其他页面没有假开关 |
-| 13 | 草稿：输入一半切到别的会话再回来，草稿还在；关掉应用后不保留 |
-| 14 | 界面没有英文句子和“智能体”“此电脑” |
-| 15 | 项目卡片高度是否整齐 |
+| 1 | Initial setup separates installation, runtime, service and uses Continue setup. Use isolated data, preserving production |
+| 2 | Add a project and discover/import existing Codex / Claude Code conversations |
+| 3 | Expand/collapse devices/projects, retain across restart, ⌘B toggles sidebar |
+| 4 | New conversation selects project/tool without requiring initial message, then send within conversation |
+| 5 | Continue typing without mouse after send (read-only while running, focus retained) |
+| 6 | Local Codex stop, Allow once / Reject, Changes, line diffs for added/deleted files |
+| 7 | Claude Code omits stop/approval buttons with explanation |
+| 8 | Three Inbox categories, Got it for failed/completed, reasons for non-approvable |
+| 9 | Notifications contain Device · Project plus explanation, no conversation title. Click opens correct conversation both while running and after menu-bar exit |
+| 10 | Light/dark/system appearance persists across restart, no dark-blue startup flash |
+| 11 | Secondary times/footnotes readable |
+| 12 | Roadmap lists future-only features, no fake controls elsewhere |
+| 13 | Draft survives conversation switching but not application exit |
+| 14 | UI has no English sentences or words meaning agent / this PC |
+| 15 | Consistent project card heights |
 
-另外看图标：Dock、启动台、菜单栏、关于窗口都是紫色双卡片，不是旧图标。
+Also verify purple dual-card icon in Dock, Launchpad, menu bar, and About, replacing the old icon.
 
-测试都在一个新建的测试文件夹里做，例如 `~/agenthub-work/v4-accept-project-mac`。只删这一轮自己建的文件。
+Test in one new folder such as `~/agenthub-work/v4-accept-project-mac`. Delete only files created this round.
 
-## 预算和停止条件
+## Budget and stop conditions
 
-- Codex：最多 4 个回合。Claude Code：最多 2 个回合。回合失败不重发。
-- 第 9 项如果第一次点通知没打开会话，不要再追加回合，记下 Desktop 日志里 `[codetether:desktop]` 开头的通知相关行，停在报告。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
+- At most four Codex and two Claude Code turns. No failed-turn resend.
+- If the first item-9 click does not open the conversation, add no more turns. Record notification-related `[codetether:desktop]` log lines and stop at the report.
+- Honor Retry-After on 429/524, at most three timestamped retries, then stop/report.
 
-## 不要做的事
+## Do not do
 
-- 不改代码，不提交，不推送，不打标签。
-- 不改账号、Provider 选择、gateway、`~/.codex` 和 `~/.claude`。
-- 不配对、不取消配对，不移除已有项目。
-- 不改系统设置、通知权限和 Gatekeeper。需要用户允许通知时，请用户自己在系统设置里打开。
-- 不删备份，不删旧的 `.app`。
+- Change code, commit, push, tag.
+- Change account, Provider selection, gateway, `~/.codex`, `~/.claude`.
+- Pair/unpair or remove existing projects.
+- Change system settings, notification permissions, or Gatekeeper. Ask user to enable notifications personally.
+- Delete backups or old .app.
 
-## 报告
+## Report
 
-- 写到 `~/agenthub-archive/v4-acceptance-report-mac.md`，包括：提交和标签，备份位置和核对结果，三项检查结果，安装包路径和 SHA256，运行版本，15 项逐项结果和依据，图标结果，没测的项目和原因，交给用户做的操作。
-- 截图放在 `~/agenthub-archive/v4-acceptance-mac-screenshots/`，只截 CodeTether 窗口，不截整个屏幕，不截会话正文里的私人内容。
-- 最后在回复里用中文给一段总结：几项通过、几项不通过、几项未测，不通过的是哪几项、为什么。用户会把这段转给 Windows 上的审核方。
+- Write `~/agenthub-archive/v4-acceptance-report-mac.md` with commit/tag, backup verification, three check results, installer paths/SHA256, running version, all 15 outcomes/evidence, icons, untested items/reasons, and user handoffs.
+- Shots in `~/agenthub-archive/v4-acceptance-mac-screenshots/`, only CodeTether window, not full screen/private conversation content.
+- Final Chinese summary gives pass/fail/untested totals, failed items and reasons. User will send it to the Windows reviewer.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json` 和 `~/.claude.json`。
-- 某个操作被权限拒绝时，不绕过，写成命令交给用户在终端里运行。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, any .env, credentials, machine-credentials contents, `~/.codex/auth.json`, or `~/.claude.json`.
+- Never bypass denied permission. Provide commands for user terminal execution.
+- Report in Chinese without exclamation marks or em dashes.

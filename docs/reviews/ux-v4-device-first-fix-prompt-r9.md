@@ -1,53 +1,53 @@
-# 任务：补完第 9 项通知点击
+# Task: finish notification click in item 9
 
-分支 `ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`，HEAD 必须是 `9800ae2f8b7dc44c73317aeb2afa7cb61ed53b17`，跟踪工作树干净，否则停下报告。安装版就是 R8 装的这一版（`git-9800ae2f8b7d`），不打包、不重装、不改代码。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Branch `ux/v4-device-first`, worktree `D:/Projects/Software/agenthub-ux-v4-device-first`, HEAD must be `9800ae2f8b7dc44c73317aeb2afa7cb61ed53b17` and tracked worktree clean, otherwise stop/report. Installed build is the R8 version (`git-9800ae2f8b7d`); no packaging, reinstall, or code changes. UI follows docs/ux-redesign under temporary user authorization overriding AGENTS.md's "Figma is the only source" rule.
 
-用户要求：界面检查由智能体直接在安装版上完成，不把界面判断交回给用户。
+User requirement: the agent inspects the installed UI directly rather than delegating UI judgments to the user.
 
-R8 的结果见 `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r8.md`，审核意见见 `docs/reviews/ux-v4-device-first.md` 的“第 8 轮”。14 项已通过。第 9 项的通知已经能弹出，文案是“本地电脑 · v4-accept-project”加一句说明，没有会话标题，这一点 R8 已经从通知历史里核实过。只差一步：点通知，确认打开的是那个会话。
+R8 results are in `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r8.md`; review is round 8 of `docs/reviews/ux-v4-device-first.md`. Fourteen items passed. Item 9's notification appears with "Local computer / v4-accept-project" and explanatory text, excluding conversation title, verified in notification history. Only clicking it and confirming the correct conversation remains.
 
-## 做法
+## Procedure
 
-这一轮改用 Codex 回合，因为 Claude Code 那边的 gateway 在 R8 返回了 `provider_service_unavailable`。原因不归这一轮查。
+Use a Codex turn this round because Claude Code's gateway returned `provider_service_unavailable` in R8. Investigating that cause is outside this round.
 
-1. 请用户在 Codex 应用外启动 CodeTether，这次不用抓日志。用户可以从开始菜单启动，也可以运行下面这条 `!` 命令：
+1. Ask the user to launch CodeTether outside Codex, without log capture. Start menu or this `!` command is acceptable:
    `! powershell.exe -NoProfile -Command "Start-Process -FilePath 'C:\Users\Administrator\AppData\Local\CodeTether\codetether-desktop.exe'"`
-   等用户回复“已启动”。
-2. 在测试项目 `v4-accept-project` 的 Codex 会话里发 1 个只读的简短回合，例如“只回复 OK，不要读写文件”。发送后最小化窗口，并且等最小化真的生效（`IsIconic=true`）再开始计时。
-3. 回合完成后，用 attention 接口（带 `Origin: http://tauri.localhost`）确认“已完成”提醒已经生成，再用原生 Toast History 确认 CodeTether 多了 1 条完成通知。只记标题、“设备 · 项目”和说明，不记会话标题和输入内容。
-4. 点通知：
-   - 先试智能体自己点：打开通知中心（Win+N），用 UIAutomation 找 CodeTether 那一条，点一次。
-   - 找不到唯一的那一条时，不要猜，也不要点别的通知。请用户在通知中心里点那条 CodeTether 通知，回复“已点击”。点击这一下由用户做，结果由智能体判断。
-5. 点击后由智能体检查：CodeTether 窗口已恢复并在前台，路由是那个 Codex 会话，第 2 步的回合显示在里面。截一张只包含会话标题栏区域的窗口截图。
+   Wait for "Started".
+2. Send one short read-only Codex turn in test project `v4-accept-project`, for example "Reply only OK; do not read or write files". Minimize after sending and confirm `IsIconic=true` before timing.
+3. After completion, use Attention API with `Origin: http://tauri.localhost` to confirm the completed item, then native Toast History to verify exactly one new completion notification. Record only notification heading, device/project, and explanation, excluding conversation title/input.
+4. Click notification:
+   - First try opening Notification Center (Win+N), locating the CodeTether item with UIAutomation, and clicking once.
+   - If not uniquely identifiable, do not guess or click other notifications. Ask the user to click that CodeTether notification and reply "Clicked". The user performs the click; the agent evaluates the result.
+5. Verify CodeTether is restored/foreground, routed to that Codex conversation, and displaying step 2's turn. Capture only the conversation-header area of its window.
 
-## 预算和停止条件
+## Budget and stopping conditions
 
-- Codex：最多 1 个回合。回合失败时不重发，写进报告后停下。
-- Claude Code：0 个回合。
-- 横幅或通知中心里都没有这条通知时，停下报告，不改代码。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
+- Codex: at most one turn. On failure, record and stop without resending.
+- Claude Code: zero turns.
+- Stop/report if no notification exists in either banner or Notification Center; no code fixes.
+- For API 429/524, wait per Retry-After and retry at most three times, recording times, then stop/report.
 
-## 不要做的事
+## Prohibitions
 
-- 不打包，不运行安装程序或卸载程序。智能体不启动、不退出 CodeTether。
-- 不改产品代码，不改账号、Provider 选择、gateway 和 `~/.codex`。
-- 不改注册表、通知设置和快捷方式，不清图标缓存。
-- 不删 Codex 包目录里的旧快捷方式，不删测试项目、测试会话和 `v4-firstrun-data`。
-- 不推送，不合并，不打标签。
+- No packaging, installer/uninstaller execution. The agent neither launches nor exits CodeTether.
+- No product code, account, Provider-selection, gateway, or `~/.codex` changes.
+- No registry, notification-setting, shortcut, or icon-cache changes.
+- Preserve old shortcuts in the Codex package, test projects/conversations, and `v4-firstrun-data`.
+- No push, merge, or tag.
 
-## 报告
+## Report
 
-追加到 `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r8.md`，新开一节“第 9 项补测”，包括：
-- 回合的开始、完成时间和终态；
-- attention 和 Toast History 的结果，通知文案；
-- 由谁点的通知，点击后窗口状态和路由，截图名；
-- 第 9 项结论和清单累计结果。
+Append "Item 9 additional testing" to `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r8.md`, including:
+- Turn start/completion times and terminal state;
+- Attention/Toast History results and notification copy;
+- Who clicked, resulting window state/route, screenshot name;
+- Item 9 conclusion and cumulative checklist results.
 
-截图放在 `output/playwright/v4-installed-acceptance-r8/`。
+Screenshots go under `output/playwright/v4-installed-acceptance-r8/`.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json` 和 ~/.claude.json。
-- 日志里的 `sk-…` 和 `sb_publishable_…` 用 sed 脱敏。
-- 某个操作被权限拒绝时，不绕过，把命令写成 `! …` 交给用户。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, any .env, credential files, machine-credentials contents, `~/.codex/auth.json`, or ~/.claude.json.
+- Redact `sk-…` and `sb_publishable_…` values with sed.
+- If permission denies an operation, provide its command as `! …` for the user instead of bypassing.
+- Write the report in Chinese without exclamation marks or em dashes.

@@ -1,79 +1,79 @@
-# 任务：换上 CodeTether 新图标（双卡片）
+# Task: Apply the New CodeTether Icon (Stacked Cards)
 
-分支 `ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`。
+Branch `ux/v4-device-first`, workspace `D:/Projects/Software/agenthub-ux-v4-device-first`.
 
-**开始条件**：这份文件是 R5 任务（`ux-v4-device-first-fix-prompt-r5.md`）的第二部分，在 R5 第一部分提交之后接着做，只做第 1、2 节。打包、重装和安装位置的检查放在 R5 第四、第五部分，和 R5 的修复一起重装一次。单独执行时，起点是 ux/v4-device-first 的最新提交，工作树干净。
+**Prerequisite**: this file is part two of R5 (`ux-v4-device-first-fix-prompt-r5.md`). Continue after committing R5 part one, and perform only sections 1 and 2. Packaging, reinstallation, and installed-location checks belong in R5 parts four and five, sharing one reinstall with the R5 fixes. If executed alone, start from the latest ux/v4-device-first commit with a clean worktree.
 
-之前的方向 A（蓝底白色连线）和风筝都已经放弃，不要用。如果你已经按风筝生成过图标文件，用新的源文件重新生成，覆盖原来的。
+The earlier direction A (white connections on blue) and kite are abandoned; do not use them. If you already generated icon files from the kite, regenerate from the new sources and overwrite them.
 
-图标由审核方设计定稿，源文件在 `D:/Projects/Software/agenthub/docs/ux-redesign/icon/final/`，说明见同目录的 README.md。界面和图标以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。不要改图形本身；你觉得哪里画得不对，就在报告里写出来，不要自己改。
+The reviewer finalized the icon design. Sources are in `D:/Projects/Software/agenthub/docs/ux-redesign/icon/final/`; see README.md there. UI and icons follow docs/ux-redesign, temporarily authorized by the user over AGENTS.md's “Figma is the only source.” Do not alter the artwork; report suspected drawing problems rather than fixing them yourself.
 
-## 1. 生成图标文件
+## 1. Generate Icon Files
 
-把三个 SVG 复制到 `apps/desktop/src-tauri/icons/source/` 并提交，以后可以重新生成。
+Copy all three SVGs to `apps/desktop/src-tauri/icons/source/` and commit them for future regeneration.
 
-用本机已有的 Playwright Chromium（`C:/Users/Administrator/AppData/Local/ms-playwright/chromium-1237/`）把 SVG 渲染成透明背景的 PNG，不要新装依赖。临时脚本放在 `.tmp/`，不提交。
+Use the existing local Playwright Chromium (`C:/Users/Administrator/AppData/Local/ms-playwright/chromium-1237/`) to render SVGs to transparent PNGs; install no new dependencies. Put temporary scripts in `.tmp/`, uncommitted.
 
-| 输出 | 来源 |
+| Output | Source |
 |---|---|
-| `icons/32x32.png`（如果 tauri.conf.json 引用） | `codetether-app-small.svg` |
-| `icons/128x128.png`、`icons/128x128@2x.png`（256）、`icons/icon.png`（512） | `codetether-app.svg` |
-| `icons/icon.ico`：16、24、32、48、64、256 六层，都用 PNG 编码 | 16、24、32 用 `codetether-app-small.svg`，48 以上用 `codetether-app.svg` |
-| `icons/icon.icns`：16、32、64、128、256、512、1024（含 @2x） | `codetether-app-macos.svg` |
+| `icons/32x32.png` (if referenced by tauri.conf.json) | `codetether-app-small.svg` |
+| `icons/128x128.png`, `icons/128x128@2x.png` (256), `icons/icon.png` (512) | `codetether-app.svg` |
+| `icons/icon.ico`: six PNG-encoded layers, 16, 24, 32, 48, 64, 256 | `codetether-app-small.svg` for 16, 24, 32; `codetether-app.svg` for 48 and above |
+| `icons/icon.icns`: 16, 32, 64, 128, 256, 512, 1024 (including @2x) | `codetether-app-macos.svg` |
 
-- 不要用 `tauri icon` 一次生成全部。它所有尺寸都从同一张图缩小，小尺寸版本就用不上了。可以先用它生成 icns 再核对尺寸。
-- ico 和 icns 用 Node 自己写容器：ico 是 6 字节文件头加每层 16 字节目录，图像数据直接用 PNG；icns 用 `ic04`…`ic10` 这些类型。不要用 ImageMagick 之类的外部工具。
-- 只替换文件名不变的文件。`tauri.conf.json` 的 `bundle.icon` 只在新增引用时才改。
-- 写一个测试 `apps/desktop/test/icons.test.mjs`（或放进现有的桌面测试），检查以下几点：
-  - `icon.ico` 里正好有这 6 层，尺寸对；
-  - `icon.icns` 里有上面这些类型；
-  - PNG 的尺寸对；
-  - `icons/source/` 里三个 SVG 都在。
+- Do not generate everything in one `tauri icon` invocation: it downsizes every size from one image, losing the small variant. You may use it to generate icns first, then verify sizes.
+- Write ico and icns containers in Node: ico has a 6-byte header and 16-byte directory entry per layer, with PNG image data; icns uses types `ic04`…`ic10`. Do not use external tools such as ImageMagick.
+- Replace existing files without renaming. Modify `bundle.icon` in `tauri.conf.json` only when adding a reference.
+- Add `apps/desktop/test/icons.test.mjs` (or extend existing desktop tests), checking:
+  - `icon.ico` contains exactly the six layers at the correct sizes;
+  - `icon.icns` contains the listed types;
+  - PNG dimensions are correct;
+  - all three SVGs exist in `icons/source/`.
 
-## 2. 检查
+## 2. Checks
 
-- 去掉 ANTHROPIC_* 环境变量后跑 `pnpm typecheck`、`lint`、`test`、`build`，全部为 0。
-- 改过的文件用 prettier 分批检查（`xargs -n 40`）。
-- 把 16、24、32、48、256 的结果拼成一张对比图，放到 `output/icon-check/`（不提交）。浅色和深色背景各一行。
-- 自己看这张图，写下 16 像素时后卡片、前卡片和上面的 `>_` 是否还能分辨。看不到图片时，用像素取色核对，写明是取色结果。
+- Remove ANTHROPIC_* environment variables, then run `pnpm typecheck`, `lint`, `test`, `build`; all must exit 0.
+- Run prettier checks on changed files in batches (`xargs -n 40`).
+- Assemble 16, 24, 32, 48, 256 results into one comparison image in `output/icon-check/` (uncommitted), one row each on light and dark backgrounds.
+- Inspect it yourself and record whether the rear card, front card, and `>_` remain distinguishable at 16px. If unable to view images, sample pixel colors and explicitly describe that evidence.
 
-提交：一个提交，例如 `feat(desktop): replace app icon with CodeTether stacked cards mark`。结尾写 `Co-Authored-By: Claude Code <noreply@anthropic.com>`。不推送，不合并，不打标签。
+One commit, e.g. `feat(desktop): replace app icon with CodeTether stacked cards mark`, ending with `Co-Authored-By: Claude Code <noreply@anthropic.com>`. No push, merge, or tag.
 
-## 3. 打包、重装、在真实位置检查
+## 3. Package, Reinstall, and Check Real Installed Locations
 
-按 `docs/reviews/ux-v4-device-first-install-prompt.md` 的第 3 到第 7 步做，和 R4 的第二部分一样：
+Follow steps 3–7 of `docs/reviews/ux-v4-device-first-install-prompt.md`, as in R4 part two:
 
-- 打包前把当前安装包复制到 `D:/Projects/Software/agenthub-archive/installers/<R4 提交前 12 位>/`，连同 SHA256。
-- 账号配置：
-  - VITE_SUPABASE_URL 用 `https://qfktysdrytlaxvhzqpba.supabase.co`；
-  - VITE_CODETETHER_CONTROL_PLANE_URL 用 `https://api.codetether.org`；
-  - publishable key 请用户提供。
-- 卸载前请用户从托盘退出 CodeTether。保留数据。
-- 装完请用户用 `! powershell.exe -NoProfile -Command "Start-Process -FilePath 'C:\Users\Administrator\AppData\Local\CodeTether\codetether-desktop.exe'"` 启动。
-- 确认 `hostVersion` 是新提交的前 12 位。
+- Before packaging, copy the current installer into `D:/Projects/Software/agenthub-archive/installers/<first-12-characters-of-R4-commit>/`, with SHA256.
+- Account configuration:
+  - VITE_SUPABASE_URL is `https://qfktysdrytlaxvhzqpba.supabase.co`;
+  - VITE_CODETETHER_CONTROL_PLANE_URL is `https://api.codetether.org`;
+  - ask the user for the publishable key.
+- Before uninstalling, ask the user to quit CodeTether from the tray. Preserve data.
+- After installation, ask the user to launch with `! powershell.exe -NoProfile -Command "Start-Process -FilePath 'C:\Users\Administrator\AppData\Local\CodeTether\codetether-desktop.exe'"`.
+- Confirm `hostVersion` is the new commit's first 12 characters.
 
-图标检查：
-- 截图看这几个位置：窗口标题栏、任务栏（只截任务栏那一条）、托盘区域、开始菜单里的 CodeTether、安装目录里 exe 的资源管理器图标。
-- Windows 会缓存图标，如果还显示旧图标，在报告里写明，不要清系统图标缓存。
-- 截图放到 `output/playwright/v4-icon-check/`。
+Icon checks:
+- Screenshot these locations: window title bar, taskbar (only its strip), tray region, CodeTether in Start, and the exe's Explorer icon in the installation directory.
+- Windows caches icons; report old cached icons if present and do not clear the system icon cache.
+- Save screenshots to `output/playwright/v4-icon-check/`.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/v4-icon-report.md`，包括：
-- 提交哈希和检查结果；
-- 各图标文件的尺寸和层；
-- 对比图和截图的路径；
-- 16 像素时卡片和 `>_` 能否分辨；
-- 新安装包的 SHA256 和 `hostVersion`；
-- 没能确认的地方，例如图标缓存。
+Write `D:/Projects/Software/agenthub-archive/v4-icon-report.md`, including:
+- Commit hash and check results;
+- Icon file dimensions and layers;
+- Comparison image and screenshot paths;
+- Whether cards and `>_` are distinguishable at 16px;
+- New installer SHA256 and `hostVersion`;
+- Unconfirmed items, such as icon caching.
 
-## 限制
+## Restrictions
 
-- 只改 `apps/desktop/src-tauri/icons/` 和对应的测试。必要时可以改 `tauri.conf.json` 的 `bundle.icon`。不改 Rust 代码，不做 macOS 菜单栏模板图标。不改 `docs/reviews/`。
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容和 ~/.claude.json。
-- 主工作区里的未跟踪文件不动。
-- 不用 `rm -rf`，不删备份和旧安装包，不运行 `git worktree remove`。
-- 日志里的 `sk-…` 和 `sb_publishable_…` 用 sed 脱敏。
-- 某个操作被权限拒绝时，不绕过，把命令写成 `! …` 交给用户。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
-- 报告用中文，不用感叹号和破折号。
+- Edit only `apps/desktop/src-tauri/icons/` and corresponding tests, plus `bundle.icon` in `tauri.conf.json` if necessary. No Rust changes or macOS menu-bar template icons. Do not edit `docs/reviews/`.
+- Do not read .secrets/, any .env, credential files, machine-credentials contents, or ~/.claude.json.
+- Leave the main workspace's untracked files untouched.
+- No `rm -rf`, deleting backups/old installers, or `git worktree remove`.
+- Redact `sk-…` and `sb_publishable_…` in logs using sed.
+- If permission is denied, do not bypass it; give the user the command as `! …`.
+- API 429 or 524: wait per Retry-After, retry at most 3 times, record each time, then stop and report.
+- Write the report in Chinese, without exclamation marks or em dashes.

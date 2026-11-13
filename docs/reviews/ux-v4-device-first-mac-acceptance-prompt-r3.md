@@ -1,108 +1,108 @@
-# 任务：Mac 安装版验收第 3 轮（查通知，补测第 5、6、10 项和图标）
+# Task. Mac installed-build acceptance round 3 (notifications, items 5/6/10, icons)
 
-在 Mac 上运行。接着前两轮做，不重装、不重新打包、不改代码。先读 `~/agenthub-archive/v4-acceptance-report-mac.md` 里第 1、2 轮的记录。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Run on Mac, continuing prior rounds without reinstalling, rebuilding, or changing code. First read rounds 1/2 of `~/agenthub-archive/v4-acceptance-report-mac.md`. UI follows docs/ux-redesign under temporary authorization overriding AGENTS.md's Figma-only rule.
 
-用户要求：界面检查由智能体直接在安装版上完成，用辅助功能接口和截图来判断，不把界面判断交回给用户。
+The agent must judge installed UI through accessibility interfaces/screenshots instead of handing judgments to the user.
 
-开始前只读核对：`/Applications/CodeTether.app` 运行的构建是 `git-835489dd3c9e`，正式数据是 11 个项目、2 台设备、25 个会话。不一致就停下报告。
+Read-only verify running `/Applications/CodeTether.app` is `git-835489dd3c9e` with 11 production projects, two devices, 25 conversations. Stop on mismatch.
 
-第 2 轮的结果：11 项通过，第 5、9 项不通过，第 6、10 项未测。审核意见：
+Round 2 had 11 passes, failures 5/9, untested 6/10. Review corrections follow.
 
-- 第 5 项是第 2 轮提示词写错了。运行中输入框按设计是只读的，打不进字。要验的是：用键盘发送后焦点留在输入框，回合结束后不点鼠标就能直接接着打字。另外输入框在运行中带 `aria-disabled`（`apps/web/src/components/conversation/composer.tsx:227-228`），辅助功能接口把它报成“禁用”是正常的，不能据此判断焦点丢了。这一轮按正确的标准重测。
-- 第 6 项：`sleep` 这类命令在 Codex 默认的工作区沙箱里不需要批准，所以没有出现批准请求。这一轮改成往测试项目外面写文件，这一步需要批准。
-- 第 9 项：两次都没看到通知，原因不明。这一轮先抓 Desktop 日志查原因，不修。
+- Item 5 was misstated in round-2 prompt. Composer is intentionally read-only during execution. Verify keyboard-send focus persists and typing resumes without a mouse after completion. Running `aria-disabled` (`apps/web/src/components/conversation/composer.tsx:227-228`) appearing as Disabled in accessibility is normal, not evidence of lost focus.
+- Item 6. `sleep` needs no approval in Codex's default workspace sandbox. Request a write outside the test project instead.
+- Item 9. Notifications were absent twice, cause unknown. Capture Desktop logs and diagnose without fixing.
 
-## 第一部分：用日志启动
+## Part 1. Launch with logs
 
-1. 从 `/Applications/CodeTether.app/Contents/Info.plist` 读出 `CFBundleExecutable`，得到可执行文件名。
-2. 请用户从菜单栏退出 CodeTether，确认 Desktop、Host 和 Host guardian 都退出了。
-3. 请用户在终端运行下面这条命令（`<可执行文件名>` 换成第 1 步读到的），回复“已启动”：
-   `/Applications/CodeTether.app/Contents/MacOS/<可执行文件名> 2> ~/agenthub-archive/v4-mac-r3-desktop-stderr.raw &`
-4. 只读确认运行构建是 `git-835489dd3c9e`，日志文件第一行是 `[codetether:desktop] version=… build=git-835489dd3c9e`。
+1. Read `CFBundleExecutable` from `/Applications/CodeTether.app/Contents/Info.plist`.
+2. Ask for menu-bar exit, verifying Desktop, Host, and guardian stop.
+3. Ask user to run and reply Started, replacing the executable placeholder.
+   `/Applications/CodeTether.app/Contents/MacOS/<executable> 2> ~/agenthub-archive/v4-mac-r3-desktop-stderr.raw &`
+4. Verify running build `git-835489dd3c9e` and first log line `[codetether:desktop] version=… build=git-835489dd3c9e`.
 
-## 第二部分：通知前置检查
+## Part 2. Notification prerequisites
 
-只读，不改任何设置：
-- 在 CodeTether 设置的通知页记下三类通知开关的状态。有关闭的，请用户打开，记下用户改了什么。
-- 请用户打开“系统设置 > 通知”，看列表里有没有 CodeTether。有的话记下“允许通知”开关和提醒样式。CodeTether 不在列表里也如实记下来。
-- 记下日志里到目前为止所有含 `notification` 的行。
+Read-only, without settings changes.
+- Record all three CodeTether notification switches. Ask the user to enable disabled ones and document their changes.
+- Ask user to inspect System Settings > Notifications for CodeTether, recording Allow notifications and alert style, or absence.
+- Record all log lines containing `notification` so far.
 
-## 第三部分：回合测试
+## Part 3. Turn tests
 
-都在测试项目 `v4 Mac Acceptance Test` 的测试 Codex 会话里做，不新建会话。每次都用键盘输入，按回车发送，不要点发送按钮。
+Use the existing Codex test conversation in `v4 Mac Acceptance Test`, no new conversation. Type and press Enter each time, without Send clicks.
 
-回合 1，批准请求、拒绝、运行中点通知：
-1. 发：“在 `~/agenthub-work/mac-r3-outside-check.txt` 新建一个文件，内容是 outside。这个路径在当前项目外面，需要的话请申请批准。”
-2. 发送后马上检查焦点：当前获得焦点的元素是不是会话输入框。记下来（第 5 项的前半）。
-3. 马上用 ⌘M 最小化窗口。
-4. 出现批准请求时，macOS 应该弹出一条“等待批准”的通知。macOS 第一次请求通知权限时，请用户点“允许”。
-5. 有通知时：读通知中心里这条通知，记下标题和正文，正文应该是“设备 · 项目”加一句说明，没有会话标题。然后请用户点这条通知，回复“已点击”。智能体检查窗口是否回到前面，路由是否带这一轮的 `turn` 参数。
-6. 没有通知时：等 60 秒，记下日志里新增的 `notification` 相关行，然后请用户手动切回 CodeTether。
-7. 在会话里点“拒绝”。确认文件没有建出来，回合结束。
+Turn 1, approval/rejection and clicking while running.
+1. Send "Create `~/agenthub-work/mac-r3-outside-check.txt` containing outside. This is outside the current project, request approval if required."
+2. Immediately inspect focused element, recording whether it is the composer (item 5 first half).
+3. Immediately ⌘M minimize.
+4. Approval should produce a waiting-approval notification. Ask user to Allow the first macOS permission prompt.
+5. If present, read Notification Center title/body. Body must be Device · Project plus explanation, no conversation title. Ask user to click and reply Clicked. Verify foreground window and route's current `turn`.
+6. If absent, wait 60 seconds, record new notification logs, and ask user to switch back manually.
+7. Reject in conversation. Verify no file was created and turn ends.
 
-回合 2，允许一次、回合结束后直接打字：
-1. 发和回合 1 一样的话，窗口保持在前面。
-2. 出现批准请求后点“允许一次”。确认 `~/agenthub-work/mac-r3-outside-check.txt` 建出来了，内容是 outside。
-3. 回合结束后，不要点鼠标，直接用键盘输入 `abc`。确认 `abc` 出现在输入框里（第 5 项的后半），然后删掉它，不要发送。
-4. 第 5 项通过的条件：两个回合里发送后焦点都在输入框上，并且这一步打字成功。
-5. 智能体删除 `~/agenthub-work/mac-r3-outside-check.txt`。这是这一轮自己建的文件。
+Turn 2, Allow once and typing after completion.
+1. Send the same request with window foreground.
+2. Allow once. Verify `~/agenthub-work/mac-r3-outside-check.txt` exists with content outside.
+3. After completion type `abc` without mouse, verify composer receives it (item 5 second half), erase without sending.
+4. Item 5 requires composer focus after sending both turns and successful typing here.
+5. Delete only this round's `~/agenthub-work/mac-r3-outside-check.txt`.
 
-回合 3，退出后点通知：
-只有回合 1 里收到了通知，才做这一步。
-1. 发：“只回复 OK，不要读写文件”，发送后马上最小化。
-2. 回合结束、出现完成通知后先不要点。请用户从菜单栏退出 CodeTether，确认进程都退出了。
-3. 请用户在通知中心点这条通知，回复“已点击”。
-4. 记下 CodeTether 有没有被启动，窗口有没有出现，路由有没有带这一轮的 `turn` 参数。
-5. 只读代码提示：`apps/desktop/src-tauri/src/macos_notifications.rs:66-77` 在内存里找不到这条通知时只恢复窗口，不跳转。如果只打开了窗口、没跳到会话，如实记“不通过”，写明现象，不修。
-6. 用户点通知启动的 CodeTether 没有日志。测完请用户退出它，再用第一部分的命令带日志启动一次，换一个日志文件名：`v4-mac-r3-desktop-stderr-2.raw`。
+Turn 3, click after exit.
+Only if turn 1 delivered a notification.
+1. Send "Reply only OK, do not read or write files" and minimize immediately.
+2. After completion notification, do not click yet. Ask for menu-bar exit and verify processes stop.
+3. Ask user to click the Notification Center entry and reply Clicked.
+4. Record whether CodeTether starts, window appears, and route includes this turn.
+5. Code note. `apps/desktop/src-tauri/src/macos_notifications.rs:66-77` only restores the window when the intent is absent from memory. If it opens without navigating, mark Fail and describe, without fixing.
+6. This click-launch has no log. Ask for exit and restart using part 1 with `v4-mac-r3-desktop-stderr-2.raw`.
 
-## 第四部分：第 10 项启动首帧
+## Part 4. Item 10 startup first frame
 
-1. 设置里选浅色。请用户从菜单栏退出 CodeTether。
-2. 用 `screencapture -v -V 3 -R <x,y,w,h>` 只录 CodeTether 窗口会出现的那块区域，录 3 秒。录屏开始后马上请用户从启动台打开 CodeTether。窗口位置可以先从第 1 轮的截图或窗口信息里得到。macOS 要求录屏权限时，请用户自己决定是否允许，智能体不改设置。
-3. 把录到的视频按每秒 10 帧拆成图片，逐张看有没有深蓝色的帧。看完只留一张最早出现窗口的帧作为证据，删掉视频和其他帧。
-4. 录不到时写“未测”，不要猜。
-5. 第 2 轮已经测过跟随系统和重启后保持，不重复测。
+1. Select light appearance and ask for menu-bar exit.
+2. Use `screencapture -v -V 3 -R <x,y,w,h>` for three seconds over the future CodeTether window region. Ask user to launch immediately after recording starts. Obtain position from round-1 shots/window info. User decides screen-recording permission, agent does not alter settings.
+3. Extract ten frames per second and inspect each for dark blue. Retain earliest visible-window frame only, delete video/other frames.
+4. If capture fails, mark Untested without guessing.
+5. System appearance and restart persistence passed round 2, no repeat.
 
-## 第五部分：图标
+## Part 5. Icons
 
-用 `screencapture -R` 只截小块区域：
-- Dock 上的 CodeTether 图标；
-- 菜单栏上的 CodeTether 图标；
-- 启动台里的 CodeTether 图标：请用户打开启动台并搜索 CodeTether，再截图。
-三处都确认是紫色双卡片。显示旧图标时，如果是缓存造成的就如实记下来，不清缓存。
+Use `screencapture -R` on small regions.
+- Dock icon.
+- Menu-bar icon.
+- Launchpad icon after user opens/searches CodeTether.
+Verify purple dual cards in all three. Record caching honestly without clearing it.
 
-## 预算和停止条件
+## Budget and stop conditions
 
-- Codex：最多 3 个回合，按上面分配，回合失败不重发。Claude Code：0 个回合。
-- 回合 1 收不到通知时，第 9 项记为“不通过”，写清楚第二部分和日志里看到的内容，不做回合 3，继续做其他部分。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
+- At most three assigned Codex turns, no failed-turn resend, zero Claude Code turns.
+- Missing turn-1 notification fails item 9. Record settings/log observations, omit turn 3, continue other parts.
+- Honor Retry-After on 429/524, at most three timestamped retries, then stop/report.
 
-## 不要做的事
+## Do not do
 
-- 不改代码，不提交，不推送，不打标签，不重装。
-- 不改账号、Provider 选择、gateway、`~/.codex` 和 `~/.claude`。
-- 不配对，不取消配对，不新建或移除项目。
-- 智能体不改系统设置、通知权限、录屏权限和 Gatekeeper，不清图标缓存。
-- 只删这一轮自己建的文件和录屏中间文件。不删备份和隔离数据目录。
+- Code changes, commits, pushes, tags, reinstallation.
+- Changes to account, Provider selection, gateway, `~/.codex`, `~/.claude`.
+- Pair/unpair, add/remove projects.
+- System/notification/recording/Gatekeeper changes or icon-cache clearing.
+- Delete anything beyond this round's created file and intermediate recordings. Preserve backups/isolated data.
 
-## 日志和报告
+## Logs and report
 
-- 测完后请用户退出 CodeTether，再把每个 `.raw` 日志用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer，只保留含 `[codetether:desktop]`、`[codetether:lifecycle]` 和 `notification` 的行，另存为 `.sanitized.log`，然后删掉 `.raw`。最后请用户正常打开 CodeTether。
-- 追加到 `~/agenthub-archive/v4-acceptance-report-mac.md`，新开一节“第 3 轮”，写这些内容：
-  - 第二部分看到的通知开关和系统设置状态；
-  - 每个回合的时间和结果；
-  - 发送后焦点在哪里；
-  - 通知内容和两次点击的结果；
-  - 日志里所有 `notification` 相关的行；
-  - 第 10 项和图标的结果；
-  - 15 项最终统计；
-  - 结束时正式数据的项目、设备、会话数量。
-- 截图放在 `~/agenthub-archive/v4-acceptance-mac-screenshots/`，文件名用 `r3-` 开头。
-- 最后在回复里用中文写一段总结：几项通过、几项不通过、几项未测，不通过的是哪几项、为什么。脱敏后的日志全文也贴在回复里，用户会转给 Windows 上的审核方。
+- After testing ask for exit. Sed-redact `sk-…`, `sb_publishable_…`, Bearer from each `.raw`, retain only `[codetether:desktop]`, `[codetether:lifecycle]`, `notification` lines, save `.sanitized.log`, delete raw, then ask normal reopening.
+- Append "Round 3" to `~/agenthub-archive/v4-acceptance-report-mac.md`.
+  - Notification switches/system settings from part 2.
+  - Turn times/results.
+  - Send focus location.
+  - Notification content and both click results.
+  - All notification log lines.
+  - Item 10 and icons.
+  - Final 15-item totals.
+  - Ending production project/device/conversation counts.
+- Shots in `~/agenthub-archive/v4-acceptance-mac-screenshots/` with `r3-` filenames.
+- Final Chinese pass/fail/untested summary identifies failures/reasons and includes full sanitized logs for Windows review.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json`、`~/.claude.json` 和 `~/agenthub-work/v4-build.env`。
-- 某个操作被权限拒绝时，不绕过，写成命令交给用户在终端里运行。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, any .env, credentials, machine-credentials contents, `~/.codex/auth.json`, `~/.claude.json`, or `~/agenthub-work/v4-build.env`.
+- Never bypass denied permissions. Provide terminal commands for user execution.
+- Report in Chinese without exclamation marks or em dashes.

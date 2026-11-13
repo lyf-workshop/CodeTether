@@ -1,82 +1,82 @@
-# 任务：Mac 安装版验收补测（v4 电脑端，第 2 轮）
+# Task: Additional Mac Installed-App Acceptance (v4 Desktop, Round 2)
 
-在 Mac 上运行。接着上一轮做，不重装、不重新打包、不改代码。上一轮报告是 `~/agenthub-archive/v4-acceptance-report-mac.md`，先读它。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Run on Mac. Continue the previous round without reinstalling, repackaging, or code changes. Read the previous report `~/agenthub-archive/v4-acceptance-report-mac.md` first. The UI follows docs/ux-redesign under temporary user authorization overriding AGENTS.md's “Figma is the only source.”
 
-用户要求：界面检查由智能体直接在安装版上完成，用辅助功能接口和截图来判断，不把界面判断交回给用户。
+User requirement: the agent checks the installed app directly using accessibility APIs and screenshots; do not delegate UI judgments to the user.
 
-开始前只读核对：`/Applications/CodeTether.app` 运行的构建是 `git-835489dd3c9e`，项目、设备、会话是 11、2、25。不一致就停下报告。
+Before starting, read-only verification: `/Applications/CodeTether.app` runs build `git-835489dd3c9e`, with 11 projects, 2 devices, 25 conversations. Stop and report any mismatch.
 
-上一轮 9 项通过、0 项不通过、6 项未测。这一轮补第 1、2、5、6、9、10 项和图标。
+Previous round: 9 passed, 0 failed, 6 untested. This round covers items 1, 2, 5, 6, 9, 10 and icons.
 
-## 第一部分：用正式数据补测
+## Part One: Additional Tests with Production Data
 
-都在上一轮建好的测试项目 `v4 Mac Acceptance Test`（目录 `~/agenthub-work/v4-accept-project-mac`）和它的测试 Codex 会话里做，不新建项目。
+Use the existing `v4 Mac Acceptance Test` project (directory `~/agenthub-work/v4-accept-project-mac`) and its test Codex conversation; do not create a new project.
 
-第 6 项和第 5 项：
-1. 回合 1：发“运行 `sleep 20 && echo done`”。出现批准请求后，先在待处理页确认它在“等待批准”里，再回到会话点“拒绝”。确认回合结束，命令没有执行。
-2. 回合 2：发“在当前目录新建 `mac-r2-diff-check.txt`，写三行：first、second、third”。需要批准时点“允许一次”。回合运行期间（输入框只读时）直接用键盘打几个字，确认焦点还在输入框、字能打进去，这是第 5 项。完成后在变更面板确认显示 `+3`，点开能看到三行新增。
-3. 回合 3：发“运行 `sleep 120 && echo done`”，批准后，在运行中点“停止”。确认回合停下，状态变成已停止。
+Items 6 and 5:
+1. Turn 1: send “Run `sleep 20 && echo done`.” Once approval appears, confirm the item under Waiting for approval in Inbox, then return to the conversation and Reject. Confirm the turn ends without executing the command.
+2. Turn 2: send “Create `mac-r2-diff-check.txt` in the current directory with three lines: first, second, third.” Allow once if approval is needed. While the turn is running (composer read-only), type a few characters directly with the keyboard; confirm focus remains in the composer and characters can be entered, for item 5. After completion, confirm `+3` in Changes and open it to see the three additions.
+3. Turn 3: send “Run `sleep 120 && echo done`”; approve, then click Stop while running. Confirm the turn stops and status becomes Stopped.
 
-第 9 项，CodeTether 在运行时：
-4. 回合 4：发“删除 `mac-r2-diff-check.txt`”，需要批准时点“允许一次”。发送后马上最小化窗口（⌘M）。
-   - 第一次发通知时，macOS 会请求通知权限。请用户点“允许”。智能体不改系统设置。
-   - 回合完成后，读通知中心里 CodeTether 那条通知，记下内容：应该是“设备 · 项目”加一句说明，没有会话标题。
-   - 请用户点这条通知，回复“已点击”。点击由用户做，结果由智能体判断：窗口是否恢复到前面，路由是否带这一轮的 `turn` 参数和 `notification-N`。
-   - 变更面板确认显示 `-3`，点开能看到三行删除。
+Item 9 while CodeTether is running:
+4. Turn 4: send “Delete `mac-r2-diff-check.txt`”; Allow once if needed. Immediately minimize the window (⌘M) after sending.
+   - macOS requests notification permission on the first notification. Ask the user to Allow; the agent does not change system settings.
+   - After completion, read CodeTether's notification in Notification Center and record its text: “Device · Project” plus an explanation, without the conversation title.
+   - Ask the user to click this notification and reply “Clicked.” The user clicks; the agent evaluates whether the window comes forward and the route contains this turn's `turn` parameter and `notification-N`.
+   - Confirm `-3` in Changes and open it to see the three deletions.
 
-第 9 项，CodeTether 退出后：
-5. 回合 5：发“只回复 OK，不要读写文件”，发送后最小化窗口。回合完成、通知出现后不要点。
-   - 请用户从菜单栏退出 CodeTether。确认 Desktop、Host 和 Host guardian 都退出了。
-   - 请用户打开通知中心，点这条 CodeTether 通知，回复“已点击”。
-   - 记下：CodeTether 是否被启动，窗口是否出现，路由是否带这一轮的 `turn` 参数。
-   - 只读代码提示：`apps/desktop/src-tauri/src/macos_notifications.rs:66-77` 在内存里找不到通知时只恢复窗口，不跳转。应用退出后再点，可能只打开窗口不跳到会话。如果是这样，如实记为“不通过”，写明观察到的现象和这个代码位置，不在这一轮修。
+Item 9 after CodeTether quits:
+5. Turn 5: send “Reply only OK; do not read or write files,” then minimize. Wait for completion and notification; do not click it yet.
+   - Ask the user to quit CodeTether from the menu bar. Confirm Desktop, Host, and Host guardian all exit.
+   - Ask the user to open Notification Center, click the CodeTether notification, and reply “Clicked.”
+   - Record whether CodeTether launches, the window appears, and the route includes this turn's `turn` parameter.
+   - Read-only code hint: `apps/desktop/src-tauri/src/macos_notifications.rs:66-77` restores the window without navigation if the notification is absent from memory. A click after exit may only open the window without the conversation. If observed, honestly mark Failed, record behavior and code location; do not fix this round.
 
-## 第二部分：第 10 项主题
+## Part Two: Item 10, Theme
 
-1. 在设置里选“跟随系统”，确认界面和当前系统外观一致。
-2. 请用户在“系统设置 > 外观”里切换一次浅色和深色，智能体确认 CodeTether 跟着变，然后请用户切回原来的外观。智能体自己不改系统设置。
-3. 分别选深色和浅色，从菜单栏退出再打开，确认选择保持。
-4. 启动时是否闪深蓝：选浅色，退出后重新打开，在窗口出现后的第一秒内连续截几张 CodeTether 窗口。截不到第一帧就写“未测”，不要猜。
-5. 测完把主题改回用户原来的设置。
+1. Select System in settings; confirm appearance matches the current system setting.
+2. Ask the user to switch light/dark once in System Settings > Appearance; the agent confirms CodeTether follows, then asks the user to restore the original appearance. Do not change system settings yourself.
+3. Select dark and light separately, quit from the menu bar and reopen each time, confirming persistence.
+4. Check for a dark-blue startup flash: select light, quit/reopen, and capture several CodeTether-window screenshots within the first second. If unable to capture the first frame, mark Untested; do not guess.
+5. Restore the user's original theme preference afterward.
 
-## 第三部分：第 1、2 项，用隔离数据
+## Part Three: Items 1 and 2 with Isolated Data
 
-正式数据目录 `~/Library/Application Support/CodeTether` 不动。
+Leave production data directory `~/Library/Application Support/CodeTether` untouched.
 
-1. 请用户从菜单栏退出 CodeTether。
-2. 用单独的数据目录启动安装版，例如 `~/agenthub-work/v4-firstrun-data-mac`。先读代码确认 Desktop 和 Host 认 `CODETETHER_DATA_DIR`（`apps/desktop/src-tauri/src/system_tray.rs:180` 附近），再把启动命令交给用户在终端运行，例如：
-   `CODETETHER_DATA_DIR="$HOME/agenthub-work/v4-firstrun-data-mac" /Applications/CodeTether.app/Contents/MacOS/<实际可执行文件名>`
-3. 启动后只读确认 Host 用的是隔离目录：项目和会话都是 0。不是的话马上请用户退出，停下报告。
-4. 第 1 项：首次设置里安装、运行、服务三项分开显示，主按钮是“继续设置”。
-5. 第 2 项：添加一个已有 Codex 会话记录的文件夹（从 `~/.codex/sessions` 里只读找一个工作目录，只看目录路径，不读会话内容）。确认能看到以前的会话并导入一个。导入只发生在隔离数据里。
-6. 请用户退出这个隔离实例，再从启动台正常打开 CodeTether，确认回到正式数据（11 个项目）。
+1. Ask the user to quit CodeTether from the menu bar.
+2. Launch the installed app with a separate data directory, e.g. `~/agenthub-work/v4-firstrun-data-mac`. First verify in code that Desktop and Host honor `CODETETHER_DATA_DIR` (around `apps/desktop/src-tauri/src/system_tray.rs:180`), then give the user a terminal command such as:
+   `CODETETHER_DATA_DIR="$HOME/agenthub-work/v4-firstrun-data-mac" /Applications/CodeTether.app/Contents/MacOS/<actual-executable-name>`
+3. After launch, read-only confirm Host uses the isolated directory: 0 projects and 0 conversations. Otherwise immediately ask the user to quit, stop, and report.
+4. Item 1: first-run setup shows installation, runtime, and service separately; main button says Continue setup.
+5. Item 2: add a folder containing existing Codex conversation records (read-only find a working directory in `~/.codex/sessions`, reading directory paths only, no conversation content). Confirm previous conversations appear and import one. Import only into isolated data.
+6. Ask the user to quit the isolated instance, then open CodeTether normally from Launchpad; confirm production data returns (11 projects).
 
-## 第四部分：图标
+## Part Four: Icons
 
-截小块区域，只含 CodeTether 图标本身：Dock、启动台、菜单栏、关于窗口。确认都是紫色双卡片，不是旧图标。旧图标是缓存造成的时候如实记录，不清缓存。
+Capture small regions containing only the CodeTether icon: Dock, Launchpad, menu bar, About window. Confirm purple stacked cards, not old icons. Honestly record old cached icons without clearing caches.
 
-## 预算和停止条件
+## Budget and Stop Conditions
 
-- Codex：最多 5 个回合，按上面分配，回合失败不重发。Claude Code：0 个回合。
-- 某一步失败时记下来，继续做不依赖它的其他步骤。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
+- Codex: at most 5 turns allocated as above; do not resend failed turns. Claude Code: 0 turns.
+- Record a failed step and continue independent steps.
+- API 429 or 524: wait per Retry-After, retry at most 3 times, record each time, then stop and report.
 
-## 不要做的事
+## Prohibited Actions
 
-- 不改代码，不提交，不推送，不打标签，不重装。
-- 不改账号、Provider 选择、gateway、`~/.codex` 和 `~/.claude`。
-- 不配对、不取消配对，不移除项目。不新建项目，第三部分的隔离数据除外。
-- 智能体不改系统设置、通知权限和 Gatekeeper，不清图标缓存。
-- 只删这一轮自己建的 `mac-r2-diff-check.txt`。不删备份和隔离数据目录。
+- No code changes, commits, pushes, tags, or reinstallation.
+- Do not change account, Provider selection, gateway, `~/.codex`, or `~/.claude`.
+- No pairing, unpairing, or project removal. No new projects except isolated data in part three.
+- The agent does not change system settings, notification permissions, or Gatekeeper, or clear icon caches.
+- Delete only this round's `mac-r2-diff-check.txt`. Do not delete backups or isolated data directories.
 
-## 报告
+## Report
 
-- 追加到 `~/agenthub-archive/v4-acceptance-report-mac.md`，新开一节“第 2 轮”：每个回合的时间和结果，第 1、2、5、6、9、10 项的结论和依据，通知内容，两次通知点击的结果，图标结果，最终 15 项的统计，结束时正式数据的项目、设备、会话数量。
-- 截图放在 `~/agenthub-archive/v4-acceptance-mac-screenshots/`，名字用 `r2-` 开头。
-- 最后在回复里用中文给一段总结：几项通过、几项不通过、几项未测，不通过的是哪几项、为什么。
+- Append a Round 2 section to `~/agenthub-archive/v4-acceptance-report-mac.md`: times/results for each turn; conclusions/evidence for items 1, 2, 5, 6, 9, 10; notification text; results of both notification clicks; icons; final totals across 15 items; production project/device/conversation counts at completion.
+- Save screenshots in `~/agenthub-archive/v4-acceptance-mac-screenshots/` with `r2-` prefixes.
+- End with a Chinese summary: counts passed, failed, untested, and failed items with reasons.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json`、`~/.claude.json` 和 `~/agenthub-work/v4-build.env`。
-- 某个操作被权限拒绝时，不绕过，写成命令交给用户在终端里运行。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, any .env, credential files, machine-credentials contents, `~/.codex/auth.json`, `~/.claude.json`, or `~/agenthub-work/v4-build.env`.
+- If permission is denied, do not bypass it; give the user a command to run in Terminal.
+- Write the report in Chinese, without exclamation marks or em dashes.

@@ -1,201 +1,201 @@
-# 任务：Mac 第 7 轮（给网页通知链路加诊断，查清第二次为什么没发）
+# Task: Mac Round 7 (Instrument the Web Notification Pipeline to Explain the Missing Second Notification)
 
-在 Mac 上运行。这一轮改少量代码，在 `fix/macos-notifications` 分支上新增一个提交，然后打包、替换安装版、实测。先读 `~/agenthub-archive/v4-acceptance-report-mac.md` 里第 1 到 6 轮的记录。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Run on Mac. Make a small code change in one new `fix/macos-notifications` commit, then package, replace the installed app, and test. First read rounds 1–6 in `~/agenthub-archive/v4-acceptance-report-mac.md`. UI follows docs/ux-redesign under temporary user authorization overriding AGENTS.md's “Figma is the only source.”
 
-用户要求：界面检查由智能体直接完成，不把界面判断交回给用户。下面要用户做的几件事（点访达、点通知、退出应用），是因为智能体做不了或者会影响测试结果。
+User requirement: the agent evaluates UI directly, without handing judgments back to the user. User actions below (click Finder, click notifications, quit) are needed because the agent cannot perform them or doing so would affect test results.
 
-开始前只读核对：
-- `/Applications/CodeTether.app` 运行的构建是 `git-a8abbecc12ea`；
-- 正式数据是 11 个项目、2 台设备、25 个会话；
-- `origin/fix/macos-notifications` 是 `a8abbecc12ea6b0b5fa83c52373a85322435130e`。
+Read-only checks before starting:
+- `/Applications/CodeTether.app` runs `git-a8abbecc12ea`;
+- Production data has 11 projects, 2 devices, 25 conversations;
+- `origin/fix/macos-notifications` is `a8abbecc12ea6b0b5fa83c52373a85322435130e`.
 
-有一项不一致就停下报告。
+Stop and report any mismatch.
 
-## 背景
+## Background
 
-第 6 轮：
-- 系统对照通知能显示。
-- 用 `open -a` 正常启动后，第一次回合（访达遮挡）弹出了通知，点击也回到了对应会话。这说明原生通知、显示和点击都是好的。
-- 之后几次回合都正常完成，待处理从 24 增加到 26，说明 Host 生成了新的待处理，但 Desktop 日志里没有新的 `notification requested`。
+Round 6:
+- The system control notification appeared.
+- After normal `open -a` launch, the first turn (obscured by Finder) produced a notification; clicking returned to the correct conversation. Native notification delivery, display, and clicks therefore work.
+- Later turns completed normally; Inbox grew from 24 to 26, proving Host generated new attention items, but Desktop logs had no new `notification requested`.
 
-所以问题出在网页这一层，从收到 Host 的 `attention.created` 到调用 `deliver_attention_notification` 之间。这条路在 `apps/web/src/runtime/notifications/attention-notification-coordinator.ts` 的 `#deliverAttention`（193 到 297 行）里，有这些地方会不留痕迹地提前结束：
-- 197、208、261、274 行：协调器已经停止（`#isActive` 为假）。
-- 201 行：`recentIds.has` 返回真。`main.tsx` 现在没有传 `recentIds`，这一步应该不会走到，日志用来确认。
-- 221 行：这个类型的通知开关是关的。
-- 247 行：判断为“用户正在看”而不发（窗口有焦点、可见、没最小化，并且停在待处理页或这个会话）。
-- 225 行 `getWindowState` 和 266 行 `ensurePermission`：这两步只要一直不返回，这条提醒就会永远卡住，也不会报错。`ensurePermission` 卡住时，后面所有提醒都会排在它后面一起卡住（`native-capabilities.ts:309-326` 会把同一个请求共享出去）。
-- 网页和 Host 的连接（SSE）断开以后，如果重连时拿到 `stream.reset`，网页会重新取一份快照，中间生成的提醒不会再以 `attention.created` 的形式到达。这是设计行为，但要确认是不是在测试时发生了。
+The problem is therefore in the web layer between receiving Host `attention.created` and calling `deliver_attention_notification`. In `apps/web/src/runtime/notifications/attention-notification-coordinator.ts`, `#deliverAttention` (lines 193–297) can silently return at:
+- Lines 197, 208, 261, 274: coordinator stopped (`#isActive` false).
+- Line 201: `recentIds.has` true. `main.tsx` currently passes no `recentIds`; this should be unreachable, to be confirmed by logs.
+- Line 221: this notification category is disabled.
+- Line 247: suppressed because “user is viewing” (window focused, visible, not minimized, on Inbox or this conversation).
+- `getWindowState` at line 225 and `ensurePermission` at 266: a never-resolving call stalls the item forever without error. A stuck `ensurePermission` blocks all later items queued behind the shared request (`native-capabilities.ts:309-326`).
+- After SSE disconnect, a reconnect `stream.reset` causes a fresh snapshot; intervening attention items never arrive as `attention.created`. This is intentional, but determine whether it happened during testing.
 
-现在网页里的失败诊断只写 `console.warn`，安装版看不到，所以前几轮的日志里什么都没有。
+Web failure diagnostics currently use only `console.warn`, invisible in the installed app, explaining the absent logs in earlier rounds.
 
-这一轮只加诊断，不修。看到日志以后，审核方再写修复。
+This round adds diagnostics only, without a fix. The reviewer will specify a fix after seeing the logs.
 
-## 第一部分：准备
+## Part One: Preparation
 
-1. `git fetch origin`，在现有工作区 `~/agenthub-work/v4-fix-macos-notify` 里，确认 `fix/macos-notifications` 是干净的，HEAD 和远端都是 `a8abbecc12ea6b0b5fa83c52373a85322435130e`。不要动 Mac 上的其他工作区，也不要动主工作区里的官网改动。
-2. 把现在的 `/Applications/CodeTether.app`（a8abbec 这一版）复制到 `~/agenthub-archive/mac-install-backup-2026-10-23/CodeTether-a8abbec.app`，核对文件数和大小。数据目录前面已经备份过，不用再备份。
+1. `git fetch origin`; in existing workspace `~/agenthub-work/v4-fix-macos-notify`, confirm `fix/macos-notifications` is clean and HEAD/remote both equal `a8abbecc12ea6b0b5fa83c52373a85322435130e`. Leave other Mac workspaces and main-workspace website changes untouched.
+2. Copy current `/Applications/CodeTether.app` (a8abbec) to `~/agenthub-archive/mac-install-backup-2026-10-23/CodeTether-a8abbec.app`; verify file count and size. The data directory was already backed up; no repeat needed.
 
-## 第二部分：代码改动
+## Part Two: Code Changes
 
-只做下面这些，作为一个提交，提交说明写 `chore(desktop): log notification pipeline stages for diagnosis`，结尾写 `Co-Authored-By: Claude Code <noreply@anthropic.com>`。
+Only the changes below, in one commit: `chore(desktop): log notification pipeline stages for diagnosis`, ending with `Co-Authored-By: Claude Code <noreply@anthropic.com>`.
 
-### 1. 原生日志命令（Rust）
+### 1. Native Log Command (Rust)
 
-在 `apps/desktop/src-tauri/src/attention_notifications.rs` 里加一个命令 `log_notification_stage`：
-- 参数只有一个 `stage`，类型是 Rust 枚举，用 serde 的 `rename_all = "kebab-case"` 反序列化。不认识的值直接被反序列化拒绝，不接受任意字符串。
-- 枚举值固定为下面这些，不多不少：
-  - `received`：收到一条新的 `attention.created`；
-  - `skip-inactive`、`skip-recent`、`skip-disabled`、`skip-suppressed`、`skip-permission-denied`：各个提前结束的地方；
-  - `window-state-start`、`window-state-done`、`window-state-timeout`；
-  - `metadata-start`、`metadata-done`；
-  - `permission-start`、`permission-done`、`permission-timeout`；
-  - `deliver-start`、`deliver-done`；
-  - `failed-recent-id-read`、`failed-preferences`、`failed-window-state`、`failed-presentation`、`failed-metadata`、`failed-permission`、`failed-delivery`、`failed-recent-id-write`、`failed-click-listener`、`failed-navigation`；
-  - `sse-connected`、`sse-reconnecting`、`sse-reset`、`sse-unavailable`。
-- 命令只做一件事：`eprintln!("[codetether:desktop] notification stage={stage}")`。不读也不写任何状态，返回 `()`。
-- 用小函数生成这行文字，照现有 `notification_requested_log` 的写法。加单元测试，覆盖所有值，确认每行都是固定格式、没有换行。再加一个测试，确认反序列化会拒绝未知值、空字符串和带换行的值。
+Add `log_notification_stage` in `apps/desktop/src-tauri/src/attention_notifications.rs`:
+- One parameter, `stage`, a Rust enum deserialized with serde `rename_all = "kebab-case"`. Reject unknown values during deserialization; no arbitrary strings.
+- Exactly these enum values:
+  - `received`: new `attention.created` received;
+  - `skip-inactive`, `skip-recent`, `skip-disabled`, `skip-suppressed`, `skip-permission-denied`: early returns;
+  - `window-state-start`, `window-state-done`, `window-state-timeout`;
+  - `metadata-start`, `metadata-done`;
+  - `permission-start`, `permission-done`, `permission-timeout`;
+  - `deliver-start`, `deliver-done`;
+  - `failed-recent-id-read`, `failed-preferences`, `failed-window-state`, `failed-presentation`, `failed-metadata`, `failed-permission`, `failed-delivery`, `failed-recent-id-write`, `failed-click-listener`, `failed-navigation`;
+  - `sse-connected`, `sse-reconnecting`, `sse-reset`, `sse-unavailable`.
+- Do only `eprintln!("[codetether:desktop] notification stage={stage}")`. No state reads/writes; return `()`.
+- Generate the line with a small helper following `notification_requested_log`. Unit-test every value for fixed format/no newlines. Also test deserialization rejects unknown, empty, and newline-containing values.
 
-把命令接到已有的权限和清单里，三处要一致：
-- `apps/desktop/src-tauri/build.rs` 的命令清单；
-- `apps/desktop/src-tauri/permissions/attention-notifications.toml` 的 `commands.allow`；
-- `host_supervisor.rs:1287` 的 `generate_handler!`。
+Wire the command into all three existing permission/command lists consistently:
+- Command list in `apps/desktop/src-tauri/build.rs`;
+- `commands.allow` in `apps/desktop/src-tauri/permissions/attention-notifications.toml`;
+- `generate_handler!` at `host_supervisor.rs:1287`.
 
-更新 `apps/desktop/test/security-config.test.mjs` 里检查命令清单的测试（`Web UI exposes only the bounded Desktop product commands`），把新命令加进去。`docs/ARCHITECTURE.md` 的 Native Security Boundary 一节列了网页能调用的命令，在那里补上新命令，并说明它只接受固定的阶段名，只写一行日志。
+Update `apps/desktop/test/security-config.test.mjs`'s command-list test (`Web UI exposes only the bounded Desktop product commands`) with the new command. Add it to the Native Security Boundary section of `docs/ARCHITECTURE.md`, explaining that it accepts only fixed stage names and writes one log line.
 
-### 2. 网页协调器（TypeScript）
+### 2. Web Coordinator (TypeScript)
 
-在 `apps/web/src/runtime/native/native-capabilities.ts` 的 notifications 适配器上加一个方法 `logStage(stage)`：
-- 调用 `invoke('log_notification_stage', { stage })`；
-- 失败时吞掉错误，不抛出，不重试；
-- 浏览器版本（没有 Tauri）是空函数。
+Add `logStage(stage)` to the notifications adapter in `apps/web/src/runtime/native/native-capabilities.ts`:
+- Call `invoke('log_notification_stage', { stage })`;
+- Swallow errors; do not throw or retry;
+- Browser version (no Tauri) is a no-op.
 
-在 `DesktopNotificationAdapter` 接口里加上这个可选方法。在 `attention-notification-coordinator.ts` 里：
-- `#onAppliedEvent` 里每收到一条新的 `attention.created`，记 `received`。去重返回的那条不记。
-- `#deliverAttention` 里每个提前结束的地方记对应的 `skip-…`，每个 `#report` 同时记对应的 `failed-…`（阶段名照 `DesktopNotificationFailureStage` 一一对应）。
-- `getWindowState`、`resolveMetadata`、`ensurePermission`、`deliver` 四步前后分别记 `…-start` 和 `…-done`。
-- `getWindowState` 和 `ensurePermission` 用 5 秒上限包起来，超时就记 `…-timeout`：
-  - 窗口状态超时，就按原来抛错时的处理，当作“不在看”继续往下走；
-  - 权限超时，就按原来抛错时的处理，结束这一条。
-  - 超时不取消底层的请求，只是这一条提醒不再等它。
-  - 定时器在请求返回后要清掉。
-- 不改判断逻辑，不改通知文案，不改去重，不改开关。超时上限是唯一的行为变化，只影响“永远不返回”的情况。
+Add the optional method to `DesktopNotificationAdapter`. In `attention-notification-coordinator.ts`:
+- Log `received` for every new `attention.created` in `#onAppliedEvent`; do not log deduplicated events that return early.
+- In `#deliverAttention`, log corresponding `skip-…` at each early return and corresponding `failed-…` with every `#report` (one-to-one with `DesktopNotificationFailureStage`).
+- Log `…-start` and `…-done` before/after `getWindowState`, `resolveMetadata`, `ensurePermission`, and `deliver`.
+- Wrap `getWindowState` and `ensurePermission` in a 5-second timeout; log `…-timeout` on expiration:
+  - Window-state timeout follows existing error handling: consider the user “not viewing” and continue;
+  - Permission timeout follows existing error handling: stop this item;
+  - Do not cancel underlying requests; only stop waiting for this notification;
+  - Clear timers when requests settle.
+- Do not change conditions, notification copy, deduplication, or preferences. Timeouts are the only behavior change, affecting only never-resolving requests.
 
-在 `apps/web/src/main.tsx` 里订阅 `runtime.subscribe`（`host-runtime.ts:296`）。这个 listener 没有参数，要在里面用 `runtime.getConnectionState()` 读当前状态，只在状态真的变化时记：变成 `connected`、`reconnecting`、`unavailable` 时，分别记 `sse-connected`、`sse-reconnecting`、`sse-unavailable`。订阅要在 `pagehide` 时和协调器一起释放。在 `HostRuntime` 处理 `stream.reset` 的地方（`host-runtime.ts:798` 附近），通过已有的 applied event 或一个最小的回调记 `sse-reset`。选改动最小的写法，不改重连逻辑。
+In `apps/web/src/main.tsx`, subscribe with `runtime.subscribe` (`host-runtime.ts:296`). Listener takes no arguments; read `runtime.getConnectionState()` inside it. Only on actual transitions to `connected`, `reconnecting`, `unavailable`, log `sse-connected`, `sse-reconnecting`, `sse-unavailable` respectively. Release this subscription with the coordinator on `pagehide`. Where `HostRuntime` handles `stream.reset` (around `host-runtime.ts:798`), log `sse-reset` through the existing applied event or a minimal callback. Choose the smallest change; do not change reconnect behavior.
 
-日志里只有阶段名，不写标题、正文、设备名、项目名、路径和任何 ID。
+Logs contain stage names only, no titles, bodies, device names, project names, paths, or IDs.
 
-### 3. 窗口事件日志（Rust）
+### 3. Window Event Logs (Rust)
 
-在 `host_supervisor.rs` 已有的 `RunEvent::WindowEvent` 处理里：
-- `Resized` 分支：最小化状态变化时，用已有的 `log_lifecycle_event` 记 `main_window_minimized` 或 `main_window_restored`。只在状态真的变了时记，不要每次 Resized 都记。
-- 新增 `WindowEvent::Focused(focused)` 分支：记 `main_window_focused` 或 `main_window_blurred`。
+In existing `RunEvent::WindowEvent` handling in `host_supervisor.rs`:
+- `Resized`: on actual minimized-state changes, use existing `log_lifecycle_event` for `main_window_minimized` or `main_window_restored`; never log every resize.
+- Add `WindowEvent::Focused(focused)`: log `main_window_focused` or `main_window_blurred`.
 
-### 4. 测试
+### 4. Tests
 
-- 协调器测试（`apps/web` 里已有的 attention-notification-coordinator 测试文件）：
-  - 每个提前结束的分支都记了对应阶段；
-  - `ensurePermission` 和 `getWindowState` 永远不返回时，5 秒后分别记 `permission-timeout` 和 `window-state-timeout`，用假时钟，不真的等 5 秒；
-  - 窗口状态超时以后，这条提醒仍然会走到 `deliver-start`；
-  - 浏览器适配器的 `logStage` 不调用任何 Tauri 模块。
-- 已有的测试不能有新的失败。
+- Coordinator tests (existing attention-notification-coordinator test file in `apps/web`):
+  - Every early-return branch logs its stage;
+  - Never-resolving `ensurePermission` and `getWindowState` log `permission-timeout` and `window-state-timeout` after 5 seconds; use a fake clock, no real 5-second wait;
+  - After window-state timeout, the notification still reaches `deliver-start`;
+  - Browser adapter's `logStage` invokes no Tauri module.
+- No new failures in existing tests.
 
-### 不要改的
+### Leave Unchanged
 
-- Host、通知文案、通知开关、去重规则、Windows 的通知行为、Rust 原生发送逻辑。
-- 不加依赖。
+- Host, notification copy/preferences/deduplication, Windows notification behavior, Rust native delivery logic.
+- No new dependencies.
 
-### 检查
+### Checks
 
-- `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck`，`lint`、`build` 也用同样的写法跑。
-- `pnpm test`：已知 3 项 Windows 安装器路径测试会失败；Claude 测试有 `/var` 和 `/private/var` 的路径问题，用规范的 `TMPDIR` 重跑。除了这两类，不能有新的失败。
-- 在 `apps/desktop/src-tauri` 里跑 `cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo fmt --check`。
-- 改过的文件用 prettier 检查，`git diff --check` 无输出。
-- 不用装 Windows 工具链，Windows 编译由审核方复核。
+- `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck`; run `lint` and `build` with the same environment removal.
+- `pnpm test`: 3 known Windows installer-path failures; Claude tests have `/var` vs `/private/var` path issues, rerun with canonical `TMPDIR`. No new failures beyond these categories.
+- In `apps/desktop/src-tauri`: `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo fmt --check`.
+- Prettier-check changed files; `git diff --check` must be silent.
+- No Windows toolchain installation; reviewer verifies Windows compilation.
 
-## 第三部分：打包和安装
+## Part Three: Package and Install
 
-1. 构建配置用 `~/agenthub-work/v4-build.env`。只用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在打包命令所在的 shell 里加载，不打印、不复制它的内容。运行 `pnpm desktop:build`，日志用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer 再保存。
-2. 记下 `.app` 和 `.dmg` 的路径、大小和 SHA256。
-3. 请用户从菜单栏退出 CodeTether，确认 Desktop、Host 和 Host guardian 都退出了。
-4. 用新的 `.app` 替换 `/Applications/CodeTether.app`，数据目录不动。替换后运行一次 `lsregister -f /Applications/CodeTether.app`（运行前先说明）。不注销其他登记。
-5. 用第 6 轮的方式正常启动，不要直接运行可执行文件：
+1. Use build configuration `~/agenthub-work/v4-build.env`. Load only with `set -a; . ~/agenthub-work/v4-build.env; set +a` in the packaging shell; do not print/copy contents. Run `pnpm desktop:build`, redacting `sk-…`, `sb_publishable_…`, Bearer with sed before saving logs.
+2. Record `.app` and `.dmg` paths, sizes, SHA256.
+3. Ask the user to quit CodeTether from the menu bar; confirm Desktop, Host, Host guardian all exit.
+4. Replace `/Applications/CodeTether.app` with the new `.app`, leaving data untouched. Run `lsregister -f /Applications/CodeTether.app` once afterward (explain beforehand). Do not unregister other apps.
+5. Launch normally as in round 6, never directly execute the binary:
    `open -a /Applications/CodeTether.app --stderr ~/agenthub-archive/v4-mac-r7-desktop-stderr.raw`
-   如果 `--stderr` 拿不到日志，停下报告，不要改用直接运行可执行文件的方式。
-6. 只读核对：
-   - 运行构建是新提交的前 12 位；
-   - 正式数据还是 11 个项目、2 台设备、25 个会话；
-   - 日志里有 `authorization status=…` 和 `notification stage=sse-connected`。
-   `sse-connected` 不出现，说明网页日志没接通，停下检查，不要开始实测。
+   If `--stderr` captures no logs, stop and report; do not switch to direct binary launch.
+6. Read-only verify:
+   - Running build matches the new commit's first 12 characters;
+   - Production data remains 11 projects, 2 devices, 25 conversations;
+   - Logs contain `authorization status=…` and `notification stage=sse-connected`.
+   Missing `sse-connected` means web logging is not connected; stop and investigate before testing.
 
-## 第四部分：实测
+## Part Four: Live Tests
 
-都在测试项目 `v4 Mac Acceptance Test` 的测试 Codex 会话里做，每次发“只回复 OK，不要读写文件”。三次测试之间至少隔 1 分钟，不要连着发。
+Use the test Codex conversation in `v4 Mac Acceptance Test`; each time send “Reply only OK; do not read or write files.” Leave at least 1 minute between the three tests; do not send consecutively.
 
-每次测试都记下：开始和结束时间；日志里这段时间的所有 `notification stage=…`、`notification requested`、`notification shown` 和 `[codetether:lifecycle]` 行；屏幕和通知中心有没有通知；待处理数量。
+For every test record: start/end times; all `notification stage=…`, `notification requested`, `notification shown`, `[codetether:lifecycle]` lines during it; notification presence onscreen/in Notification Center; Inbox count.
 
-测试 1，窗口被挡住：
-- 发送后马上请用户点一下访达，让访达挡在 CodeTether 前面，不最小化。
-- 等回合完成后 30 秒。
+Test 1, obscured window:
+- Immediately after sending, ask the user to click Finder so it covers CodeTether, without minimizing.
+- Wait until 30 seconds after turn completion.
 
-测试 2，窗口在前台、但不在这个会话：
-- 发送后马上切到“设备”页，窗口留在前台。
-- 等回合完成后 30 秒。
+Test 2, foreground window on another page:
+- Immediately after sending, switch to Devices and keep the window foreground.
+- Wait until 30 seconds after turn completion.
 
-测试 3，最小化：
-- 发送后马上 ⌘M 最小化，确认日志里出现 `main_window_minimized`。没有出现就写明，不要用别的方式补。
-- 等回合完成后 30 秒。出现通知就请用户点一下，智能体检查窗口是否回到这个会话。
+Test 3, minimized:
+- Immediately after sending, minimize with ⌘M and verify `main_window_minimized` in logs. If missing, record it without compensating by another method.
+- Wait until 30 seconds after turn completion. If a notification appears, ask the user to click it; the agent checks return to this conversation.
 
-每次测试结束，按日志判断停在哪一步：
+After each test determine the stopping point from logs:
 
-| 日志 | 结论 |
+| Log | Conclusion |
 |---|---|
-| 没有 `received` | 网页没收到 `attention.created`：看同一时间有没有 `sse-reconnecting` 或 `sse-reset` |
-| `received` 后是 `skip-…` | 被这一步判断为不发：写明是哪一个 |
-| `…-start` 后没有 `…-done` 也没有 `…-timeout` | 卡在这一步，超时上限也没起作用：写明是哪一个 |
-| `…-timeout` | 这一步超过 5 秒：写明是哪一个 |
-| `deliver-done` 后有 `notification shown` 但屏幕上没有 | 回到系统层，写明 |
+| No `received` | Web never received `attention.created`; check concurrent `sse-reconnecting` or `sse-reset` |
+| `received` followed by `skip-…` | This check suppressed delivery; identify which |
+| `…-start` without `…-done` or `…-timeout` | Stalled at this step, timeout also ineffective; identify which |
+| `…-timeout` | This step exceeded 5 seconds; identify which |
+| `deliver-done` followed by `notification shown` but nothing onscreen | Return to system layer; record this |
 
-## 预算和停止条件
+## Budget and Stop Conditions
 
-- Codex：最多 3 个回合，每个测试 1 个，回合失败不重发。Claude Code：0 个回合。
-- 三个测试都要做，不因为某一个没出通知就停。这一轮的目的是收集日志。
-- 某个检查失败时，先修到通过再打包。改动超出第二部分的范围，停下报告。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
+- Codex: at most 3 turns, one per test; do not resend failed turns. Claude Code: 0 turns.
+- Run all three tests; do not stop because one lacks a notification. This round collects logs.
+- Fix failed checks before packaging. If changes exceed part two, stop and report.
+- API 429 or 524: wait per Retry-After, retry at most 3 times, record each time, then stop and report.
 
-## 不要做的事
+## Prohibited Actions
 
-- 只改第二部分列出的文件、对应测试和 `docs/ARCHITECTURE.md` 那一段。
-- 不推送，不合并，不打标签。分支要不要推送，在报告最后问用户，用户同意了再推 `fix/macos-notifications` 这一个分支，不强推。
-- 不改账号、Provider 选择、gateway、`~/.codex` 和 `~/.claude`。
-- 不配对，不取消配对，不新建或移除项目。
-- 不改系统设置、通知权限、专注模式和 Gatekeeper，不清图标缓存。
-- 不删备份，不删旧的 `.app`。
+- Edit only part-two files, corresponding tests, and the specified `docs/ARCHITECTURE.md` section.
+- No push, merge, or tag. Ask at the end of the report whether to push; only after consent push `fix/macos-notifications`, without force.
+- Do not change account, Provider selection, gateway, `~/.codex`, or `~/.claude`.
+- No pairing, unpairing, project creation, or project removal.
+- Do not change system settings, notification permission, Focus, or Gatekeeper, or clear icon caches.
+- Do not delete backups or old `.app` copies.
 
-## 日志和报告
+## Logs and Report
 
-- 测完请用户退出 CodeTether，处理日志：
-  - 用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer；
-  - 只保留含 `[codetether:desktop]`、`[codetether:lifecycle]` 和 `notification` 的行；
-  - 另存为 `.sanitized.log`，然后删掉 `.raw`。
-  - 最后请用户正常打开 CodeTether。
-- 追加到 `~/agenthub-archive/v4-acceptance-report-mac.md`，新开一节“第 7 轮”，写这些内容：
-  - 提交哈希和标题，各项检查结果；
-  - 安装包路径和 SHA256，运行版本；
-  - 三个测试的时间、日志行、屏幕观察和按上表得出的结论；
-  - 15 项最终统计；
-  - 结束时正式数据的项目、设备、会话数量。
-- 最后在回复里用中文写一段总结，并附上：
-  - `git log --oneline origin/main..HEAD`；
-  - `git diff --stat origin/main..HEAD`；
-  - 这一轮新提交的完整 diff；
-  - 脱敏日志全文。
-  用户会转给 Windows 上的审核方。
+- After testing, ask the user to quit CodeTether, then process logs:
+  - Redact `sk-…`, `sb_publishable_…`, Bearer with sed;
+  - Retain only lines containing `[codetether:desktop]`, `[codetether:lifecycle]`, or `notification`;
+  - Save as `.sanitized.log`, then delete `.raw`;
+  - Finally ask the user to reopen CodeTether normally.
+- Append a Round 7 section to `~/agenthub-archive/v4-acceptance-report-mac.md`, including:
+  - Commit hash/title and check results;
+  - Installer paths/SHA256 and running version;
+  - All three test times, log lines, screen observations, and conclusions from the table;
+  - Final totals across 15 items;
+  - Production project/device/conversation counts at completion.
+- End with a Chinese summary and attach:
+  - `git log --oneline origin/main..HEAD`;
+  - `git diff --stat origin/main..HEAD`;
+  - Complete diff of this round's new commit;
+  - Full sanitized logs.
+  The user will forward them to the reviewer on Windows.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、其他 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json` 和 `~/.claude.json`。`v4-build.env` 只按第三部分第 1 条加载，不读出内容。
-- 每次运行 `defaults` 和 `lsregister` 前，先说明要做什么。
-- 不注销或删除别的 App 登记，不删备份。
-- 新增依赖要写精确版本，这一轮预计不需要新增。
-- 某个操作被权限拒绝时，不绕过，写成命令交给用户在终端里运行。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, other .env files, credential files, machine-credentials contents, `~/.codex/auth.json`, or `~/.claude.json`. Load `v4-build.env` only as in part three step 1; never read contents.
+- Explain before each `defaults` or `lsregister` invocation.
+- Never unregister/delete other apps' registrations or delete backups.
+- Pin exact versions for any new dependencies; none are expected this round.
+- If permission is denied, do not bypass it; give the user a command to run in Terminal.
+- Write the report in Chinese, without exclamation marks or em dashes.

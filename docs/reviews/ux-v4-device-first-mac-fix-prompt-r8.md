@@ -1,166 +1,166 @@
-# 任务：Mac 第 8 轮（先让 CodeTether 能启动，再在一轮里查清并修好系统通知）
+# Task: Mac Round 8 (Restore Startup, Then Diagnose and Fix System Notifications in One Round)
 
-在 Mac 上运行。用户要求这一轮加快进度，给智能体更大的自主权：下面“已授权”的事直接做，不用再问。“绝对不做”那一节的边界不变。
+Run on Mac. The user requests faster progress and grants greater autonomy: directly perform the authorized actions below without asking again. The boundaries in Absolutely Prohibited remain unchanged.
 
-先读 `~/agenthub-archive/v4-acceptance-report-mac.md` 里第 1 到 7 轮的记录，以及 `origin/ux/design` 上的 `docs/reviews/ux-v4-device-first-mac-fix-prompt-r7.md`。这一轮沿用 r7 的诊断设计。界面以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+First read rounds 1–7 in `~/agenthub-archive/v4-acceptance-report-mac.md` and `docs/reviews/ux-v4-device-first-mac-fix-prompt-r7.md` on `origin/ux/design`. Reuse r7's diagnostic design. UI follows docs/ux-redesign under temporary user authorization overriding AGENTS.md's “Figma is the only source.”
 
-开始前确认这份文件有 12 个二级标题，最后一节是“限制”，正文中间没有省略标记。不完整就停下报告。
+Before starting, confirm this file has 12 second-level headings, ends with Restrictions, and has no omission markers in its body. Stop and report if incomplete.
 
-## 现状
+## Current State
 
-- 分支 `fix/macos-notifications`，本地 HEAD 是 `aeb0b5f`（r7 诊断提交），还没推送。远端还是 `a8abbec`。
-- `/Applications/CodeTether.app` 现在是 r7 的构建 `git-aeb0b5fbd229`，启动后 Host 以退出码 1 退出，CodeTether 现在用不了。
-- 上一版能用的备份在 `~/agenthub-archive/mac-install-backup-2026-10-23/CodeTether-a8abbec.app`。
-- r7 的原始日志 `~/agenthub-archive/v4-mac-r7-desktop-stderr.raw` 还在。Host 的报错会以 `[codetether:host]` 开头转进这份日志。r7 的脱敏规则只保留了 desktop、lifecycle 和 notification 三类行，把这行报错过滤掉了，所以脱敏日志里看不到退出原因。
-- 审核方的推测：这一轮没有改 Host 的代码，变的是打包环境。
-  - r7 用 `/tmp/codetether-node-v25.5.0` 里的 Node 25.5.0 打的 Host。第 1 轮报告写的是用核对过 SHA256 的官方 Node 26.4.0 ARM 包打的。
-  - App 从 157.8 MB 变成了 145.6 MB，差的 12 MB 正好像是内嵌的 Node 换了版本。
-  - 这一点还没证实，以日志为准。
+- Branch `fix/macos-notifications`, local HEAD `aeb0b5f` (r7 diagnostic commit), not yet pushed; remote still `a8abbec`.
+- `/Applications/CodeTether.app` is r7 build `git-aeb0b5fbd229`; Host exits with code 1 after launch, making CodeTether unusable.
+- Last working backup: `~/agenthub-archive/mac-install-backup-2026-10-23/CodeTether-a8abbec.app`.
+- r7 raw log `~/agenthub-archive/v4-mac-r7-desktop-stderr.raw` remains. Host errors are forwarded there with `[codetether:host]`. r7 sanitization retained only desktop, lifecycle, notification lines, filtering the error out; sanitized logs therefore omit the exit cause.
+- Reviewer hypothesis: Host code did not change; packaging environment did.
+  - r7 packaged Host using Node 25.5.0 from `/tmp/codetether-node-v25.5.0`. Round 1 records the SHA256-verified official Node 26.4.0 ARM package.
+  - App shrank from 157.8 MB to 145.6 MB; the 12 MB difference resembles an embedded Node version change.
+  - Unconfirmed; use logs as evidence.
 
-## 已授权（直接做，不用问）
+## Authorized (Proceed Without Asking)
 
-- 在 `~/agenthub-work/v4-fix-macos-notify` 的 `fix/macos-notifications` 分支上改代码、提交。范围见第三部分。
-- 从 nodejs.org 下载官方 Node 安装包，用 `SHASUMS256.txt` 核对 SHA256。只放在临时目录，打包时通过 PATH 使用，不装到系统里。
-- 多次打包，多次替换 `/Applications/CodeTether.app`。每次替换前确认有一份能用的备份；需要备份的话，把当前这份复制到 `~/agenthub-archive/mac-install-backup-2026-10-23/`，并在文件名里写上构建号。
-- 运行 `lsregister -f /Applications/CodeTether.app`。
-- 用 `open -a /Applications/CodeTether.app --stderr <日志路径>` 启动 CodeTether，用 `osascript -e 'quit app "CodeTether"'` 正常退出，并确认 Desktop、Host 和 Host guardian 都退出了。15 秒内没退出就请用户从菜单栏退出，不用 `kill`。
-- 测试时自己切换窗口：用 `osascript -e 'tell application "Finder" to activate'` 让访达挡住 CodeTether；在 CodeTether 在前台时，用 System Events 发 ⌘M 最小化。
-- 最多发 10 个 Codex 回合。
-- 结束时推送 `fix/macos-notifications` 这一个分支（`git push origin fix/macos-notifications`，不加 `--force`）。
+- Edit and commit on `fix/macos-notifications` in `~/agenthub-work/v4-fix-macos-notify`; scope in part three.
+- Download official Node packages from nodejs.org and verify SHA256 against `SHASUMS256.txt`. Keep in temporary directories and use through PATH for packaging; do not install system-wide.
+- Repeated packaging and replacement of `/Applications/CodeTether.app`. Before every replacement, confirm a working backup; if needed, copy the current app into `~/agenthub-archive/mac-install-backup-2026-10-23/`, including build ID in its name.
+- Run `lsregister -f /Applications/CodeTether.app`.
+- Launch with `open -a /Applications/CodeTether.app --stderr <log-path>`, quit normally with `osascript -e 'quit app "CodeTether"'`, and confirm Desktop, Host, Host guardian all exit. If not exited within 15 seconds, ask the user to quit from the menu bar; no `kill`.
+- Switch windows yourself during testing: `osascript -e 'tell application "Finder" to activate'` to obscure CodeTether; send ⌘M with System Events while CodeTether is foreground to minimize it.
+- At most 10 Codex turns.
+- Finally push only `fix/macos-notifications` (`git push origin fix/macos-notifications`, without `--force`).
 
-## 仍然要用户做的事
+## Actions Still Requiring the User
 
-- 出现通知时，告诉你屏幕上和通知中心里有没有看到，并在需要时点一下通知。
-- 智能体退出不了 CodeTether 时，从菜单栏退出。
+- When notifications appear, report whether visible onscreen/in Notification Center and click when needed.
+- Quit from the menu bar if the agent cannot quit CodeTether.
 
-## 第一部分：让 CodeTether 能启动
+## Part One: Restore CodeTether Startup
 
-1. 从 r7 的原始日志里取出 Host 的报错。先用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer，再只看含 `[codetether:host]` 的行，`provider-unknown-notification` 那种行跳过。把找到的报错写进报告。
-2. 看 `~/agenthub-archive/v4-acceptance-build-logs/` 和前几轮的报告，确认 a8abbec 那一版是用哪个 Node 版本打的。确认不了的话，以第 1 轮写的 Node 26.4.0 为准。
-3. 按原因处理：
-   - 报错和 Node 版本或运行时有关（比如模块、API 或 SQLite 相关的报错），或者看不出原因、但版本确实不同：换成和 a8abbec 相同的 Node 版本重新打包。
-   - 端口 4317 被占用：用 `lsof -nP -iTCP:4317 -sTCP:LISTEN` 看是谁。是 CodeTether 自己留下的 Host，就按上面的方法正常退出；是别的程序，就停下来问用户，不要结束它。
-   - 数据库或迁移报错：不要碰数据。恢复 a8abbec 的备份，写进报告，然后停下。
-   - 明确是 Host 代码本身的问题：恢复 a8abbec 的备份，写进报告，然后停下。这一轮不改 `apps/host`。
-4. 重新打包后替换、`lsregister -f`、用 `open -a … --stderr` 启动。确认这几项：
-   - 运行构建是当前 HEAD 的前 12 位；
-   - 日志里有 `notification stage=sse-connected`；
-   - 正式数据还是 11 个项目、2 台设备、25 个会话。
-5. 最多试两次打包。还是起不来，就恢复 a8abbec 的备份，确认它能正常运行，然后停下报告。结束时用户手里必须有一个能用的 CodeTether。
+1. Extract Host errors from r7 raw logs. First redact `sk-…`, `sb_publishable_…`, Bearer using sed; then inspect only `[codetether:host]` lines, skipping `provider-unknown-notification`. Report the errors found.
+2. Inspect `~/agenthub-archive/v4-acceptance-build-logs/` and earlier reports to establish which Node built a8abbec. If unconfirmed, use Node 26.4.0 recorded in round 1.
+3. Act on the cause:
+   - Node/runtime errors (e.g. modules, APIs, SQLite), or unclear cause but confirmed version difference: repackage using the same Node as a8abbec.
+   - Port 4317 occupied: identify with `lsof -nP -iTCP:4317 -sTCP:LISTEN`. If CodeTether's own leftover Host, quit normally as above; if another program, stop and ask the user, without terminating it.
+   - Database/migration errors: leave data untouched, restore a8abbec backup, report, and stop.
+   - Clear Host-code defect: restore a8abbec backup, report, and stop. No `apps/host` changes this round.
+4. After repackaging, replace, `lsregister -f`, launch with `open -a … --stderr`, and verify:
+   - Running build matches current HEAD's first 12 characters;
+   - Logs contain `notification stage=sse-connected`;
+   - Production data remains 11 projects, 2 devices, 25 conversations.
+5. At most two packaging attempts. If still unable to launch, restore a8abbec, verify it works, then stop and report. The user must finish with a working CodeTether.
 
-## 第二部分：诊断实测
+## Part Two: Diagnostic Live Tests
 
-用 r7 的诊断提交 `aeb0b5f`。打包检查要求和 r7 一样：`pnpm typecheck`、`lint`、`build`，`cargo test`、`clippy`、`fmt`。如果第一部分没有改代码，就不用重跑。
+Use r7 diagnostic commit `aeb0b5f`. Packaging checks match r7: `pnpm typecheck`, `lint`, `build`, `cargo test`, `clippy`, `fmt`. No rerun needed if part one changed no code.
 
-都在测试项目 `v4 Mac Acceptance Test` 的测试 Codex 会话里做，每次用键盘发“只回复 OK，不要读写文件”。每次测试之间至少隔 1 分钟。
+Use the test Codex conversation in `v4 Mac Acceptance Test`; each time type “Reply only OK; do not read or write files” using the keyboard. Leave at least 1 minute between tests.
 
-很重要：等待通知的这段时间里，不要点、不要聚焦 CodeTether 的窗口，也不要用会把 CodeTether 切到前台的方式截图。CodeTether 在前台并且停在这个会话或待处理页时，按设计不发通知，这会让测试结果失真。截图只用 `screencapture -R` 截屏幕右上角的一小块。
+Crucial: while waiting for notifications, do not click/focus CodeTether or capture screenshots in a way that foregrounds it. By design, no notification is sent when CodeTether is foreground on this conversation or Inbox; doing so invalidates results. Use only `screencapture -R` for a small region at the screen's upper right.
 
-测试 1，窗口被挡住：发送后马上让访达到前台。日志里应该出现 `main_window_blurred`。
-测试 2，窗口在前台、但不在这个会话：发送后马上切到“设备”页，窗口留在前台。
-测试 3，最小化：发送后马上发 ⌘M。日志里应该出现 `main_window_minimized`。没出现就再发一次 ⌘M，还是没有就如实记下。
+Test 1, obscured window: immediately after sending, activate Finder. Expect `main_window_blurred` in logs.
+Test 2, foreground window on another page: immediately switch to Devices; keep window foreground.
+Test 3, minimized: immediately send ⌘M. Expect `main_window_minimized`; if absent, send ⌘M once more; if still absent, record honestly.
 
-每次测试都等回合完成，再等 30 秒，然后记下：
-- 这段时间日志里所有的 `notification stage=…`、`notification requested`、`notification shown` 和 `[codetether:lifecycle]` 行；
-- 右上角截图；
-- 用户看到的情况；
-- 待处理数量。
+For each test, wait for turn completion plus 30 seconds, then record:
+- All `notification stage=…`, `notification requested`, `notification shown`, `[codetether:lifecycle]` lines in that interval;
+- Upper-right screenshot;
+- User observations;
+- Inbox count.
 
-按日志判断：
+Interpret logs:
 
-| 日志 | 结论 |
+| Log | Conclusion |
 |---|---|
-| 没有 `received` | 网页没收到 `attention.created`。看同一时间有没有 `sse-reconnecting` 或 `sse-reset` |
-| `received` 后是 `skip-suppressed` | 当时被判断为“用户正在看”。对照 lifecycle 行：窗口当时真在前台并停在这个会话或待处理页，就是设计行为，改测试方法重测；窗口当时已经失焦或最小化了，就是缺陷 |
-| `received` 后是别的 `skip-…` 或 `failed-…` | 写明是哪一个 |
-| `…-start` 后没有 `…-done` 也没有 `…-timeout` | 卡在这一步，超时也没起作用 |
-| `…-timeout` | 这一步超过 5 秒 |
-| `deliver-done` 和 `notification shown` 都有，但屏幕上没有 | 回到系统层，写明 |
+| No `received` | Web never received `attention.created`; check concurrent `sse-reconnecting` or `sse-reset` |
+| `received` then `skip-suppressed` | Considered “user viewing.” Compare lifecycle lines: if actually foreground on this conversation/Inbox, intended behavior; correct test method and retry. If blurred/minimized already, a defect |
+| `received` then another `skip-…` or `failed-…` | Identify the stage |
+| `…-start` without `…-done` or `…-timeout` | Stalled at that step; timeout also ineffective |
+| `…-timeout` | Step exceeded 5 seconds |
+| Both `deliver-done` and `notification shown`, nothing onscreen | Return to system layer; record this |
 
-## 第三部分：按日志修复
+## Part Three: Fix According to Logs
 
-日志指向网页通知链路里的缺陷时，直接修，不用等审核方：
-- 可以改的文件：
-  - `apps/web/src/runtime/notifications/` 下的文件；
-  - `apps/web/src/runtime/native/native-capabilities.ts`；
-  - `apps/web/src/main.tsx`；
-  - `apps/web/src/runtime/host/host-runtime.ts`，只改事件发布和 `stream.reset` 附近；
-  - `apps/desktop/src-tauri/src/attention_notifications.rs` 和 `macos_notifications.rs`；
-  - `apps/desktop/src-tauri/src/host_supervisor.rs`，只改窗口事件；
-  - 上面这些文件对应的测试，以及 `docs/ARCHITECTURE.md` 里讲通知的那段。
-- 每个修复单独提交，提交说明写清原因，并加一个能复现这个问题的测试。
-- 不改：Host；通知文案；通知开关的含义；“用户正在看就不发”的规则；去重规则；Windows 的行为。如果确实需要改这些才能修好，停下报告。
-- 诊断日志先保留，要不要去掉由审核方决定。
-- 修完重新打包、替换，然后只重测之前失败的那几项。最多修 3 次。
+If logs identify a web-notification-pipeline defect, fix it directly without waiting for the reviewer:
+- Allowed files:
+  - `apps/web/src/runtime/notifications/`;
+  - `apps/web/src/runtime/native/native-capabilities.ts`;
+  - `apps/web/src/main.tsx`;
+  - `apps/web/src/runtime/host/host-runtime.ts`, only event publication and near `stream.reset`;
+  - `apps/desktop/src-tauri/src/attention_notifications.rs` and `macos_notifications.rs`;
+  - `apps/desktop/src-tauri/src/host_supervisor.rs`, window events only;
+  - Corresponding tests and the notification section of `docs/ARCHITECTURE.md`.
+- One commit per fix, clearly explaining the cause, with a reproducing test.
+- Do not change Host, notification copy, preference semantics, the “no notification while user is viewing” rule, deduplication, or Windows behavior. If necessary for a fix, stop and report.
+- Retain diagnostic logs; the reviewer decides whether to remove them.
+- Repackage, replace, and retest only previously failing items. At most 3 fixes.
 
-## 第四部分：第 9 项完整验收
+## Part Four: Complete Item 9 Acceptance
 
-三个测试都能出通知以后，再做下面这些：
-1. 内容：通知是“设备 · 项目”加一句说明，没有会话标题。
-2. 运行中点击：再做一次测试 3。出现通知后请用户点一下。智能体检查窗口回到前台，路由带这一轮的 `turn` 参数和 `notification-N`，只跳转一次。
-3. 退出后点击：再做一次测试 3。出现通知后先不要点，智能体正常退出 CodeTether，确认进程都退出了，再请用户在通知中心点这条通知。智能体检查 CodeTether 被启动了，窗口出现了，路由带这一轮的 `turn` 参数。这次启动没有日志，根据窗口和路由判断。
+After all three tests produce notifications:
+1. Content: “Device · Project” plus explanation, no conversation title.
+2. Click while running: repeat test 3. Ask the user to click the notification. The agent confirms window foregrounded, route contains this turn's `turn` parameter and `notification-N`, and navigation occurs once only.
+3. Click after exit: repeat test 3. After notification appears, do not click yet; agent quits normally and confirms all processes exit, then asks the user to click it in Notification Center. Agent confirms CodeTether launches, window appears, and route includes this turn's `turn`. This launch has no logs; evaluate window and route.
 
-第 9 项通过的条件：测试 1、2、3 都出了通知，内容正确，两次点击都打开了正确的会话。
+Item 9 passes only if tests 1, 2, 3 all produce notifications with correct content, and both clicks open the correct conversation.
 
-最后用 `open -a` 正常启动一次，让用户手里是能用的最新版。
+Finally launch normally with `open -a` so the user has the working latest version.
 
-## 每次提交前的检查
+## Checks Before Each Commit
 
-- `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck`，`lint`、`build` 也用同样的写法跑。
-- `pnpm test`：已知 3 项 Windows 安装器路径测试会失败；Claude 测试有 `/var` 和 `/private/var` 的问题，用 `TMPDIR=/private/tmp` 重跑。除了这两类，不能有新的失败。
-- 在 `apps/desktop/src-tauri` 里跑 `cargo test --locked`、`cargo clippy --locked --all-targets -- -D warnings`、`cargo fmt --check`。
-- 改过的文件用 prettier 检查，`git diff --check` 无输出。
-- 构建配置用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在打包的 shell 里加载，不打印、不复制。打包日志用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer 再保存。
+- `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck`; run `lint`, `build` the same way.
+- `pnpm test`: 3 known Windows installer-path failures; Claude `/var` vs `/private/var` issue, rerun with `TMPDIR=/private/tmp`. No new failures beyond these categories.
+- In `apps/desktop/src-tauri`: `cargo test --locked`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo fmt --check`.
+- Prettier-check changed files; `git diff --check` must be silent.
+- Load build configuration using `set -a; . ~/agenthub-work/v4-build.env; set +a` in the packaging shell without printing/copying contents. Redact `sk-…`, `sb_publishable_…`, Bearer with sed before saving build logs.
 
-## 预算和停止条件
+## Budget and Stop Conditions
 
-- Codex：最多 10 个回合。Claude Code：0 个回合。回合失败不重发。
-- 打包加替换：最多 6 次。修复：最多 3 次。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
-- 下面这些情况，先恢复一个能用的 CodeTether，再停下报告：
-  - Host 代码有问题；
-  - 数据库报错；
-  - 要改的超出第三部分的范围；
-  - 预算用完。
+- Codex: at most 10 turns. Claude Code: 0 turns. Do not resend failed turns.
+- Packaging + replacement: at most 6 times. Fixes: at most 3.
+- API 429 or 524: wait per Retry-After, retry at most 3 times, record each time, then stop and report.
+- Restore a working CodeTether before stopping/reporting when:
+  - Host code is defective;
+  - Database errors occur;
+  - Needed changes exceed part three;
+  - Budget exhausted.
 
-## 绝对不做
+## Absolutely Prohibited
 
-- 不推送 `main`，不合并，不打标签，不强推。只推 `fix/macos-notifications`。
-- 不改 `apps/host`。
-- 不读 .secrets/、其他 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json` 和 `~/.claude.json`。`v4-build.env` 只按上面的方法加载，不读出内容。
-- 不读数据库内容，只查数量。不删、不改、不恢复正式数据目录。
-- 不改账号、Provider 选择、gateway、`~/.codex` 和 `~/.claude`。不配对，不取消配对，不新建或移除项目。
-- 不改系统设置、通知权限、专注模式、录屏权限和 Gatekeeper。不清图标缓存，不注销其他 App 的登记。
-- 不删备份，不删旧的 `.app`。
-- 不用 `kill -9` 结束任何进程。
-- 不动 Mac 主工作区里的官网改动。
+- No push to `main`, merges, tags, or force pushes. Push only `fix/macos-notifications`.
+- No `apps/host` changes.
+- Do not read .secrets/, other .env files, credential files, machine-credentials contents, `~/.codex/auth.json`, or `~/.claude.json`. Load `v4-build.env` only as above, without reading contents.
+- No database-content reads; counts only. Do not delete, modify, or restore production data directory.
+- Do not change account, Provider selection, gateway, `~/.codex`, or `~/.claude`. No pairing, unpairing, project creation/removal.
+- Do not change system settings, notification permission, Focus, Screen Recording permission, or Gatekeeper. No icon-cache clearing or unregistering other apps.
+- Do not delete backups or old `.app` copies.
+- Never use `kill -9` on any process.
+- Leave main Mac workspace's website changes untouched.
 
-## 日志和报告
+## Logs and Report
 
-- 每份原始日志（包括 r7 那份）都要处理：
-  - 用 sed 去掉 `sk-…`、`sb_publishable_…` 和 Bearer；
-  - 保留含 `[codetether:desktop]`、`[codetether:lifecycle]`、`notification` 的行，以及 `[codetether:host]` 开头的报错行，`provider-unknown-notification` 不留；
-  - 另存为 `.sanitized.log`，然后删掉 `.raw`。
-- 追加到 `~/agenthub-archive/v4-acceptance-report-mac.md`，新开一节“第 8 轮”，写这些内容：
-  - Host 退出的原因和处理方法；
-  - 用的 Node 版本和它的 SHA256；
-  - 每个提交的哈希和标题，各项检查结果；
-  - 安装包路径和 SHA256，运行版本；
-  - 每个测试的时间、日志行、截图、用户观察和按表得出的结论；
-  - 修了什么、为什么；
-  - 第 9 项的结论；
-  - 15 项最终统计；
-  - 结束时正式数据的项目、设备、会话数量；
-  - 推送结果。
-- 最后在回复里用中文写一段总结，并附上：
-  - `git log --oneline origin/main..HEAD`；
-  - `git diff --stat origin/main..HEAD`；
-  - 这一轮新提交的完整 diff；
-  - 脱敏日志全文。
-  用户会转给 Windows 上的审核方。
+- Process every raw log, including r7:
+  - Redact `sk-…`, `sb_publishable_…`, Bearer with sed;
+  - Retain lines containing `[codetether:desktop]`, `[codetether:lifecycle]`, `notification`, plus error lines starting `[codetether:host]`; exclude `provider-unknown-notification`;
+  - Save as `.sanitized.log`, then delete `.raw`.
+- Append a Round 8 section to `~/agenthub-archive/v4-acceptance-report-mac.md`, including:
+  - Host exit cause and treatment;
+  - Node version and SHA256;
+  - Each commit hash/title and check results;
+  - Installer paths/SHA256 and running version;
+  - Each test's time, log lines, screenshots, user observations, table-based conclusion;
+  - What was fixed and why;
+  - Item 9 conclusion;
+  - Final totals across 15 items;
+  - Production project/device/conversation counts at completion;
+  - Push result.
+- End with a Chinese summary and attach:
+  - `git log --oneline origin/main..HEAD`;
+  - `git diff --stat origin/main..HEAD`;
+  - Complete diffs of this round's new commits;
+  - Full sanitized logs.
+  The user will forward them to the reviewer on Windows.
 
-## 限制
+## Restrictions
 
-- 新增依赖要写精确版本，这一轮预计不需要新增。
-- 某个操作被权限拒绝时，不绕过，写成命令交给用户在终端里运行。
-- 报告用中文，不用感叹号和破折号。
+- Pin exact versions for new dependencies; none are expected this round.
+- If permission is denied, do not bypass it; give the user a command to run in Terminal.
+- Write the report in Chinese, without exclamation marks or em dashes.

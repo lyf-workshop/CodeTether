@@ -1,276 +1,276 @@
-# D2.1 前端实现代码审查报告
+# D2.1 Frontend Implementation Code Review
 
-**日期**：2026-11-09  
-**审查重点**：界面美观程度、使用方便程度  
-**分支**：`feat/d2-frontend-flatten-composer` @ `876834c`
-
----
-
-## 📊 总体评分
-
-| 维度 | 评分 | 备注 |
-|------|------|------|
-| **界面美观程度** | ⭐⭐⭐⭐ (4/5) | 整体设计清爽，细节需要优化 |
-| **使用方便程度** | ⭐⭐⭐⭐ (4/5) | 交互直观，但有几处可改进 |
-| **代码质量** | ⭐⭐⭐⭐⭐ (5/5) | TypeScript、lint、测试全通过 |
-| **设计一致性** | ⭐⭐⭐⭐ (4/5) | 整体风格统一，细节还需打磨 |
+**Date** — 2026-11-09\
+**Review focus** — Visual quality and ease of use\
+**Branch** — `feat/d2-frontend-flatten-composer` @ `876834c`
 
 ---
 
-## 🎨 界面美观程度评估
+## 📊 Overall Ratings
 
-### ✅ 优点
-
-1. **设备卡片设计**
-   - 布局简洁清晰：电脑名称 + 操作系统 · 架构 · 在线状态
-   - 卡片使用 Hover 效果，交互反馈清晰
-   - 网格布局响应式，2-3 列排列合理
-   - **评价**：👍 这是最好看的部分
-
-2. **设备详情页**
-   - 四个分节清晰：项目、最近会话、AI 工具、连接状态
-   - 面包屑导航清楚（本地电脑 › workspace）
-   - 返回按钮位置恰当
-   - **评价**：👍 布局合理
-
-3. **Composer 初始状态**
-   - Provider 栏设计（Codex · gpt-6-sol）清晰
-   - 占位按钮（附件、语音）提示"开发中"
-   - 字数统计实时显示
-   - 发送按钮高对比度（黑色背景）
-   - **评价**：👍 初始状态不错
-
-4. **Composer 扩展状态**
-   - 自动扩展到视口 40% 的高度，内部滚动流畅
-   - 保留了 Provider 栏和操作栏的固定位置
-   - 长内容可读性好
-   - **评价**：👍 体验很好
-
-5. **新建会话对话框**
-   - Codex/Claude Code 选择卡片有区别（图标+文案）
-   - "可以编辑文件""可以读取和修改文件" 清晰表达能力差异
-   - 设置按钮（"添加项目"）位置清楚
-   - **评价**：👍 信息传达有效
-
-### ⚠️ 需要改进
-
-1. **设备卡片的项目数量显示**
-   - 当前显示 "1 个项目"（仅文字）
-   - **建议**：可以加个项目图标，更直观
-   - **优先级**：低
-
-2. **设备详情页缺少安装路径**（已注明）
-   - 当前只显示"可用""未安装"等状态
-   - 本机无法显示 Codex 安装位置
-   - **根因**：API 不提供安装路径
-   - **建议**：这个不在 D2.1 范围，后续统一处理
-   - **优先级**：低
-
-3. **新建会话对话框的项目选择**
-   - 项目路径显示截断了
-   - **建议**：用 title 属性显示完整路径，或改用更短的显示
-   - **优先级**：低
-
-4. **Composer 的模型选择栏还是占位**
-   - Provider 栏显示"Codex · gpt-6-sol"但没有"模型"下拉
-   - 这是设计好的（等 D2.1c 接入）
-   - **建议**：当前状态没问题，就是占位
-   - **优先级**：N/A（后续做）
+| Dimension | Rating | Notes |
+| --- | --- | --- |
+| **Visual quality** | ⭐⭐⭐⭐ (4/5) | Clean overall design, with details to refine |
+| **Ease of use** | ⭐⭐⭐⭐ (4/5) | Intuitive interactions, with several areas to improve |
+| **Code quality** | ⭐⭐⭐⭐⭐ (5/5) | TypeScript, lint, and tests all pass |
+| **Design consistency** | ⭐⭐⭐⭐ (4/5) | Consistent overall style, with details to polish |
 
 ---
 
-## 🖱️ 使用方便程度评估
+## 🎨 Visual Quality Assessment
 
-### ✅ 优点
+### ✅ Strengths
 
-1. **设备页面导航**
-   - 电脑列表一眼就能看到本机、远程在线、离线的分组
-   - AI 工具状态一目了然（Codex ✓ Claude ✓）
-   - **评价**：👍 找设备很方便
+1. **Device card design**
+   - Clear, simple layout showing computer name, operating system, architecture, and online status
+   - Hover effects provide clear interaction feedback
+   - Responsive grid works well with two or three columns
+   - **Assessment** — 👍 The strongest visual element
 
-2. **新建会话流程**
-   - 项目选择器按电脑分组，不用手动找
-   - "这台电脑 (Windows)" 清楚标识本机
-   - Codex/Claude 选择有能力说明
-   - **评价**：👍 创建会话流程顺畅
+2. **Device details page**
+   - Four clear sections for projects, recent conversations, AI tools, and connection status
+   - Clear breadcrumb navigation (Local computer › workspace)
+   - Well-positioned back button
+   - **Assessment** — 👍 Sensible layout
 
-3. **Composer 快捷键**
-   - Enter 发送（默认）或 Ctrl+Enter 发送（可配置）
-   - Shift+Enter 换行
-   - Ctrl+Up 复制上一轮输入
-   - Esc 清空
-   - **评价**：👍 快捷键完整且合理
+3. **Initial composer state**
+   - Clear Provider bar (Codex · gpt-6-sol)
+   - Attachment and voice placeholders indicate that they are in development
+   - Character count updates immediately
+   - High-contrast send button with a black background
+   - **Assessment** — 👍 Good initial presentation
 
-4. **草稿自动保存**
-   - 输入后 500ms 自动保存
-   - 切换会话自动恢复
-   - 发送成功后清空
-   - **评价**：👍 用户不会丢失输入
+4. **Expanded composer state**
+   - Expands automatically to 40% of the viewport height, with smooth internal scrolling
+   - Provider and action bars retain fixed positions
+   - Long content is easy to read
+   - **Assessment** — 👍 Good experience
 
-5. **设置页快捷键配置**
-   - 清晰的"编辑器与输入"设置页
-   - 可选"Enter 发送"或"Ctrl+Enter 发送"
-   - **评价**：👍 个性化选项
+5. **New conversation dialog**
+   - Codex and Claude Code selection cards are distinct through icons and text
+   - “Can edit files” and “Can read and modify files” clearly communicate capability differences
+   - The “Add project” setup button is easy to locate
+   - **Assessment** — 👍 Effective communication
 
-### ⚠️ 需要改进
+### ⚠️ Areas to Improve
 
-1. **设备详情页的会话列表**
-   - 当前显示"最近的会话 1"，只显示 1 条会话
-   - 如果有多条会话，怎么展示？是否需要"查看全部"？
-   - **建议**：检查当有 10+ 会话时的显示效果，可能需要分页或加载更多
-   - **优先级**：中
+1. **Project count on device cards**
+   - Currently shows only text such as “1 project”
+   - **Suggestion** — Add a project icon to make it easier to recognize
+   - **Priority** — Low
 
-2. **项目选择器的分组可视化**
-   - 当前只用 `<optgroup>` 标签（HTML 原生）
-   - **建议**：可以考虑用更显眼的分组头（如灰色背景）
-   - **但**：这依赖于 shadcn/ui 的 Select 组件支持，可能改动大
-   - **优先级**：低（现状可以接受）
+2. **Missing installation path on device details** (already documented)
+   - Currently shows only states such as “Available” and “Not installed”
+   - The local Codex installation location cannot be displayed
+   - **Root cause** — The API does not provide installation paths
+   - **Suggestion** — Address this consistently in a later stage, outside D2.1
+   - **Priority** — Low
 
-3. **Composer 的"剩余上下文"占位**
-   - 当前只显示文字"剩余上下文"
-   - **建议**：后续应该显示进度条（如 85%）
-   - **优先级**：低（设计好的占位）
+3. **Project selection in the new conversation dialog**
+   - Project paths are truncated
+   - **Suggestion** — Show the full path in a title attribute or use a shorter display
+   - **Priority** — Low
 
-4. **附件和语音按钮的禁用状态**
-   - 当前是灰色禁用
-   - **建议**：考虑加 tooltip 说"即将推出"
-   - **优先级**：低
-
-5. **设备卡片的"添加设备"按钮**
-   - 截图中没有看到"添加设备"的入口
-   - **建议**：检查是否有入口，如果有但不显眼，可能需要优化位置
-   - **优先级**：中
+4. **Composer model selection remains a placeholder**
+   - The Provider bar shows “Codex · gpt-6-sol” without a Model dropdown
+   - This follows the design, pending D2.1c integration
+   - **Suggestion** — The current placeholder is acceptable
+   - **Priority** — N/A (future work)
 
 ---
 
-## 🎯 关键问题诊断
+## 🖱️ Ease-of-Use Assessment
 
-### 问题 1：Relay 鉴权用例失败
-**现象**：`apps/relay/test/relay-service.test.mjs:1186` 失败  
-**原因**：报告说这是"未改动的 Relay 用例失败"，说明这不是 D2.1 前端改动引起的  
-**诊断**：
-- D2.1 只改了前端代码（`apps/web/`）
-- Relay 测试失败与前端无关
-- 可能是已有的测试问题或测试环境问题
+### ✅ Strengths
 
-**建议**：
-- 这个可以忽略，不阻塞合并
-- 或者分别跑一次前端测试和 Relay 测试，确认是独立的
+1. **Device page navigation**
+   - Local, online remote, and offline computer groups are immediately recognizable
+   - AI tool availability is easy to see (Codex ✓ Claude ✓)
+   - **Assessment** — 👍 Devices are easy to find
 
-### 问题 2：缺少 Mac/WSL 截图
-**现象**：报告说"本次环境没有已配对 Mac 或 WSL"  
-**影响**：看不到 Windows + WSL 显示为两台电脑的效果  
-**建议**：
-- 等你的 Mac 环境可用时，补截图
-- 或者这个可以在合并后补充
+2. **New conversation flow**
+   - The project selector groups projects by computer, reducing manual searching
+   - “This computer (Windows)” clearly identifies the local computer
+   - Codex and Claude selections explain their capabilities
+   - **Assessment** — 👍 Smooth creation flow
 
-### 问题 3：安装路径无法显示
-**现象**：设备详情页无法显示 AI 工具的安装路径  
-**原因**：公开 API 不提供安装路径（协议限制）  
-**影响**：用户看不到 Codex 装在哪里  
-**建议**：
-- 这个需要后端或协议改动
-- 不在 D2.1 范围内
-- 可以在 B4 或 D2.2 阶段统一处理
+3. **Composer shortcuts**
+   - Enter sends by default, with configurable Ctrl+Enter sending
+   - Shift+Enter inserts a newline
+   - Ctrl+Up copies the previous turn's input
+   - Esc clears the input
+   - **Assessment** — 👍 Complete, sensible shortcuts
 
----
+4. **Automatic draft saving**
+   - Saves automatically 500ms after input
+   - Restores the draft when switching conversations
+   - Clears the draft after a successful send
+   - **Assessment** — 👍 Protects users' input
 
-## 📋 具体改进清单
+5. **Shortcut configuration in Settings**
+   - Clear “Editor and input” settings page
+   - Supports “Enter to send” or “Ctrl+Enter to send”
+   - **Assessment** — 👍 Useful customization
 
-### 立即可以做（优先级高）
+### ⚠️ Areas to Improve
 
-1. **优化项目选择器的分组显示**
-   - 如果有多个电脑，分组头应该更显眼
-   - 当前用 HTML optgroup，可能不够清晰
+1. **Conversation list on device details**
+   - Currently shows “Recent conversations 1” and only one conversation
+   - How will multiple conversations appear? Is “View all” needed?
+   - **Suggestion** — Check the presentation with 10 or more conversations. Pagination or loading more may be needed.
+   - **Priority** — Medium
 
-2. **检查会话列表的超长显示**
-   - 当有 10+ 会话时，是否需要分页或加载更多？
-   - 当前设计是"最近 10 条"，需要测试超长情况
+2. **Visual grouping in the project selector**
+   - Currently uses native HTML `<optgroup>` elements
+   - **Suggestion** — Consider more prominent group headings, such as a gray background
+   - **Constraint** — This depends on shadcn/ui Select support and could require substantial changes
+   - **Priority** — Low (the current behavior is acceptable)
 
-3. **补充 Mac/WSL 截图**
-   - 等环境可用时，验证 Windows + WSL 显示为两台电脑的效果
+3. **Composer “Remaining context” placeholder**
+   - Currently displays only “Remaining context” text
+   - **Suggestion** — Show a progress indicator later, such as 85%
+   - **Priority** — Low (an intentional placeholder)
 
-### 可以后续做（优先级中）
+4. **Disabled attachment and voice buttons**
+   - Currently gray and disabled
+   - **Suggestion** — Consider a “Coming soon” tooltip
+   - **Priority** — Low
 
-4. **添加项目按钮的位置**
-   - 截图中看不到"添加项目"的入口，需要检查是否显眼
-
-5. **Composer 的附件和语音按钮**
-   - 考虑添加 tooltip 说明"即将推出"
-   - 或者改成完全隐藏而不是禁用
-
-### 后续阶段处理（优先级低）
-
-6. **安装路径显示**
-   - 需要协议或 API 改动
-   - B4 或 D2.2 处理
-
-7. **"剩余上下文"进度条**
-   - 这个是占位设计
-   - 模型切换完成后再补
+5. **“Add device” button on device cards**
+   - The screenshots do not show an “Add device” entry
+   - **Suggestion** — Check whether the entry exists and improve its position if it is difficult to notice
+   - **Priority** — Medium
 
 ---
 
-## ✅ 最终结论
+## 🎯 Diagnosis of Key Issues
 
-### 代码质量
-- ✅ TypeScript 类型检查通过
-- ✅ ESLint 检查通过
-- ✅ 968 个 Web 测试通过
-- ✅ 构建通过
+### Issue 1 — Relay Authentication Test Failure
+**Symptom** — `apps/relay/test/relay-service.test.mjs:1186` fails.\
+**Reason** — The report describes a failure in an unchanged Relay test, indicating that the D2.1 frontend changes did not cause it.\
+**Diagnosis**
+- D2.1 changes only frontend code (`apps/web/`)
+- The Relay test failure is unrelated to the frontend
+- It may be an existing test or environment issue
 
-### 界面质量
-- ✅ 整体设计清爽、现代
-- ✅ 响应式布局合理
-- ⚠️ 细节还需打磨（项目分组、路径截断等）
+**Suggestions**
+- It can be ignored without blocking the merge
+- Alternatively, run frontend and Relay tests separately to confirm they are independent
 
-### 用户体验
-- ✅ 快捷键完整
-- ✅ 草稿自动保存
-- ✅ 导航清晰
-- ⚠️ 部分功能是占位（模型切换、附件、语音）
+### Issue 2 — Missing Mac and WSL Screenshots
+**Symptom** — The report says that no paired Mac or WSL was available in this environment.\
+**Impact** — The display of Windows and WSL as separate computers has not been observed.\
+**Suggestions**
+- Add screenshots when your Mac environment is available
+- Alternatively, add them after merging
 
-### 建议
-**可以合并到 main，但建议先做这些改进**：
-
-1. 优化项目选择器的分组显示（如果 UI 库支持）
-2. 检查会话列表超长显示的效果
-3. 补充 Mac/WSL 截图验证
-4. 确认"添加设备"按钮的位置和可见性
-
-**合并后的后续工作**：
-- D2.1c：接入模型切换功能
-- D2.2：Provider 差异化（Codex vs Claude 显示差异）
-- D2.5：Timeline 样式重做（代码块增强等）
+### Issue 3 — Installation Paths Cannot Be Displayed
+**Symptom** — Device details cannot show the installation paths of AI tools.\
+**Reason** — The public API does not expose installation paths, a protocol limitation.\
+**Impact** — Users cannot see where Codex is installed.\
+**Suggestions**
+- This requires backend or protocol changes
+- It is outside D2.1
+- Address it consistently in B4 or D2.2
 
 ---
 
-## 🎯 优先级建议
+## 📋 Specific Improvements
 
-| 优先级 | 任务 | 工作量 | 是否阻塞合并 |
-|--------|------|--------|------------|
-| 🔴 高 | 项目选择器分组显示 | 中 | 否 |
-| 🟡 中 | 会话列表超长显示 | 小 | 否 |
-| 🟡 中 | 补充 Mac/WSL 截图 | 小 | 否 |
-| 🟢 低 | 附件/语音按钮 tooltip | 小 | 否 |
-| ⚪ 低 | 项目路径截断优化 | 小 | 否 |
+### Can Be Done Immediately (High Priority)
+
+1. **Improve visual grouping in the project selector**
+   - Group headings should be more prominent when multiple computers are present
+   - Native HTML optgroup elements may be insufficiently clear
+
+2. **Check long conversation lists**
+   - Determine whether 10 or more conversations require pagination or loading more
+   - The current design shows the latest 10, so test with longer lists
+
+3. **Add Mac and WSL screenshots**
+   - When the environment is available, verify that Windows and WSL appear as separate computers
+
+### Can Follow Later (Medium Priority)
+
+4. **Placement of the Add Project button**
+   - The screenshot does not show the entry. Check its visibility.
+
+5. **Composer attachment and voice buttons**
+   - Consider a “Coming soon” tooltip
+   - Alternatively, hide them entirely instead of disabling them
+
+### Later Stages (Low Priority)
+
+6. **Installation path display**
+   - Requires protocol or API changes
+   - Address in B4 or D2.2
+
+7. **“Remaining context” progress indicator**
+   - This is currently an intentional placeholder
+   - Add it after model switching is complete
 
 ---
 
-## 📝 总体意见
+## ✅ Final Conclusions
 
-**D2.1 前端实现完成度：85%**
+### Code Quality
+- ✅ TypeScript type checking passes
+- ✅ ESLint passes
+- ✅ 968 Web tests pass
+- ✅ Build passes
 
-✅ **代码部分完成度 100%**：类型检查、测试、构建全通过
+### Interface Quality
+- ✅ Clean, modern overall design
+- ✅ Sensible responsive layout
+- ⚠️ Details such as project grouping and path truncation need refinement
 
-⚠️ **UI 细节完成度 80%**：整体美观，但细节还需打磨
+### User Experience
+- ✅ Complete shortcuts
+- ✅ Automatic draft saving
+- ✅ Clear navigation
+- ⚠️ Some features remain placeholders, including model switching, attachments, and voice
 
-**建议决策**：
-- **选项 A**：立即合并，然后逐个优化细节 ✅ 推荐
-- **选项 B**：先优化项目选择器和会话列表，再合并
+### Recommendation
+**The branch can be merged into main, with the following improvements recommended first.**
 
-我推荐 **选项 A**（立即合并），因为：
-1. 代码质量已经很好，不影响功能
-2. 细节优化可以逐步进行
-3. 后续 D2.1c 和 D2.2 的改动可能会再调整 UI
-4. 及早合并让团队看到实际效果
+1. Improve project selector grouping if the UI library supports it
+2. Check the presentation of long conversation lists
+3. Add screenshot verification on Mac and WSL
+4. Confirm the position and visibility of the Add Device button
+
+**Follow-up work after merging**
+- D2.1c integrates model switching
+- D2.2 differentiates Providers (Codex and Claude presentation)
+- D2.5 reworks Timeline styling, including enhanced code blocks
+
+---
+
+## 🎯 Suggested Priorities
+
+| Priority | Task | Effort | Blocks Merge |
+| --- | --- | --- | --- |
+| 🔴 High | Project selector grouping | Medium | No |
+| 🟡 Medium | Long conversation lists | Small | No |
+| 🟡 Medium | Mac and WSL screenshots | Small | No |
+| 🟢 Low | Attachment and voice button tooltips | Small | No |
+| ⚪ Low | Project path truncation | Small | No |
+
+---
+
+## 📝 Overall Opinion
+
+**D2.1 frontend implementation is 85% complete.**
+
+✅ **Code is 100% complete.** Type checking, tests, and build all pass.
+
+⚠️ **UI details are 80% complete.** The overall appearance is good, with details still to refine.
+
+**Suggested decision**
+- **Option A** — Merge now, then improve details individually. ✅ Recommended
+- **Option B** — Improve project selection and conversation lists before merging
+
+I recommend **Option A** (merge now) for the following reasons.
+1. Code quality is already good, and the remaining details do not affect functionality
+2. Refinements can be made incrementally
+3. Later D2.1c and D2.2 changes may adjust the UI again
+4. Merging early lets the team see the actual result

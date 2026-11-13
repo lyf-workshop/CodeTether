@@ -1,6 +1,6 @@
 # CodeTether
 
-English | [简体中文](README.zh-CN.md)
+English | [Simplified Chinese](README.zh-CN.md)
 
 View and control Codex and Claude Code conversations across your computers in one place.
 

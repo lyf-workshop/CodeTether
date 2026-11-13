@@ -1,69 +1,69 @@
-# 多工具支持策略（P1）
+# Multi-Provider Support Strategy (P1)
 
-日期：2026-11-02。阶段 P1 排在 M2（手机 MVP）之后，见 `docs/ux-redesign/03-project-plan.md` 和 `docs/ROADMAP.md` 顶部的阶段表。P1 之前不接第三个 AI 工具（AGENTS.md Out of Scope）。
+Date — 2026-11-02. Stage P1 follows M2 (mobile MVP). See `docs/ux-redesign/03-project-plan.md` and the stage table at the top of `docs/ROADMAP.md`. Do not integrate a third AI tool before P1 (AGENTS.md, Out of Scope).
 
-## 1. 目标
+## 1. Goal
 
-在 Codex 和 Claude Code 之外接入更多命令行 AI 编程工具，用同一套 项目 › 会话 › 待处理 的界面管理。每个工具只显示它真实支持的能力。
+Integrate additional command-line AI coding tools alongside Codex and Claude Code, managed through the same Projects › Conversations › Inbox interface. Show only the capabilities each tool actually supports.
 
-## 2. 现状
+## 2. Current Support
 
-| 工具        | 厂商      | 现在支持的能力                                                                             |
-| ----------- | --------- | ------------------------------------------------------------------------------------------ |
-| Codex       | OpenAI    | 本机：对话、流式输出、批准、停止、变更、继续以前的会话。配对设备：只读沙箱，没有批准和停止 |
-| Claude Code | Anthropic | 对话、流式输出、继续以前的会话；工具只有 Read、Glob、Grep。没有编辑、命令、批准、停止      |
+| Tool | Vendor | Capabilities Currently Supported |
+| ----------- | --------- | ------------------------------------------------------------------------------------------------ |
+| Codex | OpenAI | Local computer supports conversations, streaming output, approval, stop, changes, and resuming earlier conversations. Paired devices use a read-only sandbox, with no approval or stop. |
+| Claude Code | Anthropic | Conversations, streaming output, and resuming earlier conversations. Tools are limited to Read, Glob, and Grep. No editing, commands, approval, or stop. |
 
-## 3. 候选工具（调研时逐个核实）
+## 3. Candidate Tools (Verify Each During Research)
 
-下表只记录公开资料里的情况（2026-11 查过），能不能接要等 P1 调研的结论。
+The table below records only information found in public sources checked in 2026-11. Integration eligibility depends on the P1 research conclusions.
 
-| 工具               | 厂商                  | 公开资料                                                                                                                                                          |
-| ------------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GitHub Copilot CLI | GitHub                | 有非交互的编程调用方式（[programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference)）                 |
-| Gemini CLI         | Google                | 开源命令行工具                                                                                                                                                    |
-| Cursor CLI         | Cursor                | 有无界面模式，`-p` / `--print`，可输出 stream-json（[headless](https://cursor.com/docs/cli/headless)）                                                            |
-| Kiro CLI           | AWS                   | 原 Amazon Q Developer CLI，2025-11 起改名（[迁移说明](https://kiro.dev/docs/upgrade-guides/migrating-from-q/)）。CodeWhisperer 是它更早的名字，已不再作为产品存在 |
-| Pi                 | Earendil（开源，MIT） | 极简的终端编程工具，可扩展（[GitHub](https://github.com/earendil-works/pi)）。不是 Inflection AI 的产品                                                           |
-| Aider              | 开源                  | 和 Git 集成的命令行工具                                                                                                                                           |
-| OpenCode           | 开源                  | 命令行编程工具                                                                                                                                                    |
-| Continue           | 开源                  | 主要是编辑器插件，有没有可用的命令行要核实                                                                                                                        |
+| Tool | Vendor | Public Information |
+| ------------------ | --------------------- | ------------------------------------------------------------------------------------------------ |
+| GitHub Copilot CLI | GitHub | Supports noninteractive programmatic invocation. [Programmatic reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-programmatic-reference) |
+| Gemini CLI | Google | Open-source command-line tool |
+| Cursor CLI | Cursor | Supports headless mode with `-p` / `--print` and stream-json output. [Headless documentation](https://cursor.com/docs/cli/headless) |
+| Kiro CLI | AWS | Formerly Amazon Q Developer CLI, renamed in 2025-11. CodeWhisperer was an earlier name and no longer exists as a separate product. [Migration guide](https://kiro.dev/docs/upgrade-guides/migrating-from-q/) |
+| Pi | Earendil (open source, MIT) | Minimal, extensible terminal coding tool. It is not an Inflection AI product. [GitHub](https://github.com/earendil-works/pi) |
+| Aider | Open source | Command-line tool integrated with Git |
+| OpenCode | Open source | Command-line coding tool |
+| Continue | Open source | Primarily an editor extension. Verify whether a usable command-line interface is available. |
 
-去掉的：Tabnine、Windsurf、Phind、Cody、“OpenAI Code Interpreter CLI”。这些工具目前没有可以确认的、适合接入的编程命令行；以后出现再加。
+Removed candidates include Tabnine, Windsurf, Phind, Cody, and “OpenAI Code Interpreter CLI.” None currently has a confirmed coding CLI suitable for integration. Add them again if one becomes available.
 
-## 4. 每个工具要调研的
+## 4. Research Required for Each Tool
 
-1. 怎么调用：可执行文件、参数、能不能非交互运行。
-2. 输出格式：JSON-RPC、JSONL、stream-json 还是纯文本；格式是否稳定、是否有版本号。
-3. 会话：怎么标识，能不能继续以前的会话，会话记录存在哪里（决定能不能“找回以前的会话”）。
-4. 登录：API 密钥、OAuth 还是本机配置。CodeTether 不读写这些凭据，只检测是否就绪。
-5. 工具调用：文件编辑和命令怎么表示，有没有可以由外部批准或拒绝的审批流程，能不能中途停止。
-6. 错误：错误码和格式，能不能映射到现有的失败分类。
-7. 版本：支持的版本范围，怎么检测版本。
+1. Invocation, including executable, arguments, and support for noninteractive execution.
+2. Output format, such as JSON-RPC, JSONL, stream-json, or plain text, including stability and versioning.
+3. Sessions, including identity, resumption, and storage location. This determines whether earlier conversations can be discovered.
+4. Authentication, such as API keys, OAuth, or local configuration. CodeTether detects readiness without reading or writing these credentials.
+5. Tool calls, including representation of edits and commands, externally controllable approval or rejection, and interruption.
+6. Errors, including codes and formats and mapping to existing failure classifications.
+7. Versions, including supported ranges and version detection.
 
-## 5. 接入规范
+## 5. Integration Contract
 
-每个适配器都要提供：
+Every adapter must provide the following.
 
-- 安装检测和版本兼容范围；
-- 创建、继续、结束会话；
-- 把原生事件转换成统一的会话事件；
-- 能力声明：读文件、编辑、命令、搜索、批准、停止、流式输出、继续会话、变更；
-- 失败分类：映射到现有的失败类型。
+- Installation detection and a supported version range.
+- Session creation, resumption, and termination.
+- Conversion of native events into normalized conversation events.
+- Capability declarations for file reads, editing, commands, search, approval, stop, streaming, session resumption, and changes.
+- Failure classification mapped to existing failure types.
 
-界面只按能力声明显示功能。不支持的能力不出现，不显示成灰色按钮（03 §6“界面只显示后端真实提供的能力”）。
+The UI displays features according to capability declarations. Unsupported capabilities stay hidden, rather than appearing as disabled buttons. See 03 §6, “The UI shows only capabilities actually provided by the backend.”
 
-## 6. 界面上怎么展示
+## 6. UI Presentation
 
-- 每个工具显示名称，加一个自己设计的中性小图标。图标和应用图标（紫色双卡片）同一风格，不用各家的商标和品牌色（2026-11-02 你的决定）。
-- 不做工具之间的并排比较，也不能在已有会话里切换工具。
+- Show each tool's name alongside a custom neutral icon. Icons use the same style as the application icon (purple double cards), without vendors' trademarks or brand colors, as you decided on 2026-11-02.
+- Do not offer side-by-side tool comparisons or tool switching within an existing conversation.
 
-## 7. 顺序
+## 7. Sequence
 
-1. P1：按 §4 调研所有候选工具，写结论和接入规范，设计中性图标。
-2. 之后每接一个工具单独一个阶段，按调研结论排序。
+1. P1 researches every candidate according to §4, records conclusions and the integration contract, and designs neutral icons.
+2. Each subsequent tool integration is a separate stage, ordered by the research conclusions.
 
-## 8. 不做
+## 8. Exclusions
 
-- 不按季度排时间表，不设覆盖率之类的指标。
-- 不做适配器市场和认证计划。
-- 不做工具之间的会话交接（ROADMAP“Deferred Beyond This Roadmap”）。
+- No quarterly schedule or metrics such as coverage targets.
+- No adapter marketplace or certification program.
+- No conversation handoff between tools (ROADMAP, “Deferred Beyond This Roadmap”).

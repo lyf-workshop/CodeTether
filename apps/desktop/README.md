@@ -134,7 +134,7 @@ Desktop never kills, replaces, or silently attaches to a process discovered thro
 
 Only the Host child started by the current Desktop process is owned. X and Alt+F4 no longer exit the application: Rust prevents destruction of the `main` window and hides it to the System Tray. The same Desktop, Host, WebView, route, running Turn, process-live Approval, Attention stream, and notification coordinator remain alive. Ordinary minimize remains ordinary minimize.
 
-Only the tray item `退出 CodeTether` initiates normal product shutdown. It writes the private line below to the owned Host's piped stdin:
+Only the tray item `Quit CodeTether` initiates normal product shutdown. It writes the private line below to the owned Host's piped stdin:
 
 ```text
 shutdown
@@ -151,7 +151,7 @@ Phase 4G.2 keeps the accepted 4G.1 window/application boundary and adds only bou
 | Boundary                 | CodeTether behavior                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | X / Alt+F4               | Prevent main-window destruction and hide the existing WebView. Desktop, Host, Codex work, SSE, Approvals, and notifications remain live.                                                                                                                                                                                                                                                                                                  |
-| Tray `退出 CodeTether`   | Enter the one idempotent normal-quit transition and allow up to 12 seconds for the established graceful owned-Host/SQLite/Codex drain before owned-tree termination.                                                                                                                                                                                                                                                                      |
+| Tray `Quit CodeTether`   | Enter the one idempotent normal-quit transition and allow up to 12 seconds for the established graceful owned-Host/SQLite/Codex drain before owned-tree termination.                                                                                                                                                                                                                                                                      |
 | Sleep                    | Record the Windows system as suspended. Do not shut down, interrupt, expire Approval, or forcibly restart the owned Host.                                                                                                                                                                                                                                                                                                                 |
 | Resume                   | Admit one recovery per suspend cycle. Check the recorded child once and make one bounded bootstrap request; Protocol v1, revision-coupled build identity, and the startup Host epoch must match. The bounded native event carries that exact epoch, and the existing HostRuntime must re-read bootstrap and match it before reconnecting its one SSE transport with the current `Last-Event-ID` and ordinary replay/reset/Snapshot rules. |
 | OS session end           | `WM_QUERYENDSESSION` performs an immediate memory-only state transition and returns allow. Cancellation restores the prior lifecycle. Confirmed `WM_ENDSESSION` gets a separate 2-second best-effort bounded owned-Host termination attempt before Windows teardown continues.                                                                                                                                                            |
@@ -247,14 +247,14 @@ Windows WebView2 can suspend a minimized document and pause its SSE consumer. Wh
 The System Tray is created exactly once, after Host readiness and before the first window reveal. It uses the configured CodeTether application icon, the `CodeTether` tooltip, a completed left-click restore action, and only these menu items:
 
 ```text
-打开 CodeTether
+Open CodeTether
 ──────────────
-退出 CodeTether
+Quit CodeTether
 ```
 
 Tray click, Tray Open, notification click, and hidden second-instance launch all call the same Rust `show_main_window` path. That path restores only the existing ready window, unminimizes it when necessary, shows it, and requests focus. Once Quit begins it refuses restoration, so a notification, tray click, or second launch cannot reopen the application during shutdown.
 
-On the first successful close-to-tray, Rust attempts the native “CodeTether 仍在后台运行” explanation and atomically creates the versioned `background-runtime-education-v1` marker only after the platform accepts that notification request. Isolated smoke runs place the marker beneath their absolute `CODETETHER_DATA_DIR`. This Desktop preference is not Project/Attention data. The shared native-capabilities adapter exposes a read-only `backgroundRuntime.available` value so Settings can show a compact Desktop explanation; Browser mode reports `false`, displays no background-runtime surface, and receives no native lifecycle command.
+On the first successful close-to-tray, Rust attempts the native “CodeTether is still running in the background” explanation and atomically creates the versioned `background-runtime-education-v1` marker only after the platform accepts that notification request. Isolated smoke runs place the marker beneath their absolute `CODETETHER_DATA_DIR`. This Desktop preference is not Project/Attention data. The shared native-capabilities adapter exposes a read-only `backgroundRuntime.available` value so Settings can show a compact Desktop explanation; Browser mode reports `false`, displays no background-runtime surface, and receives no native lifecycle command.
 
 Phase 4G.1 is accepted and frozen at `cee3a71`. Its tray does not add Start with Windows, minimize-to-tray, a close-behavior toggle, tray Attention counts/badges, recent Projects/Conversations, inline Approval actions, notifications after explicit Quit, an OS daemon, or automatic Host restart. Phase 4G.2 does not change that menu or product scope. Explorer taskbar recreation is handled by the pinned Tauri/`tray-icon` boundary rather than a CodeTether watcher or second tray.
 

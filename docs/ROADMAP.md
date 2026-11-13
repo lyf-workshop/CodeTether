@@ -268,7 +268,7 @@ Implemented scope:
 - Every pending Approval remains visible by exact public `approvalId` with independent Allow Once/Decline mutation state until `approval.resolved` is observed.
 - Header Interrupt binds the exact active Conversation and Turn and waits for `turn.interrupted`. Stop remains unavailable because Protocol v1 has no Thread-termination command.
 - Host connection and advertised Bootstrap capabilities gate Composer, Approval, and Interrupt controls. Unsupported quick actions and model/reasoning/permission changes remain read-only.
-- Timeline auto-follow respects manual upward scrolling and offers “跳到最新”; workspace file paths are presented relative to the authorized root, while complete command/error text remains in Terminal/details.
+- Timeline auto-follow respects manual upward scrolling and offers “Jump to latest”; workspace file paths are presented relative to the authorized root, while complete command/error text remains in Terminal/details.
 - Demo, Inbox, and Conversations remain Mock data, and the accepted visual/component structure is unchanged.
 
 Verified result:
@@ -404,8 +404,8 @@ Exit gate results:
 Verified scope:
 
 - SQLite migration 003 adds a required canonical title and a distinct `last_activity_at` activity clock to every Conversation without changing its Project, provider Thread, Turn, or normalized Timeline identity.
-- Existing rows use their first durable text input for deterministic title backfill; rows without a Turn remain `新会话`.
-- New Conversations start as `新会话`. The first Host-recorded text input generates one local title before provider execution; later Turns and provider resume do not rewrite it.
+- Existing rows use their first durable text input for deterministic title backfill; rows without a Turn remain `New conversation`.
+- New Conversations start as `New conversation`. The first Host-recorded text input generates one local title before provider execution; later Turns and provider resume do not rewrite it.
 - Title generation normalizes Unicode/whitespace, uses the opening sentence or clause, removes only a small stable set of request prefixes, and truncates safely to 48 graphemes within the wire bound. It never calls a model.
 - `GET /api/v1/projects/:projectId/conversations` queries only durable Conversation summary columns, is scoped to one Project, sorts by last activity descending, defaults to 50 rows, and rejects limits above 100.
 - Optional canonical provider/status filters are validated at the Protocol boundary. Unavailable Projects remain readable; unknown Projects return `not_found`.
@@ -779,7 +779,7 @@ Acceptance boundary:
 Implemented scope:
 
 - The native-decorated main window is no longer the application lifetime boundary. X and Alt+F4 prevent main-window destruction and hide the existing WebView to the Windows System Tray, while ordinary minimize remains a normal Windows minimize and the Desktop-owned Host/Codex process tree continues running.
-- Rust creates exactly one tray after the Host passes Protocol/build readiness and before the first window reveal. It uses the configured CodeTether icon and tooltip, restores on completed left click, and exposes only `打开 CodeTether` plus `退出 CodeTether`; tray-creation failure drains the owned Host and exits instead of leaving a nonfunctional shell.
+- Rust creates exactly one tray after the Host passes Protocol/build readiness and before the first window reveal. It uses the configured CodeTether icon and tooltip, restores on completed left click, and exposes only `Open CodeTether` plus `Quit CodeTether`; tray-creation failure drains the owned Host and exits instead of leaving a nonfunctional shell.
 - Tray click, Tray Open, notification activation, and single-instance activation call one ready/not-quitting `show_main_window` boundary that unminimizes, shows, and focuses the same main window. Hidden second-instance activation never starts another Host or SQLite writer, and hide/show does not navigate or remount the shared React application.
 - Explicit Tray Quit is guarded as a one-way/idempotent lifecycle transition and reuses the Phase 4A bounded graceful Host/SQLite/Codex shutdown before removing the tray and exiting. Window hide does not invoke restart reconciliation; explicit Quit and abnormal process loss retain the established interrupted-Turn and expired-Approval safety semantics.
 - The first successful hide atomically persists one versioned Desktop-owned education marker outside Project SQLite and attempts one native “still running” explanation. Shared Settings receives only a Browser-safe read-only `backgroundRuntime.available` capability and a compact Desktop explanation with no behavior toggle; Browser mode exposes neither tray controls nor lifecycle changes.
@@ -804,7 +804,7 @@ Acceptance boundary:
 
 Implemented scope:
 
-- The accepted window/application contract is unchanged: X and Alt+F4 hide the existing main window only, while `退出 CodeTether` is the sole normal product exit and retains the idempotent 12-second graceful owned-Host/SQLite/Codex shutdown ceiling.
+- The accepted window/application contract is unchanged: X and Alt+F4 hide the existing main window only, while `Quit CodeTether` is the sole normal product exit and retains the idempotent 12-second graceful owned-Host/SQLite/Codex shutdown ceiling.
 - One native lifecycle reducer tracks Desktop application, window, Windows power/session, and owned-Runtime state independently. Session lock/unlock is observed without changing window visibility, Agent execution, or product truth.
 - Windows sleep records suspension and performs no Host shutdown, forced restart, provider interruption, or Approval expiry. Exactly one recovery is admitted for each resume cycle.
 - Resume performs one bounded check of the exact owned Host: the recorded child must remain live and one loopback bootstrap response must match Protocol v1, the revision-coupled build identity, and the startup Host epoch. A live but temporarily unresponsive owned child is not killed or replaced; an exited/incompatible/identity-changed child enters the existing failure cleanup boundary. No automatic restart loop is introduced.
@@ -867,7 +867,7 @@ Implementation scope:
 - Re-audit the installed Claude Code CLI before changing any capability. Only stable noninteractive machine-readable behavior may cross the existing Provider adapter; terminal scraping, fake parity, Provider-specific public APIs, transcript replay, and Conversation Provider switching remain forbidden.
 - Preserve the accepted Read/Glob/Grep-only production launch profile, strict MCP boundary, `dontAsk`, structured argv, JSONL stdin, and `shell: false`. Observed Edit/Write paths may be normalized defensively, while unexpected Bash/PowerShell envelopes remain Generic without exposing their commands; the corresponding product capabilities remain false until a safe permission contract is proven.
 - Enrich canonical Tool events from stable structured Tool identity with bounded presentation-safe command/path clues. Raw Claude Tool IDs, protocol objects, stderr, private session identity, absolute escaping paths, and arbitrary environment data remain private.
-- Expose the installed CLI's real `--effort` values through generic Host-owned reasoning metadata and a Provider-labelled “思考强度” control. This is not a claim that Claude effort is semantically equivalent to Codex reasoning. Unknown/stale values fail as `invalid_request` before Provider launch.
+- Expose the installed CLI's real `--effort` values through generic Host-owned reasoning metadata and a Provider-labelled “effort” control. This is not a claim that Claude effort is semantically equivalent to Codex reasoning. Unknown/stale values fail as `invalid_request` before Provider launch.
 - Keep Approval, reliable interrupt, Edit, Shell, Diff, and model selection unsupported unless real evidence proves every required safety and lifecycle property. A documented flag or interactive terminal affordance alone is insufficient.
 - Stress native resume across repeated Host restarts, cold organization/Search, background completion, and mixed Provider history. Test bounded simultaneous Claude Conversations under the existing shared eight-Conversation admission budget and verify process/event isolation and cleanup.
 - Run complete Codex, Desktop managed-Host/Tray, installed package, Search/organization, and process-ownership regressions without modifying the frozen Phase 4G lifecycle absent a demonstrated regression.

@@ -1,68 +1,68 @@
-# 开发流程
+# Development Process
 
-日期：2026-10-19。适用于 CodeTether 之后的所有功能、修复和发布。分工：你提需求、验收；Claude Code 整理需求、做设计、写提示词、审核；编码智能体实现。
+Date — 2026-10-19. Applies to all future CodeTether features, fixes, and releases. You provide requirements and perform acceptance testing. Claude Code organizes requirements, designs the solution, writes task prompts, and reviews the work. The coding agent implements it.
 
-## 1. 从想法到发布
+## 1. From Idea to Release
 
-| 步骤         | 谁                         | 产出                                                                                                | 进入下一步的条件 |
+| Step | Owner | Deliverable | Requirement for the Next Step |
 | ------------ | -------------------------- | --------------------------------------------------------------------------------------------------- | ---------------- |
-| 1 需求       | 你提想法，Claude Code 整理 | 需求说明：要解决什么、做什么、不做什么、验收标准                                                    | 你确认           |
-| 2 设计       | Claude Code                | 界面：原型、截图、交接文档；后端：接口和数据说明                                                    | 你确认           |
-| 3 任务       | Claude Code                | 提示词：起点提交、分支名、步骤、不能破坏的规则、验证要求、报告格式                                  | —                |
-| 4 实现       | 编码智能体                 | 分支上按步骤的小提交，每一步都跑质量检查                                                            | 检查全部通过     |
-| 5 审核       | Claude Code                | 审核记录（分“必须改”和“建议改”）和修复提示词；最多两轮，还不过就找你                                | 没有“必须改”     |
-| 6 验收和发布 | 你                         | 在真机上按验收标准走一遍，问题写进验收记录；通过后合并到 `main`、打版本标签、打包安装、更新 ROADMAP | 你说通过         |
+| 1 Requirements | You propose ideas and Claude Code organizes them | Requirements describing the problem, scope, exclusions, and acceptance criteria | Your confirmation |
+| 2 Design | Claude Code | UI prototypes, screenshots, and handoff documentation, or backend interface and data specifications | Your confirmation |
+| 3 Task | Claude Code | A task prompt with the starting commit, branch, steps, invariants, validation requirements, and report format | — |
+| 4 Implementation | Coding agent | Small commits on a task branch, with quality checks at each step | All checks pass |
+| 5 Review | Claude Code | Findings divided into required and suggested changes, plus a fix prompt. After at most two unsuccessful rounds, ask you | No required changes remain |
+| 6 Acceptance and Release | You | Acceptance testing on real devices, findings in the acceptance record, then merge into `main`, tag a version, package and install, and update ROADMAP | Your acceptance |
 
-## 2. “完成”分四级
+## 2. Four Levels of Completion
 
-代码完成（检查通过）→ 审核通过 → 验收通过 → 已发布。
+Code complete (checks passed) → Review approved → Acceptance passed → Released.
 
-每次汇报都写明现在在哪一级，不只说“完成了”。
+Every report must state the current level instead of simply saying the work is complete.
 
-## 3. 分支和工作区
+## 3. Branches and Workspaces
 
-- `main` 始终是最新一次验收通过的版本，和 GitHub 上的 `main` 一致。已安装的版本在 `main` 上必须有对应的标签。
-- 每个任务一个分支，从 `main` 开出来，命名 `feat/<阶段>-<内容>` 或 `fix/<内容>`，例如 `feat/b1-remote-control`。现有的 `ux/design` 和 `ux/v4-device-first` 保留原名。
-- 不开 PR。审核在本地进行，审核记录写进仓库（见 §5）。验收通过后在本地合并进 `main`，再推送 `main`。推送 `main` 每次都要你同意。
-- 合并后删掉分支和工作区。同时进行的任务一般不超过两个。
-- 工作区统一放在 `D:/Projects/Software/agenthub-work/<分支名>`，不再放进仓库内的 `.tmp`。
-- 临时调试和收集证据的代码不进入要合并的分支。证据文件（PHASE8D-*.json 这类）放进不提交的目录；要长期保留的放到仓库外的 `D:/Projects/Software/agenthub-archive/`。
-- 不改写已经推送的历史，不强制推送。
+- `main` always represents the latest accepted version and matches `main` on GitHub. An installed version must have a corresponding tag on `main`.
+- Use one branch per task, starting from `main`, named `feat/<stage>-<description>` or `fix/<description>`, such as `feat/b1-remote-control`. Keep the existing names `ux/design` and `ux/v4-device-first`.
+- Do not open PRs. Reviews happen locally and are recorded in the repository (see §5). After acceptance, merge locally into `main`, then push `main`. Every push to `main` requires your approval.
+- Delete the task branch and workspace after merging. Generally keep at most two tasks in progress at once.
+- Put all workspaces under `D:/Projects/Software/agenthub-work/<branch-name>`, rather than the repository's `.tmp` directory.
+- Temporary debugging and evidence-collection code must stay out of the branch that will be merged. Keep evidence files such as `PHASE8D-*.json` in an uncommitted directory. Store evidence that needs long-term retention outside the repository under `D:/Projects/Software/agenthub-archive/`.
+- Do not rewrite pushed history or force-push.
 
-## 4. 任务大小
+## 4. Task Size
 
-一个任务要能在一次审核里看完，大约是实现顺序里的一步，例如“设备页”，而不是一整套界面。一次交付超过约 30 个文件或 3000 行（不算生成文件和测试快照）时，先拆开。
+A task should be small enough to review in one sitting, roughly one implementation step such as the Devices page, rather than a complete interface. Split a delivery before it exceeds approximately 30 files or 3,000 lines, excluding generated files and test snapshots.
 
-## 5. 文档
+## 5. Documentation
 
-- PRODUCT.md 写产品行为，ARCHITECTURE.md 写架构，ROADMAP.md 写阶段和状态。
-- `docs/ux-redesign` 放需求（04）、规划（03）、原型和各阶段设计（05 起），是 UI 的事实来源（2026-11-02 起不再使用 Figma）。ROADMAP.md 顶部的阶段表写状态，03 写每个阶段的内容，两处一起改。
-- 每个任务一份审核和验收记录：`docs/reviews/<分支名>.md`，写审核轮次、“必须改”和“建议改”、验收结果。
+- PRODUCT.md defines product behavior, ARCHITECTURE.md defines architecture, and ROADMAP.md defines stages and status.
+- `docs/ux-redesign` holds requirements (04), planning (03), prototypes, and stage designs (05 onward). It is the source of truth for UI design. Figma has no longer been used since 2026-11-02. The stage table at the top of ROADMAP.md records status, while 03 defines each stage's scope. Update both together.
+- Keep one review and acceptance record per task at `docs/reviews/<branch-name>.md`, including review rounds, required and suggested changes, and acceptance results.
 
-## 6. 给编码智能体的提示词写什么
+## 6. What a Coding-Agent Task Prompt Must Include
 
-- 起点提交和分支名，工作区路径。
-- 依据：需求编号（04）、原型页面或阶段设计文档。
-- 目标和大致步骤。怎么实现、怎么拆提交、要不要推送、要不要部署和安装，由智能体按任务需要判断。
-- 要守住的产品规则：03 §6 的不变量、只显示真实能力、界面只用中文、演示数据不调用真实接口。
-- 注意事项（说明，不是禁令）：
-  - 凭据和密钥（`.secrets/`、私钥、连接串）不打印，也不写进仓库和报告；
-  - 部署或替换已安装的版本前先做备份，并知道怎么回退；
-  - 删除数据、或者会影响服务器上其他项目的操作，先和你确认；
-  - 仓库根目录下未跟踪的证据文件保留。
-- 验证：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`，加上和任务相关的重点检查。
-- 报告格式：做了什么、检查结果（原样贴出失败）、没做的和原因、在“完成”的哪一级。
+- Starting commit, branch name, and workspace path.
+- References to requirement IDs (04), prototype pages, or stage design documents.
+- Goals and broad steps. The agent decides implementation details, commit breakdown, and whether to push, deploy, or install, according to the task.
+- Product rules to preserve, including the invariants in 03 §6, showing only real capabilities, keeping the product UI Chinese-only, and preventing demo data from calling real interfaces.
+- Operational considerations, expressed as explanations rather than blanket prohibitions.
+  - Do not print credentials or keys (`.secrets/`, private keys, connection strings) or write them to the repository or reports.
+  - Before deployment or replacement of an installed version, make a backup and know how to roll back.
+  - Confirm with you before deleting data or performing operations that affect other projects on a server.
+  - Preserve untracked evidence files at the repository root.
+- Validation must include `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and focused checks relevant to the task.
+- Report what changed, check results with failures quoted verbatim, unfinished work and reasons, and the current completion level.
 
-### 授权边界（2026-11-06）
+### Authorization Boundaries (2026-11-06)
 
-提示词写目标、已知事实、验收标准和下面三类边界，不写命令级步骤。怎么做由智能体判断，提示词不替它排步骤、不列要敲的命令。已知的坑写成事实（原因和症状），不写成唯一的解法。
+Prompts state goals, known facts, acceptance criteria, and the following three kinds of boundaries. They do not prescribe command-level steps. The agent decides how to proceed. A prompt does not dictate the agent's sequence or list the commands it must type. Describe known pitfalls through their causes and symptoms, rather than prescribing a single solution.
 
-- **自己决定**：实现和命令；构建环境问题（把工具装在工作区或 `~/agenthub-work` 下、设只对当次有效的环境变量、换用已核对校验和的工具版本）；失败后的诊断和重试；任务内的提交拆分。出了问题先自己查原因、自己解决，查不出来再停下。
-- **先问用户**：需要用户本人操作的事（验证码、设备上的信任和系统弹窗、物理接线）；任务本来不改代码却需要改代码；删除或覆盖用户数据，或替换已安装版本而没有备份；改生产服务的配置（控制服务、Relay、服务器，包括通过 SSH）；杀掉不是自己启动的进程；推送 `main`、打标签。
-- **不做**：读取或打印凭据；强制推送、改写已推送的历史；动与任务无关的服务和数据。
+- **Decide independently** — implementation and commands, build-environment issues (installing tools inside the workspace or `~/agenthub-work`, using environment variables limited to the current invocation, or choosing tool versions with verified checksums), diagnosing and retrying failures, and splitting commits within the task. Investigate and resolve problems independently first. Stop only when the cause cannot be determined.
+- **Ask the user first** — actions requiring the user personally (verification codes, device trust and system prompts, physical connections), code changes for a task that originally excluded code, deleting or overwriting user data or replacing an installed version without a backup, production-service configuration changes (Control Plane, Relay, or server, including through SSH), terminating processes the agent did not start, pushing `main`, and tagging.
+- **Do not do** — read or print credentials, force-push or rewrite pushed history, or touch services and data unrelated to the task.
 
-## 7. 发布
+## 7. Release
 
-- Windows：nsis 安装包。Mac：签名后的 app。Android：先给自己装调试版 APK。
-- 每次发布打 `v0.x.y` 标签，并在 `CHANGELOG.md` 写更新记录。
-- 已安装的版本只在你验收通过后才替换。替换前保留上一版安装包和数据备份，新版本验收通过后再删。
+- Windows uses an NSIS installer. Mac uses a signed app. On Android, install a debug APK for personal testing first.
+- Tag every release as `v0.x.y` and record the changes in `CHANGELOG.md`.
+- Replace an installed version only after your acceptance. Preserve the previous installer and a data backup before replacement. Delete them only after acceptance of the new version.

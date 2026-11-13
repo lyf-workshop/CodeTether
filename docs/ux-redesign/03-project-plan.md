@@ -127,6 +127,8 @@ CC Switch-style API-service/model configuration switching (research first), cros
 
 ## 8. Next steps
 
+As of 2026-11-13, the order of work, the decisions taken (AD-1 to AD-11) and the task prompts are in `docs/reviews/2026-11-13-assessment-and-plan.md`; stage status is in `docs/ROADMAP.md`. The numbered items below are the earlier history.
+
 1. D1 completed (`v0.1.0-alpha.2`).
 2. U1 design ready (`05-desktop-update.md`), updates hosted on us-vps-01; awaiting your design review before coding prompt; you generate signing private key.
 3. B0 deployed (2026-11-02), diagnostics merged `main` (`b59f911`). End-to-end Relay reads await valid authorization.

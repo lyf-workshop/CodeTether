@@ -8,6 +8,8 @@ D1 shipped as `v0.1.0-alpha.2`, with account, project, conversation, Codex/Claud
 
 D2 addresses these five issues to make desktop suitable for everyday use.
 
+Note (2026-11-13): file paths in this document such as `apps/web/app/(main)/devices/page.tsx` are illustrative Next.js-style names. The web app is Vite with TanStack Router; the real components live under `apps/web/src/components/` (for example `apps/web/src/components/conversation/composer.tsx`).
+
 ## 1. Five Core Issues
 
 ### I1. The Machine Concept Is Exposed to Users
@@ -388,23 +390,31 @@ D2 addresses these five issues to make desktop suitable for everyday use.
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│ Codex · GPT-4             Remaining context 85%               [▼]  │  ← Provider information bar
+│ Codex · GPT-4                                                 [▼]  │  ← Provider information bar
 ├────────────────────────────────────────────────────────────────────┤
 │                                                                    │
 │ [Input field, at least 2 lines, up to 40% of the viewport]          │
 │                                                                    │
 │                                                                    │
 ├────────────────────────────────────────────────────────────────────┤
-│ [📎 Attach] [🎤 Voice]       Characters 125                  [Send] │  ← Action bar
+│                              Characters 125                  [Send] │  ← Action bar
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+Changed 2026-11-13 (AD-2 in `docs/reviews/2026-11-13-assessment-and-plan.md`). The 03 §6 invariant applies: the interface only shows capabilities the backend really provides. The earlier layout showed three placeholders:
+
+- remaining context
+- Attach
+- Voice
+
+They are removed rather than shown greyed out. Each returns when real data or X1 provides it.
 
 #### Functional Details
 
 **Provider information bar**
 - Left shows Provider icon, name, and model.
-- Center shows remaining context through a progress indicator and percentage.
-- Right contains a dropdown if model switching is supported.
+- Right contains the model and effort control when the Provider supports model switching (D2 model control). Otherwise it is absent.
+- Remaining context appears here only once a Provider reports real context usage. Until then there is no label and no empty indicator.
 
 **Input field**
 - Initial height is two lines, approximately 48px.
@@ -423,8 +433,7 @@ D2 addresses these five issues to make desktop suitable for everyday use.
 - Ctrl+K opens the command palette.
 
 **Action bar**
-- Attachment button (X1).
-- Voice button (X1).
+- Attachment and voice buttons arrive with X1; until then they are not shown.
 - Live character count.
 - Send, disabled for empty input.
 

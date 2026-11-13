@@ -27,14 +27,15 @@ The risks are in operations and process rather than code:
 
 Stage status on `main`:
 
-| Status                            | Stages                                       |
-| --------------------------------- | -------------------------------------------- |
-| Released                          | D1                                           |
-| Deployed                          | B0                                           |
-| Merged                            | B1, T1a, B4a, D2.1, U1                       |
-| Reviewed and accepted, not merged | Android retry fix, T1a fidelity fix, I1 iPad |
-| Unmerged                          | two model-switching branches                 |
-| Not started                       | B2, the rest of B3, B4b, E1, M1–M3, P1, X1   |
+| Status               | Stages                                                              |
+| -------------------- | ------------------------------------------------------------------- |
+| Released             | D1                                                                  |
+| Deployed             | B0                                                                  |
+| Merged               | B1, T1a, B4a, D2.1, U1                                              |
+| Reviewed, not merged | Android retry fix, T1a fidelity fix (Owner device re-check pending) |
+| In fix round         | I1 iPad (r4 review left one must-fix; r5 prompt ready)              |
+| Unmerged             | two model-switching branches                                        |
+| Not started          | B2, the rest of B3, B4b, E1, M1–M3, P1, X1                          |
 
 ## 2. Decisions
 
@@ -181,23 +182,28 @@ This restates DEVELOPMENT-PROCESS §3–§5, which practice had drifted from:
 
 ## 3. Task queue
 
-| #   | Task                                                                                                       | Prompt                                                                           | Runs on                                          | Starts            | Deadline             |
-| --- | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------ | ----------------- | -------------------- |
-| 1   | Release `v0.1.0-alpha.3` (round 2: merge the accepted Android, T1a and iPad fixes onto the current `main`) | `release-alpha3-prompt-r2.md`                                                    | Windows (+ iOS check on the Mac)                 | now               | —                    |
-| 2   | Repo hygiene and CI baseline                                                                               | `repo-hygiene-ci-prompt.md`                                                      | Mac                                              | now               | —                    |
-| 3   | Node 26 pin and Relay TLS reload                                                                           | `runtime-node26-relay-tls-prompt.md`                                             | Windows                                          | after 1           | merged by 2026-11-27 |
-| 4   | Relay deployment (Node 26 build, reload, certificate sync timer)                                           | written after review of 3                                                        | Windows → us-vps-01                              | after 3           | before 2026-12-10    |
-| 5   | D2 model-control integration                                                                               | `d2-model-control-integration-prompt.md`                                         | the next free machine with the Android toolchain | after 1           | —                    |
-| 6   | B3a send speed                                                                                             | `b3a-send-speed-prompt.md`                                                       | Windows (codex.exe is measured there)            | after 5 is merged | —                    |
-| 7   | B4b folder browsing                                                                                        | `b4b-folder-browse-prompt.md` (existing; start commit refreshed when dispatched) | Mac                                              | after 2           | —                    |
-| 8   | S1 local API session token                                                                                 | written after AD-5 is accepted                                                   | either                                           | after 6           | —                    |
+| #   | Task                                                                                                                 | Prompt                                                                           | Runs on                                          | Starts                                                      | Deadline             |
+| --- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------- | -------------------- |
+| 1   | Release `v0.1.0-alpha.3` (round 2: merge the two reviewed Android fix branches onto the current `main`; I1 excluded) | `release-alpha3-prompt-r2.md`                                                    | Windows                                          | after the Owner's device re-check of the T1a fidelity fixes | —                    |
+| 2a  | I1 iPad r5 (one must-fix from the r4 review)                                                                         | `i1-fix-prompt-r5.md`                                                            | Mac                                              | now, if the Owner approves a fifth round (AD-11)            | —                    |
+| 2   | Repo hygiene and CI baseline                                                                                         | `repo-hygiene-ci-prompt.md`                                                      | Mac                                              | after 2a                                                    | —                    |
+| 3   | Node 26 pin and Relay TLS reload                                                                                     | `runtime-node26-relay-tls-prompt.md`                                             | Windows                                          | after 1                                                     | merged by 2026-11-27 |
+| 4   | Relay deployment (Node 26 build, reload, certificate sync timer)                                                     | written after review of 3                                                        | Windows → us-vps-01                              | after 3                                                     | before 2026-12-10    |
+| 5   | D2 model-control integration                                                                                         | `d2-model-control-integration-prompt.md`                                         | the next free machine with the Android toolchain | after 1                                                     | —                    |
+| 6   | B3a send speed                                                                                                       | `b3a-send-speed-prompt.md`                                                       | Windows (codex.exe is measured there)            | after 5 is merged                                           | —                    |
+| 7   | B4b folder browsing                                                                                                  | `b4b-folder-browse-prompt.md` (existing; start commit refreshed when dispatched) | Mac                                              | after 2                                                     | —                    |
+| 8   | S1 local API session token                                                                                           | written after AD-5 is accepted                                                   | either                                           | after 6                                                     | —                    |
 
-Claude Code reviews each branch as it comes back and writes `docs/reviews/<branch>.md`. In parallel, Claude Code writes the E1 design: merging Node into Desktop changes identity, pairing and conversation ownership, and the remote-access work keeps building on the current model until that design exists.
+Claude Code reviews each branch as it comes back and writes `docs/reviews/<branch>.md`. On 2026-11-13 it reviewed `fix/t1a-tablet-fidelity` items 4–9 (no must-fix) and `i1/ipad-app` r4 (one must-fix). Neither had a review record, although `release-alpha3-prompt.md` treated both as reviewed and accepted. In parallel, Claude Code writes the E1 design: merging Node into Desktop changes identity, pairing and conversation ownership, and the remote-access work keeps building on the current model until that design exists.
 
 ### Owner actions
 
 1. **Publish the docs.** Review `docs/english` and fast-forward `ux/design` to it, which brings in the translation and today's commits. Push `ux/design`, then delete `docs/english`. Every prompt reads from `origin/ux/design`.
 2. **Confirm acceptance of U1, B4a and D2.1.** They reached `main` on 2026-11-09 without review or acceptance records. Release round 2 assumes they are accepted.
+
+   - **Re-check the T1a fidelity fixes on a device**, items 1–9. This precondition gates the alpha.3 release.
+   - **Decide on iPad r5.** It would be a fifth fix round, beyond the two-round limit, but it is narrow: one must-fix and two small should-fixes. After r5, finish the iPad acceptance with `i1-ipad-interaction-test-prompt.md`.
+
 3. **Accept or amend** `docs/adr/ADR-LOCAL-API-SESSION-TOKEN.md`.
 4. **Check repository visibility and Actions billing** for CI. If the repository is private, macOS minutes count ten times.
 5. **When the release task asks:** approve pushing `main`, the tag, uploading the update files to `codetether.org/updates/alpha`, and deleting the merged remote branches.

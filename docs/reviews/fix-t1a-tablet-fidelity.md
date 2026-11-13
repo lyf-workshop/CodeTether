@@ -31,3 +31,41 @@ Suggested changes (non-blocking):
 ## Next Steps
 
 Continue items 4–9 on this branch. Push two batches, items 4–6 and then 7–9, with each batch reviewed separately.
+
+## Rounds 2 and 3 (items 4–9, `312343b` and `945c849`)
+
+Date: 2026-11-13. Reviewed `origin/fix/t1a-tablet-fidelity` from `4d2c474` to `945c849`: 24 files, +2193/−553, all in `apps/android`.
+
+Report: the "Items 4–6" and "Items 7–9" sections of `D:/Projects/Software/agenthub-archive/t1a-report.md`, with the prototype comparison sheets `t1a-logs/t1a-tablet-fidelity-4-6/qa-final-*.png` and `t1a-logs/t1a-tablet-fidelity-7-9/qa-final-*.png`.
+
+Conclusion: no must-fix. This round is ready for the Owner's device re-check. The report still says both batches are "awaiting review and device re-check". So `release-alpha3-prompt.md` was wrong to call them already reviewed and accepted.
+
+Checked, no problem:
+
+- **Attention counts.**
+  - Per-type counts come from the Host summary fields `approvalOpen`, `completedReviewOpen` and `failedOpen`, which `apps/host/src/api/attention-service.ts:55-58` really sends.
+  - Without those fields, counts are computed from the list only when the list is complete; otherwise they are omitted rather than guessed.
+  - Resolving one item decrements only that item's type.
+- **Project counts.** Active and archived counts come from the full paged `conversation.list` directory. The old code already read it in full and filtered locally, so this adds no extra reads, and switching the segment reuses the directory.
+- **Capability gating.**
+  - Stop is shown only when the Provider supports interrupt and the device has control.
+  - Settings shows no notification, background or unlock toggles, because they are not real capabilities yet (03 §6). The prototype does draw them.
+  - Removing a computer goes through a confirmation sheet (`TabletSettings.kt:192`).
+- **Wording.** User-visible strings never say Host, Node, Machine, Supervisor, Relay, authorization or fingerprint. The forced-connection modes and key-protection details are Debug-only; the release DEX audit in the report confirms it.
+- **Earlier suggestion 2 (persisted Debug connection mode)** is resolved. The mode is in-memory state that defaults to `AUTO` (`TabletState.kt:64`) and is never read back from storage.
+- **Gates**, per the report:
+  - Gradle `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest` passed.
+  - 64 instrumented tests passed; 6 are skipped by default.
+  - `assembleRelease` passed.
+- **Screenshots** match the prototypes page by page. The remaining differences are data gaps the report explains.
+
+Suggested changes (not blocking):
+
+1. When Stop is unavailable, the running bar says "这台设备上不能停止" (`ConversationStatus.kt:172`). The real reason is usually the AI tool (Claude Code has no interrupt) or missing control permission, not the tablet. Name the actual reason when it is known.
+2. Two data gaps belong to the Host, in B4 or T1b. Track them in 08, not on this branch:
+   - The project directory has no root path, so paths cannot be shortened.
+   - The tablet directory has no pairing or last-used dates, so Settings shows connection state instead.
+
+## Next steps
+
+The Owner re-checks items 1–9 on a device: the Android emulator for the tablet layout, the vivo X60 for the basics. If that passes, this branch goes into the `v0.1.0-alpha.3` release together with `fix/android-retry-explicit-failure` (`docs/reviews/release-alpha3-prompt-r2.md`).

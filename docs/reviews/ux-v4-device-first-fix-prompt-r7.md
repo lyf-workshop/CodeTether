@@ -1,124 +1,122 @@
-# 任务：改用 Codex 0.162.1、恢复开始菜单快捷方式，补完第 6、8、9 项和图标
+# Task. Select Codex 0.162.1, restore the Start-menu shortcut, and finish items 6, 8, 9 and icons
 
-分支 `ux/v4-device-first`，工作区 `D:/Projects/Software/agenthub-ux-v4-device-first`。起点必须是 `4f30416e4307731d38141ac244c47b8ba716546f`，工作树干净，否则停下报告。界面和图标以 docs/ux-redesign 为准，这是用户的临时授权，优先于 AGENTS.md 里“Figma 是唯一来源”的规定。
+Branch `ux/v4-device-first`, worktree `D:/Projects/Software/agenthub-ux-v4-device-first`. Require clean `4f30416e4307731d38141ac244c47b8ba716546f`, otherwise stop and report. UI/icons follow docs/ux-redesign under temporary user authorization overriding AGENTS.md's Figma-only rule.
 
-用户要求：界面检查由智能体直接在安装版上完成，不把界面判断交回给用户。
+The agent must inspect the installed UI directly instead of returning UI judgments to the user.
 
-上一轮的结果见 `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r6.md`，审核意见见 `docs/reviews/ux-v4-device-first.md` 的“第 6 轮”。现在 12 项通过，还差第 6、8、9 项和四处图标。
+See `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r6.md` and "Round 6" of `docs/reviews/ux-v4-device-first.md`. Twelve items pass. Items 6, 8, 9 and icons in four locations remain.
 
-这一轮预计不改代码。只有第四部分查出确定原因时才改，改了要重新打包。
+Code changes are not expected unless part 4 identifies a confirmed cause. Repackage if code changes.
 
-## 第一部分：开始菜单快捷方式
+## Part 1. Start-menu shortcut
 
-R6 重装时 `C:\Users\Administrator\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\CodeTether.lnk` 是存在的，现在没有了。桌面上的 `E:\OneDrive\Desktop\CodeTether.lnk` 还在。没有开始菜单快捷方式，Windows 就没有登记 `com.codetether.desktop` 这个应用，这可能就是通知和开始菜单图标的问题。
+R6 reinstallation had `C:\Users\Administrator\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\CodeTether.lnk`, now absent. Desktop `E:\OneDrive\Desktop\CodeTether.lnk` remains. Without a Start-menu shortcut, Windows does not register `com.codetether.desktop`, possibly explaining notifications and Start-menu icons.
 
-1. 只读查一遍：
-   - `.tmp/` 里本轮和上几轮的脚本有没有删除或移动开始菜单文件的操作；
-   - 开始菜单 Programs 目录和 `C:\ProgramData\Microsoft\Windows\Start Menu\Programs` 里有没有改名或放进子文件夹的 CodeTether 快捷方式。
-   查不出是谁删的就写“原因不明”，不要猜。
-2. 恢复快捷方式的办法是用同一个 R6 安装包重装一次，因为安装程序会创建带正确 AppID 的快捷方式。
-   - 安装包：R6 的 `56A1841DDD8BCF93…`，不重新打包。
-   - 步骤和 R6 第三部分一样：请用户从托盘退出，不结束进程；保留数据；用 `Start-Process -RedirectStandardError <归档目录下的日志>` 启动原安装路径。
-   - 启动后确认 `hostVersion` 还是 `git-4f30416e4307`。
-3. 重装后确认快捷方式在，AppID 是 `com.codetether.desktop`，`Get-StartApps` 能列出 CodeTether。
-4. 本轮开始时、每一部分结束时、报告前，各查一次这个快捷方式还在不在，记下时间。中途又消失时，记下前后做了什么，然后停下报告。
+1. Inspect read-only.
+   - This and prior rounds' `.tmp/` scripts for Start-menu deletion/movement.
+   - Programs and `C:\ProgramData\Microsoft\Windows\Start Menu\Programs` for renamed/nested shortcuts.
+   If attribution fails, record "Unknown cause" without guessing.
+2. Reinstall the same R6 installer to restore a correctly identified shortcut.
+   - Use R6 `56A1841DDD8BCF93…`, without rebuilding.
+   - Follow R6 part 3. Ask for tray exit, never terminate processes, preserve data, and launch the original installed path with `Start-Process -RedirectStandardError <archive log>`.
+   - Verify `hostVersion` remains `git-4f30416e4307`.
+3. Confirm shortcut exists, AppID is `com.codetether.desktop`, and `Get-StartApps` lists CodeTether.
+4. Check at task start, after every part, and before reporting, recording time. If it disappears again, record surrounding actions and stop.
 
-## 第二部分：Codex 改选 0.162.1
+## Part 2. Select Codex 0.162.1
 
-用户已经同意：在 CodeTether 里改用本机最新的 Codex 0.162.1（`C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe`）。
+The user authorized selecting latest local Codex 0.162.1 (`C:\Users\Administrator\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe`) inside CodeTether.
 
-- 只在安装版的设备页或设置页的 Codex 安装列表里点 0.162.1 的“选择”。
-- 不升级、不降级、不删除任何 Codex，不改 `~/.codex`，不读 `~/.codex/auth.json`。
-- 选完用本机接口只读确认选定的是 0.162.1，状态是“兼容 · 可运行”。
-- 列表里没有 0.162.1，或者它不能选，停下报告原因。
+- Click Select only for 0.162.1 in the installed Devices/Settings Codex installation list.
+- Do not upgrade, downgrade, delete Codex, modify `~/.codex`, or read `~/.codex/auth.json`.
+- Confirm read-only through the local API that selected version is 0.162.1 and status is "Compatible · Runnable".
+- If absent/unselectable, stop and explain.
 
-0.162.1 不在适配器验证过的版本表里（`packages/adapter-codex/src/compatibility.ts:32`），本轮不改这张表，写进报告即可。
+0.162.1 is absent from the adapter's tested-version list (`packages/adapter-codex/src/compatibility.ts:32`). Record this without changing that list.
 
-## 第三部分：第 6、8 项
+## Part 3. Items 6 and 8
 
-在测试项目 `D:/Projects/Software/agenthub-work/v4-accept-project` 的 Codex 会话里做，最多 4 个简短回合：
+Use the Codex conversation in `D:/Projects/Software/agenthub-work/v4-accept-project`, at most four brief turns.
 
-1. 先发一个回合，例如“只回复 ok”。
-   - 还是失败：记下日志里的 `[codex:failure]` 那一行，停下报告。不改分类器，不换回 0.149.1。
-2. 能跑通后，用剩下的 3 个回合测：
-   - 停止：发一个要跑一会儿的请求，运行中点“停止”，确认回合停下，界面状态正确；
-   - 批准：一次需要批准的命令，先在待处理页确认它出现，再选“拒绝”或“允许一次”；
-   - 变更：在测试文件夹里写一个新文件，看变更面板。
-3. 第 8 项：待处理页要同时看到等待批准、失败、已完成三类，失败和已完成有“知道了”。
-   - 只对本轮测试会话产生的项目点“知道了”，不动以前的项目。
-   - 不能批准的项目要写出原因。
+1. Start with a request such as "Reply only ok".
+   - If still failing, record `[codex:failure]` and stop. Do not change classification or return to 0.149.1.
+2. If successful, use the remaining three turns for the following.
+   - Stop a request that runs long enough, verify stopped turn and correct UI state.
+   - One approval-required command, observe it in Inbox, then Reject or Allow once.
+   - Write one new test-folder file and inspect Changes.
+3. Item 8 must show waiting approval, failure, and completion together, with "Got it" for failed/completed.
+   - Acknowledge only items from this round's test conversations.
+   - Explain non-approvable entries.
 
-## 第四部分：第 9 项系统通知
+## Part 4. Item 9 system notifications
 
-1. 第一部分完成后，只读查 `CreateToastNotifier('com.codetether.desktop').Setting`。
-2. 结果是 `Enabled`：
-   - 在测试项目的 Claude Code 会话里发 1 个简短回合，发送后马上把窗口最小化。
-   - 90 秒内读日志里的 `notification shown` 或 `notification skipped`。
-   - 用 `GET http://127.0.0.1:4317/api/v1/attention`（带 `Origin: http://tauri.localhost`）确认“已完成”提醒已经生成。
-   - 用通知历史或 UIAutomation 读通知内容，只记“设备 · 项目”和说明，不记会话标题。
-   - 点通知，确认打开的是那个会话。
-   - 第三部分 Codex 的批准或失败如果在窗口最小化时发生，也可以用来测，这样不用另花 Claude 回合。
-3. 结果还是 `DisabledForApplication`：
-   - 请用户打开“设置 > 系统 > 通知”，看列表里有没有 CodeTether，开关是否打开。有关的话请用户自己打开，智能体不改注册表。
-   - 用户确认后再查一次，再按第 2 步测。
-4. 提醒已生成但日志里没有 `notification shown`：说明前端没调用。查 `apps/web/src/runtime/notifications/attention-notification-coordinator.ts` 在哪一步返回了，找到确定原因再改，单独一个提交，加测试，然后重新打包、重装。
-5. 日志里有 `notification shown`、Windows 却没显示：写进报告，等我决定。
+1. After part 1, read `CreateToastNotifier('com.codetether.desktop').Setting`.
+2. If `Enabled`, do the following.
+   - Send one brief Claude Code turn in the test project and immediately minimize.
+   - Within 90 seconds inspect `notification shown` or `notification skipped`.
+   - Verify completion Attention with `GET http://127.0.0.1:4317/api/v1/attention`, `Origin: http://tauri.localhost`.
+   - Read notification history/UIAutomation, recording only Device · Project and explanation, not conversation title.
+   - Click and confirm the correct conversation opens.
+   - A Codex approval/failure while minimized in part 3 may replace this test, saving the Claude turn.
+3. If still `DisabledForApplication`, ask the user to check CodeTether in Settings > System > Notifications and enable it if appropriate. Do not edit registry. Recheck after confirmation, then follow step 2.
+4. Attention exists but no `notification shown` means frontend did not call native delivery. Trace the return in `apps/web/src/runtime/notifications/attention-notification-coordinator.ts`. Fix only a confirmed cause in a separate tested commit, then rebuild/reinstall.
+5. If `notification shown` exists but Windows shows nothing, report and await my decision.
 
-本机账号是内置 Administrator，CodeTether 以提升权限运行。这一点写进报告，不用处理。
+The local account is built-in Administrator and CodeTether is elevated. Record without changing it.
 
-## 第五部分：图标
+## Part 5. Icons
 
-四处里还差三处：
+Three of four locations remain.
 
-- 任务栏：R6 显示旧风筝，是图标缓存。请用户自己决定要不要运行 `! ie4uinit.exe -show`，运行后再截一次。用户不运行就如实写“图标缓存”。
-- 托盘：R6 截图后窗口位置变了。这次先展开隐藏图标弹层，等位置稳定（连续两次读到的位置一致）再截图。
-- 开始菜单：第一部分恢复快捷方式后，搜“CodeTether”，截应用结果那一行。
+- Taskbar. R6's old kite is icon caching. Let the user decide on `! ie4uinit.exe -show`, then recapture. Without it, record "Icon cache".
+- Tray. R6 popup moved after capture. Open hidden icons, wait for two identical position reads, then capture.
+- Start menu. After shortcut restoration, search CodeTether and capture the app row.
 
-Explorer 和标题栏 R6 已经确认，不用重做。
+Explorer and title bar passed R6 and need no repeat.
 
-## 执行预算
+## Execution budget
 
-- Codex：安装版里最多 4 个回合。不直接运行 Codex 命令行。
-- Claude Code：安装版里最多 1 个回合，只用于第四部分。
-- 只在测试文件夹里运行。
+- Installed Codex, at most four turns. No direct Codex CLI.
+- Installed Claude Code, at most one turn for part 4.
+- Execute only in the test folder.
 
-## 不要做的事
+## Do not do
 
-- 不配对、不取消配对，不移除已有项目，不导入其他会话。
-- 不登录、不登出，不改账号。
-- 不改 Windows 注册表和系统通知设置。快捷方式只通过重装恢复，不手动创建。
-- 不清系统图标缓存，`ie4uinit.exe` 由用户决定是否运行。
-- 测完保留测试项目、测试会话和 `v4-firstrun-data`。
+- Pair, unpair, remove existing projects, or import conversations.
+- Log in/out or change account.
+- Edit registry/system notification settings. Restore shortcuts only by reinstalling, never manually.
+- Clear icon caches. The user decides whether to run `ie4uinit.exe`.
+- Delete test projects/conversations or `v4-firstrun-data` afterward.
 
-## 检查和提交
+## Checks and commits
 
-只有第四部分第 4 步改了代码时才需要：
-- 提交前跑 `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck`，`lint`、`test`、`build` 同样跑一遍，全部为 0；
-- 改过的文件用 `xargs -n 40 npx prettier --list-different --end-of-line auto` 分批检查；
-- 提交结尾写 `Co-Authored-By: Claude Code <noreply@anthropic.com>`；
-- 打包时三项账号配置和 R6 一样，公开 key 沿用用户已经提供的；
-- 不推送，不合并，不打标签。
+Required only if part 4 step 4 changes code.
+- Run `env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck` and equivalently `lint`, `test`, `build`, all exit 0.
+- Batch-check changed files with `xargs -n 40 npx prettier --list-different --end-of-line auto`.
+- End commits with `Co-Authored-By: Claude Code <noreply@anthropic.com>`.
+- Packaging uses R6's three settings and the already supplied public key.
+- No push, merge, or tag.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r7.md`，包括：
-- 快捷方式：消失原因的排查结果，重装后的状态，每次检查的时间和结果；
-- 运行中的 `hostVersion`，重装是否用了 R6 原安装包；
-- Codex：改选前后的版本和状态，每个回合的结果；
-- 第 6、8、9 项的结果、依据和截图名；
-- 通知：`Setting` 的值，日志里的通知记录，提醒有没有生成；
-- 任务栏、托盘、开始菜单三处图标的截图和结论；
-- 清单累计结果；
-- 没测的项目和原因，被拒绝的操作和交给用户的 `!` 命令。
+Write `D:/Projects/Software/agenthub-archive/v4-acceptance-report-r7.md`.
+- Shortcut investigation, post-reinstall state, times/results of every existence check.
+- Running `hostVersion` and whether the original R6 installer was used.
+- Codex versions/states before/after selection and every turn outcome.
+- Items 6, 8, 9 with evidence/screenshots.
+- Notification `Setting`, logs, and Attention generation.
+- Taskbar/tray/Start-menu icon screenshots and conclusions.
+- Cumulative checklist results.
+- Untested items/reasons, denied actions and handed-off `!` commands.
 
-截图放在 `output/playwright/v4-installed-acceptance-r7/`。
+Screenshots go in `output/playwright/v4-installed-acceptance-r7/`.
 
-## 限制
+## Restrictions
 
-- 不读 .secrets/、任何 .env、凭据文件、machine-credentials 内容、`~/.codex/auth.json` 和 ~/.claude.json。
-- 不改 `docs/reviews/`，主工作区里的未跟踪文件不动。
-- 不用 `rm -rf`，不删备份和旧安装包，不运行 `git worktree remove`。
-- 日志里的 `sk-…` 和 `sb_publishable_…` 用 sed 脱敏。
-- 某个操作被权限拒绝时，不绕过，把命令写成 `! …` 交给用户。
-- 遇到 API 429 或 524：按 Retry-After 等待，最多重试 3 次，每次记下时间，之后停下报告。
-- 报告用中文，不用感叹号和破折号。
+- Do not read .secrets/, any .env, credential files, machine-credentials contents, `~/.codex/auth.json`, or ~/.claude.json.
+- Do not modify `docs/reviews/` or main-worktree untracked files.
+- No `rm -rf`, backup/old-installer deletion, or `git worktree remove`.
+- Redact `sk-…` and `sb_publishable_…` with sed.
+- Do not bypass denied permissions. Hand commands to the user as `! …`.
+- For API 429/524 honor Retry-After, at most three retries with timestamps, then stop/report.
+- Report in Chinese without exclamation marks or em dashes.

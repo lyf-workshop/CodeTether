@@ -1,73 +1,73 @@
-# 任务：T1a 平板真机验收后的修复（状态保留、被移除页、文案、原型还原）
+# Task: fixes after T1a tablet acceptance (state retention, removed page, copy, prototype fidelity)
 
-在 Windows 上运行。这轮要改代码，只改 `apps/android`。分支 `fix/t1a-tablet-fidelity`，从 `origin/fix/android-retry-explicit-failure` 的最新提交开出；那个分支还没推送，就先等它完成。工作区放 `D:/Projects/Software/agenthub-work/fix-t1a-tablet-fidelity`。
+Run on Windows. Change only `apps/android`. Create branch `fix/t1a-tablet-fidelity` from latest `origin/fix/android-retry-explicit-failure`; wait if that branch is not yet pushed. Worktree `D:/Projects/Software/agenthub-work/fix-t1a-tablet-fidelity`.
 
-依据（都在 `origin/ux/design` 上，用 `git show` 读）：
+References (all on `origin/ux/design`, read with `git show`):
 
-- `docs/ux-redesign/07-tablet.md`：平板的布局规则和页面表；
-- 平板原型 `docs/ux-redesign/tablet/`：`index.html` 加 `*.js`、`*.css`，颜色、间距、字号以 `tablet.css`、`components.css`、`conversation.css` 为准；截图在 `docs/ux-redesign/tablet/png/`，按页编号命名；
-- `docs/ux-redesign/06-pairing-remote-control.md` §1：界面文案规则；
-- 平板验收结果：`D:/Projects/Software/agenthub-archive/t1a-report.md` 的"真机验收（安卓平板）"，里面逐页列了实机和原型的差异，截图在 `t1a-shots/tablet-tb375fc-20261107/`。
+- `docs/ux-redesign/07-tablet.md`: layout rules and page table;
+- Tablet prototype `docs/ux-redesign/tablet/`: `index.html`, `*.js`, and `*.css`. Colors, spacing, and typography follow `tablet.css`, `components.css`, and `conversation.css`; page-numbered screenshots are under `docs/ux-redesign/tablet/png/`;
+- `docs/ux-redesign/06-pairing-remote-control.md` section 1: UI-copy rules;
+- "Physical-device acceptance (Android tablet)" in `D:/Projects/Software/agenthub-archive/t1a-report.md`, listing physical/prototype differences page by page; screenshots `t1a-shots/tablet-tb375fc-20261107/`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-联想 TB375FC 上的验收功能基本通过，剩下一个状态保留的缺陷和一批与原型不一致的地方。原型是界面的依据，要照原型实现，不在代码里另做设计（`AGENTS.md`）。
+Functional acceptance on Lenovo TB375FC largely passed. One state-retention defect and several prototype mismatches remain. The prototype defines the UI; implement it faithfully without redesigning in code (`AGENTS.md`).
 
-**必须改**（行为和规则）：
+**Required changes** (behavior and rules):
 
-1. **旋转和改变宽度时保留变更面板**：现在全屏横竖切换后，变更面板关掉了，选中的文件和 diff 也丢了。07 的规则是：横屏时面板在右边打开（宽 420），侧栏自动收起，可以再叫出来；竖屏时面板从右边盖在会话上面（宽 520）。宽窄切换只改变面板的摆法，面板开着、选中的文件、diff 的滚动位置都保留。分屏改变宽度时同样。进程被系统回收后恢复，也照现有的保存方式保留。
-2. **被移除页**：照原型 04-06 和 07 的路由 `#/home?removed=1`。在首页顶部显示红色告警条，侧栏保留，说明哪台电脑移除了这台设备，两个操作是"输入配对码"和"看其他电脑"。现在是一个单独的页面、一个"重新配对"按钮。
-3. **文案规则**：06 §1 规定界面上不出现 Host、Node、Machine、ProductDevice、Supervisor、Relay、授权、grant、指纹。现在连接检查显示"Relay · Supervisor"，还有"只走 Relay"的选项。
-   - 连接检查照原型 04-04：单独的页面，左上可以返回，用原型里的通俗说法描述连接方式，用状态徽章，"重新检查"按钮的样式照原型。
-   - 强制只走某一种连接的开关和密钥保护级别（TEE 等）原型里没有，只在 debug 构建里显示，验收要用；release 构建不显示。
-   - 顺带检查全应用还有没有违反这条规则的文案。
+1. **Retain the changes panel on rotation and width changes**: fullscreen landscape/portrait switching currently closes it and loses the selected file/diff. Under 07, landscape docks it on the right at width 420 and collapses the sidebar, which can be reopened; portrait overlays it from the right at width 520. Width changes affect placement only, retaining open state, file selection, and diff scroll position, including split-screen resizing. Preserve them after process reclamation using existing saved-state mechanisms.
+2. **Removed page**: follow prototype 04-06 and route `#/home?removed=1` in 07. Show a red warning atop Home, retain the sidebar, name the computer that removed this device, and offer "Enter pairing code" and "View other computers". The current standalone page offers only "Pair again".
+3. **Copy rules**: 06 section 1 forbids Host, Node, Machine, ProductDevice, Supervisor, Relay, authorization, grant, and fingerprint in UI. Connection checks currently show "Relay / Supervisor" and "Relay only".
+   - Follow 04-04: a separate page with top-left Back, plain-language connection descriptions, status badges, and prototype styling for "Check again".
+   - Forced transport switches and key-protection levels (TEE, etc.) are absent from the prototype. Show them only in debug for acceptance; hide in release.
+   - Audit the rest of the app for violations.
 
-**应该改**（照原型还原，后端已经有数据的）：
+**Recommended changes** (prototype fidelity where backend data exists):
 
-4. **列表和分段**（02-01、02-02、02-12、03-04、03-05）：分段上的数量；选中样式（原型是白底，不是墨底）；状态筛选用独立胶囊（03-04）；行上的彩色状态点、AI 工具、项目和相对时间；搜索框的样式；侧栏的圆形数量角标和图标。待处理页（02-02）的分组、图标、状态标签、时间和按钮文字照原型（原型是"查看"和"知道了"）。
-5. **变更面板**（02-04）：文件总数和增删汇总；每个文件的图标和增删计数；路径显示成项目内的相对路径（只是显示，原始路径不变，桌面上已有同样的显示规则）；diff 的红绿底色铺满整行；标题居中照原型。
-6. **会话**（02-03、02-05）：批准卡里命令放在白底框里，"拒绝"是浅灰圆角按钮；运行中照原型显示进度条、旋转指示、当前动作、已用时间和红色的"停止"按钮。
-7. **新建会话**（02-10、02-11）：标题居中，顶栏是"取消"和"开始"，AI 工具用横向分段。
-8. **设备**（03-01、03-02）：每台设备单独一组，展开项目、路径和会话数；配对入口放在下方的独立卡片里。
-9. **设置**（04-01、04-05）：照原型同页分组展示；可以使用的电脑显示配对和最近使用的日期，"移除"是行尾红字；后续规划是单独的页面，带返回、图标和每项的说明。
+4. **Lists and segments** (02-01, 02-02, 02-12, 03-04, 03-05): segment counts and white selected background; separate status pills (03-04); colored status dots, AI tool, project, and relative time in rows; search-field styling; circular sidebar count badges and icons. Match 02-02 grouping, icons, status labels, times, and "View" / "Got it" actions.
+5. **Changes panel** (02-04): file totals and addition/deletion summary; per-file icons and counts; display paths relative to the project while retaining raw paths (desktop already has this rule); full-row red/green diff backgrounds; centered heading.
+6. **Conversation** (02-03, 02-05): white command box inside approval cards, light-gray rounded Reject; running progress bar, spinner, current action, elapsed time, and red Stop as in the prototype.
+7. **New conversation** (02-10, 02-11): centered title, Cancel/Start top bar, horizontal AI-tool segments.
+8. **Devices** (03-01, 03-02): one group per device, expanded projects/paths/conversation counts, separate pairing card below.
+9. **Settings** (04-01, 04-05): same-page groups; pairing/last-used dates for accessible computers with red trailing Remove; a separate roadmap page with Back, icons, and descriptions.
 
-某一项后端确实没有数据（比如 Supervisor 返回里没有项目根路径，算不出相对路径），不要编造，也不要改后端，在报告里列出来，界面先按现有数据显示。
+If backend data is genuinely unavailable (for example no project root in Supervisor responses, preventing relative paths), neither fabricate it nor modify the backend. List the gap in the report and display existing data.
 
-**不在这轮**：
+**Outside this round**:
 
-- T1b 的功能：置顶、重命名、添加和移除项目、以前的会话、项目内搜索；通知、后台保持连接、批准前解锁。原型里画了，界面上继续不显示。
-- 系统界面（状态栏、多窗口入口、触控笔按钮），以及测试数据造成的差异（设备名、会话名、数量）。
-- 外接键盘：用户没有实体键盘，这轮不测。
+- T1b: pin, rename, add/remove projects, previous conversations, project search; notifications, background connection, pre-approval unlock. These appear in the prototype but remain absent in the app.
+- System UI (status bar, multitasking entry, stylus button) and test-data differences (device/conversation names and counts).
+- External keyboard: the user has no physical keyboard, so skip it.
 
-## 已知情况
+## Known facts
 
-- **宽布局条件**：宽度不小于 900dp 且横屏（`apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt:165`）。TB375FC 横屏约 1385dp，竖屏约 866dp，分屏约 689dp。
-- **相关代码**：界面在 `apps/android/app/src/main/java/org/codetether/app/ui/`（`TabletApp.kt`、`TabletPages.kt`、`TabletState.kt`、`TabletController.kt`），状态保存沿用 T1a 第 2 轮的做法（`SavedStateHandle`、`rememberSaveable`，见 `t1a-report.md` 的"审核修复 r2"）。
-- **验证环境**：专用模拟器 `codetether_t1a_pixel_tablet_api36`，不要动其他模拟器。模拟器上用合成数据截图对照原型；要在真机平板上复验，先问用户（要装新的 debug APK）。
-- **规模**：如果改动超过约 30 个文件或 3000 行（不算测试和截图），先完成 1 到 3 并推送，再做 4 到 9，报告里说明。
-- iPad 用的是同一份设计，这份差异清单以后也会用在 iPad 上。报告里的差异描述写清楚，方便复用。
+- **Wide layout**: at least 900dp wide and landscape (`apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt:165`). TB375FC is about 1385dp landscape, 866dp portrait, and 689dp split-screen.
+- **Relevant code**: UI is under `apps/android/app/src/main/java/org/codetether/app/ui/` (`TabletApp.kt`, `TabletPages.kt`, `TabletState.kt`, `TabletController.kt`). Reuse T1a r2 state persistence (`SavedStateHandle`, `rememberSaveable`; "Review fixes r2" in `t1a-report.md`).
+- **Validation environment**: only dedicated emulator `codetether_t1a_pixel_tablet_api36`. Use synthetic screenshots to compare with prototypes. Ask before physical-tablet retesting, which requires a new debug APK.
+- **Size**: if changes exceed about 30 files or 3000 lines excluding tests/screenshots, complete and push 1-3 first, then 4-9; explain in the report.
+- iPad shares this design and will reuse the difference list. Describe differences clearly enough for reuse.
 
-## 边界
+## Boundaries
 
-- **自己决定**：实现方式；提交怎么拆；测试和截图的方法；原型里没写清楚的细节，按原型 HTML 和 CSS 推断。
-- **先问用户**：
-  - 要改 `apps/android` 以外的代码，包括后端和 Rust 核心；
-  - 原型和 07 的文字说明有冲突；
-  - 在真机平板或手机上安装新构建；
-  - 要显示原型里没有的东西。
-- **不做**：读取或打印凭据；推送 `main`、合并、打标签；强制推送。
+- **Decide independently**: implementation, commit boundaries, tests/screenshots, and unspecified details inferred from prototype HTML/CSS.
+- **Ask the user first**:
+  - Code outside `apps/android`, including backend/Rust core;
+  - Conflicts between prototype and 07 prose;
+  - Installing new builds on physical tablets/phones;
+  - Displaying anything absent from the prototype.
+- **Do not**: read/print credentials; push `main`, merge, tag, or force-push.
 
-推送分支到 `origin`，不合并。
+Push the branch to `origin` without merging.
 
-## 报告
+## Report
 
-追加到 `D:/Projects/Software/agenthub-archive/t1a-report.md`，新开一节"平板验收修复"：
+Append a new "Tablet acceptance fixes" section to `D:/Projects/Software/agenthub-archive/t1a-report.md`.
 
-- 1 到 9 每一项改了什么、对应的提交；
-- 旋转、分屏、进程恢复后保留变更面板的测试结果；
-- 模拟器上每个原型页的实拍截图，以及还剩的差异和原因（后端没数据、T1b 范围、系统界面）；
-- 后端没有数据的项列表；
-- Gradle 门禁和仪器测试的结果，失败的原样贴出；新 debug APK 的大小和 SHA-256；
-- 没做完的事和原因，以及在"完成"的哪一级。
+- Changes and corresponding commits for each item 1-9;
+- State-retention tests after rotation, split-screen, and process restoration;
+- Emulator captures for every prototype page, remaining differences, and reasons (missing backend data, T1b, system UI);
+- List of backend data gaps;
+- Gradle/instrumentation results with failures verbatim, plus debug APK size and SHA-256;
+- Incomplete work and reasons, with the level of completion reached.

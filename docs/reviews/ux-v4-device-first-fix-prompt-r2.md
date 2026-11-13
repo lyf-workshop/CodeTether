@@ -1,73 +1,73 @@
-# 修复提示词：ux/v4-device-first 第 2 轮审核
+# Fix prompt: ux/v4-device-first review round 2
 
-> 把下面整段交给编码智能体。
+> Give this entire prompt to the coding agent.
 
 ---
 
-你在 CodeTether 仓库里修复 `ux/v4-device-first` 第 2 轮审核的问题。范围小，只改下面列出的地方。
+Fix the second-round `ux/v4-device-first` review issues in CodeTether. Keep the scope to the locations listed below.
 
-## 起点
+## Starting point
 
-- 工作区：`D:/Projects/Software/agenthub-ux-v4-device-first`（已存在，不要新建 worktree）
-- 分支：`ux/v4-device-first`，起点提交 `33f5b5d`。开工前确认 `git rev-parse HEAD` 以 33f5b5d 开头、工作树干净；不一致就停下报告。
-- 审核记录（必读“第 2 轮”一节）：`D:/Projects/Software/agenthub/docs/reviews/ux-v4-device-first.md`。下面的 R2-* 编号都指它。
-- 需求：`D:/Projects/Software/agenthub/docs/ux-redesign/04-requirements.md`。
-- 授权说明：Figma 同步暂停期间，`docs/ux-redesign` 的需求和原型是用户授权的临时界面依据（用户 2026-10-19 的决定），本任务覆盖 AGENTS.md 里“Figma 是唯一来源”。AGENTS.md 的其余规则照常遵守。
-- 更正：第 1 轮提示词第 10 步“缺首条输入或模型时不能创建”写错了。以 04 C1、W13 为准：电脑上新建会话不带首条消息、不选模型，保持现状。报告里引用 C1，不要写“按用户确认”。
+- Existing worktree `D:/Projects/Software/agenthub-ux-v4-device-first`; do not create another.
+- Branch `ux/v4-device-first`, starting `33f5b5d`. Before work verify `git rev-parse HEAD` begins 33f5b5d and the worktree is clean; otherwise stop/report.
+- Review (read "Round 2"): `D:/Projects/Software/agenthub/docs/reviews/ux-v4-device-first.md`. R2-* identifiers refer to it.
+- Requirements: `D:/Projects/Software/agenthub/docs/ux-redesign/04-requirements.md`.
+- Authorization: while Figma synchronization is paused, docs/ux-redesign requirements/prototype are the temporarily authorized UI source (user decision 2026-10-19), overriding AGENTS.md's Figma-only rule for this task. Other AGENTS.md rules apply.
+- Correction: step 10 of round one's prompt incorrectly forbade creation without first input/model. Follow 04 C1/W13: desktop creation has neither first message nor model selection, preserving current behavior. Cite C1 in the report rather than claiming user confirmation.
 
-## 要做的事和提交
+## Work and commits
 
-每一步一个提交，英文 conventional commit，末尾加：
-`Co-Authored-By: Claude Code <noreply@anthropic.com>`（如果你不是 Claude Code，换成你自己的名字，格式不变）。
+One English conventional commit per step, ending with:
+`Co-Authored-By: Claude Code <noreply@anthropic.com>` (if you are not Claude Code, use your own name with the same format).
 
-1. **R2-1 运行中保持焦点**（`fix(web): keep composer mounted while turn runs`）
-   - `composer.tsx:82`：`running`、`waiting` 时编辑器保持挂载、只读，门控栏显示在旁边，不再隐藏。`archived`、`unavailable` 维持现状。
-   - 焦点规则不变：发送前焦点在输入框里、之后没被用户移走，才在可编辑时回到输入框。
-   - 加渲染测试：submitting → running → idle 全程焦点不落到 body；运行中输入框只读，不能发送。
-2. **R2-2 成功色文字对比度**（`fix(ui): success text contrast`）
-   - 把 `text-success` 当文字色的地方改成 `text-success-text`（先 grep 全部用法，至少 `conversation-files-surface.tsx:54`、`inspector-panel.tsx:215`、`conversation-timeline.tsx:134`）。
-   - `token-contrast.test.mjs` 加上 success-text、warning-text、danger-text 在各自实际背景上的组合，并加一条测试：`apps/web/src`、`packages/ui/src` 里不再出现 `text-success`、`text-warning`、`text-danger` 作文字色（`*-text`、`bg-*`、`border-*` 除外）。
-3. **R2-3、R2-9 文案**（`fix(web): rewrite mechanical copy replacements`）
-   - 手工改写 `machine-actions.ts:384,398,400,404,418,444`，例如“设备操作正在处理中，请稍候。”“当前 CodeTether 版本不支持这项设备操作。”“配对码无效，请检查 Node 上显示的 6 位配对码。”中英文之间加空格。
-   - 全仓库 grep 一遍“这台电脑操作”“Node显示”“在Node”这类替换残留，一并改。
-   - `user-visible-copy.test.mjs` 同时扫描 `packages/ui/src`。
-4. **R2-4 侧栏不能添加的原因**（`fix(web): explain why sidebar cannot add project`）
-   - `workspace-device-section.tsx`：设备在线但 `machineCanAddProject` 为 false 时，在设备行显示和设备页同样的原因（复用 `machine-projects-section.tsx:109-114` 的文案，抽成一个函数，两处共用）。
-5. **R2-5、R2-6 窄屏布局**（`fix(web): narrow layout for attention rows and sheets`）
-   - 删掉 `workspace-responsive.css` 里 `attention-body`、`attention-time`、`attention-actions` 三条规则，让 `attention-row.tsx` 里 33f5b5d 加的类生效（或者反过来全放 CSS，二选一，不要两处都写）。
-   - 弹层规则里在 `transform: none` 旁边加 `translate: none; scale: none;`。
-   - 用浏览器在 390 和 600 宽度下核对：待处理行的按钮在正文下面；添加项目和新建会话弹层贴底、完整可见。报告里写明检查方法和结果。测试至少检查构建后的 CSS 里没有 `attention-actions` 的 `grid-column: 3`，并且弹层规则包含 `translate: none`。
-6. **R2-7、R2-8 请求次数**（`perf(web): load card metrics when visible and reuse cache`）
-   - `machine-projects-section.tsx:131-134`：项目卡片进入视口（IntersectionObserver）后才加载指标；不支持 IntersectionObserver 时直接加载。
-   - `attention-notification-metadata.ts:30-34`：先用 `queryClient.getQueryData` 读已有的会话列表，没有再请求，和 `:43-44` 读设备的做法一致。
-7. **R2-10、R2-11 测试和清理**（`test(web): end-to-end project location removal`）
-   - 给 M1 加一条 jsdom 测试：打开解除配对弹窗（被挡住）→ 点“从这台设备移除” → 确认 → 模拟 Host 返回更新后的设备 → 弹窗变成可以解除配对。
-   - 删掉只剩测试在用的 `defaultProviderControls`、`defaultProviderModel`（`new-conversation-provider-selection.ts:91-107`）和对应测试。
+1. **R2-1 retain focus while running** (`fix(web): keep composer mounted while turn runs`)
+   - `composer.tsx:82`: keep editor mounted/read-only during `running`/`waiting`, with gating alongside instead of hiding it. Preserve `archived`/`unavailable` behavior.
+   - Restore focus when editable only if input had focus before send and the user has not moved it.
+   - Rendering test: focus never falls to body through submitting -> running -> idle; running input is read-only and cannot send.
+2. **R2-2 success text contrast** (`fix(ui): success text contrast`)
+   - Replace text-color `text-success` with `text-success-text`, searching all usages, at least `conversation-files-surface.tsx:54`, `inspector-panel.tsx:215`, `conversation-timeline.tsx:134`.
+   - Add actual-background combinations for success-text/warning-text/danger-text to `token-contrast.test.mjs`. Test that `apps/web/src`/`packages/ui/src` no longer use `text-success`, `text-warning`, or `text-danger` for text colors, excluding `*-text`, `bg-*`, and `border-*`.
+3. **R2-3/R2-9 copy** (`fix(web): rewrite mechanical copy replacements`)
+   - Manually rewrite `machine-actions.ts:384,398,400,404,418,444`, e.g. "Device operation in progress; please wait", "This CodeTether version does not support this device operation", "Invalid pairing code; check the six digits displayed by Node". Add spaces between Chinese and English.
+   - Search repository-wide for mechanical replacement leftovers such as "this computer operation", missing spacing around Node/display, and "on Node"; fix together.
+   - Make `user-visible-copy.test.mjs` scan `packages/ui/src` too.
+4. **R2-4 explain unavailable sidebar add** (`fix(web): explain why sidebar cannot add project`)
+   - `workspace-device-section.tsx`: if online but `machineCanAddProject` is false, show the device-page reason, extracting copy from `machine-projects-section.tsx:109-114` into one shared function.
+5. **R2-5/R2-6 narrow layouts** (`fix(web): narrow layout for attention rows and sheets`)
+   - Remove `attention-body`, `attention-time`, `attention-actions` from `workspace-responsive.css` so classes added at 33f5b5d in `attention-row.tsx` work, or centralize them in CSS instead; keep one authority.
+   - Add `translate: none; scale: none;` beside sheet `transform: none`.
+   - Browser-check widths 390/600: Attention actions below content; Add project/New conversation sheets bottom-aligned and fully visible. Report method/results. Tests must at least check built CSS lacks `attention-actions` `grid-column: 3` and sheet rules contain `translate: none`.
+6. **R2-7/R2-8 request counts** (`perf(web): load card metrics when visible and reuse cache`)
+   - `machine-projects-section.tsx:131-134`: load metrics after card enters viewport (IntersectionObserver), loading immediately if unsupported.
+   - `attention-notification-metadata.ts:30-34`: use `queryClient.getQueryData` for cached conversations first, requesting only on a miss, like machine reads at `:43-44`.
+7. **R2-10/R2-11 tests and cleanup** (`test(web): end-to-end project location removal`)
+   - Add M1 jsdom coverage: open blocked unpair dialog -> "Remove from this device" -> confirm -> updated Host device response -> unpair becomes enabled.
+   - Delete test-only `defaultProviderControls`/`defaultProviderModel` (`new-conversation-provider-selection.ts:91-107`) and tests.
 
-不在本轮：S18（Node 文档原生打开）、通知“已在屏幕上”的判断、标题级别、其余大文件拆分、adapter-claude 环境隔离。遇到也不要顺手改。
+Outside this round: S18 native Node docs, notification "already on screen" logic, heading levels, other large-file splitting, adapter-claude environment isolation. Leave them untouched.
 
-## 不能破坏的规则
+## Invariants
 
-- `docs/ux-redesign/03-project-plan.md` §6 的不变量。
-- 界面只显示后端真实提供的能力；还没做的只出现在 `/roadmap`。不加假开关、不加“即将上线”。
-- 界面只用中文（Codex、Claude Code、Relay、Node 可以保留英文；“AI 工具”可以）。
-- 不加演示数据。
-- 远程和本机操作沿用现有门控：actionId 幂等、运行中不能归档、失败不自动重发、409 不重发、停止和审批只对支持的 AI 工具开放。
-- 通知不含会话标题、提示词、命令和路径。
-- AGENTS.md：不用 `style=`、不用 `!important`、颜色只用 tokens、不用 Zustand、通用组件放 `packages/ui`。
-- 不改 `apps/host`、`apps/desktop`、`apps/node`、`packages/protocol`、`packages/client`、Control Plane 和 Relay。需要改它们才能完成的，停下写进报告。
+- Invariants in `docs/ux-redesign/03-project-plan.md` section 6.
+- Expose only real backend capabilities; future work belongs only in `/roadmap`. No fake switches or "Coming soon".
+- Chinese-only UI (Codex, Claude Code, Relay, Node may remain English; "AI tool" is acceptable terminology).
+- No demo data.
+- Preserve local/remote gates: actionId idempotency, no archive while running, no automatic failure/409 replay, Stop/Approval only on supported tools.
+- Notifications exclude conversation titles, prompts, commands, and paths.
+- AGENTS.md: no `style=` or `!important`; token-only colors; no Zustand; shared components in `packages/ui`.
+- Preserve `apps/host`, `apps/desktop`, `apps/node`, `packages/protocol`, `packages/client`, Control Plane, and Relay. Stop/report if completion requires those changes.
 
-## 不能做的事
+## Prohibitions
 
-- 不读、不写 `.secrets/`、任何 `.env` 和凭据文件；不读 `~/.claude.json`。
-- 不部署，不推送，不合并，不打 tag，不替换已安装的 Mac 和 Windows 版本。
-- 不动主工作区 `D:/Projects/Software/agenthub` 根目录下未跟踪的文件。
-- 不用 `git add .`，按文件暂存。不改 git 配置，不跳过 hooks。
-- 不在任何输出、日志、提交里打印环境变量的值。
+- Do not read/write `.secrets/`, any `.env`, credential files, or read `~/.claude.json`.
+- No deploy, push, merge, tag, or installed Mac/Windows replacement.
+- Preserve untracked files in main worktree `D:/Projects/Software/agenthub`.
+- Stage by file, never `git add .`; preserve Git configuration/hooks.
+- Never print environment-variable values in output/logs/commits.
 
-## 验证
+## Verification
 
-在工作区根目录运行：
+Run from worktree root:
 
 ```
 env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL pnpm typecheck
@@ -77,14 +77,14 @@ env -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHRO
 git diff --name-only --diff-filter=AM 33f5b5d..HEAD | xargs -n 40 npx prettier --list-different --end-of-line auto
 ```
 
-（Prettier 要分批传文件，一次传太多 Windows 会报命令行太长。）
+(Batch Prettier files to avoid Windows command-line length limits.)
 
-如果遇到 API 429 或 524：按返回的 Retry-After 等待后重试，每种错误最多重试 3 次，每次记下时间和等待时长；第 3 次后仍失败就停下，在报告里说明停在哪一步。
+For API 429/524, wait per Retry-After and retry each error type at most three times, recording timestamps/waits. If still failing after the third, stop and report the step.
 
-## 报告格式（中文）
+## Report format (Chinese)
 
-1. 每一步：提交哈希、改了什么、对应的 R2 编号。
-2. 检查结果：五条命令的退出码，失败的原样贴出（先把形如令牌的字符串替换成 `[REDACTED]`）。
-3. 第 5 步的浏览器核对方法和结果。
-4. 没做的和原因。
-5. 所在的“完成”级别（见 `D:/Projects/Software/agenthub/docs/DEVELOPMENT-PROCESS.md` §2）。检查全部通过时是“代码完成”，不要自称“审核通过”。
+1. Per step: commit hash, changes, corresponding R2 IDs.
+2. Exit codes for all five commands; failures verbatim after replacing token-like strings with `[REDACTED]`.
+3. Step-five browser method/results.
+4. Unfinished work and reasons.
+5. Completion level per `D:/Projects/Software/agenthub/docs/DEVELOPMENT-PROCESS.md` section 2. All checks passing means "Code complete", not "Review passed".

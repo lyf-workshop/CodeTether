@@ -1,118 +1,118 @@
-# 任务：B4b 文件夹浏览（远程管理第 2 轮）
+# Task: B4b Folder Browsing (Remote Management, Round 2)
 
-在 Mac 上运行（需要实测 macOS TCC 授权行为，整个任务放在 Mac 上）。接着在 `main` 上做（当前是 `4801ef1`）。B4b 实现 `folder.list` 操作，让平板和 iPad 能浏览远程电脑的文件夹，从而添加项目时可以选择文件夹而不是输入路径。提交推送到 `feat/b4b-folder-browse`，不推 `main`、不合并、不打标签。
+Run the entire task on Mac to test macOS TCC permission behavior on a real system. Continue from `main` (currently `4801ef1`). B4b implements `folder.list` so tablets and iPads can browse remote folders and choose a folder when adding a project instead of typing its path. Commit and push to `feat/b4b-folder-browse`. Do not push `main`, merge, or tag.
 
-依据（都用 `git show` 读）：
+References (read each with `git show`):
 
-- `docs/ux-redesign/08-remote-management.md` §3.3（folder.list 详细设计）、§3.5（经由电脑访问的设备）、§3.7（电脑上的浏览入口）、§6 第 4 项（Windows 隐藏文件夹和盘符）
-- `docs/ux-redesign/06-pairing-remote-control.md` §1：文案规则
+- `docs/ux-redesign/08-remote-management.md` §3.3 (`folder.list` design), §3.5 (devices accessed through a computer), §3.7 (desktop browsing entry), and §6 item 4 (Windows hidden folders and drive letters).
+- `docs/ux-redesign/06-pairing-remote-control.md` §1: UI wording rules.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-**必须完成**：
+**Required**:
 
-1. **Host 侧实现 `folder.list`**：
-   - 新增 Supervisor 操作 `folder.list`（只读，但要求控制权限）
-   - 请求：`machineId`、可选 `path`（不传时列用户目录）、可选 `cursor`、可选 `includeHidden`（默认 false）
-   - 返回：`path`、`status`（`readable`/`access_denied`/`timeout`）、可选 `parent`、可选 `drives`（Windows 根目录时带）、`readable` 时带 `folders`、`skipped`、可选 `nextCursor`、`access_denied` 时可带 `systemPrivacy`
-   - 超时：3 秒，超时返回 `status: timeout`，不让请求失败
-   - 权限不足：返回 `status: access_denied`，macOS `EPERM` 时带 `systemPrivacy: true`
-   - 隐藏文件夹：名字以 `.` 开头，或在固定名单（`$Recycle.Bin`、`System Volume Information`、`$WinREAgent`、`Config.Msi`、`Recovery`、用户目录下的 `AppData`）；`includeHidden` 为 true 时返回并标 `hidden: true`
-   - 一层最多返回 200 个文件夹，同时按字节截断（先到哪个算哪个）；单个名字超 255 字节跳过并计数到 `skipped`
-   - 符号链接：需要 `stat` 才知道是否是文件夹，算一次读取
-   - **不打开子文件夹**：只列当前层，每个文件夹不带能不能打开
+1. **Implement `folder.list` on the Host**:
+   - Add the Supervisor operation `folder.list` (read-only, but requiring control permission).
+   - Request: `machineId`, optional `path` (the user directory if omitted), optional `cursor`, optional `includeHidden` (false by default).
+   - Response: `path`, `status` (`readable`/`access_denied`/`timeout`), optional `parent`, optional `drives` (at a Windows root). A `readable` response includes `folders`, `skipped`, and optional `nextCursor`. `access_denied` may include `systemPrivacy`.
+   - Timeout: 3 seconds. Return `status: timeout` instead of failing the request.
+   - Insufficient permission: return `status: access_denied`. Include `systemPrivacy: true` for macOS `EPERM`.
+   - Hidden folders: names starting with `.`, or on the fixed list (`$Recycle.Bin`, `System Volume Information`, `$WinREAgent`, `Config.Msi`, `Recovery`, and `AppData` under the user directory). Return them with `hidden: true` when `includeHidden` is true.
+   - Return at most 200 folders per level, also truncating by byte budget, whichever limit is reached first. Skip individual names exceeding 255 bytes and count them in `skipped`.
+   - Symbolic links require `stat` to determine whether they are folders. Count this as a read.
+   - **Do not open child folders**. List only the current level and omit per-folder accessibility checks.
 
-2. **限流（防止卡住 libuv 线程池）**：
-   - Host 和 Node 各自同时最多 2 个未返回的浏览读取
-   - 同一个规范化路径已有未返回的读取时，直接返回 `status: timeout`（不等第二个）
-   - 名额占满时新请求立刻失败，`code: unavailable`、`reason: runtime_unavailable`
-   - 见 08 §3.3"不能拖住其他读写"的完整分析
+2. **Limit concurrency to avoid blocking the libuv thread pool**:
+   - Host and Node each allow at most 2 outstanding browsing reads.
+   - If a read is already outstanding for the same normalized path, immediately return `status: timeout` instead of waiting for a second one.
+   - When all slots are occupied, fail new requests immediately with `code: unavailable`, `reason: runtime_unavailable`.
+   - See the full analysis in 08 §3.3, "Must not block other reads and writes".
 
-3. **游标**：
-   - 格式 `fld_` 加一段，对应路径和 `includeHidden` 参数
-   - 游标只在同一次列表里有效，不长期保存状态
-   - 过期后重新从这一层开头列
+3. **Cursors**:
+   - Format: `fld_` plus a suffix, tied to the path and `includeHidden` parameters.
+   - Valid only within one listing. Do not persist long-lived state.
+   - Restart from the beginning of the current level after expiry.
 
-4. **帧大小**：
-   - 返回给手机和平板时，行数据 ≤ 12 KiB
-   - 返回给 Node 再转回电脑时，整帧 ≤ 16 KiB（`path` 和 `parent` 各可到 4096 字节，外壳另计）
-   - 两个预算分开算，不能照搬 12 KiB
+4. **Frame size**:
+   - Row data returned to phones and tablets must be ≤ 12 KiB.
+   - The whole frame returned from Node to the computer must be ≤ 16 KiB (`path` and `parent` may each reach 4096 bytes, plus the envelope).
+   - Calculate these budgets separately. Do not reuse the 12 KiB budget unchanged.
 
-5. **Windows 盘符**（08 §6 第 4 项）：
-   - 列根目录时带 `drives`，每项是 `letter`（如 `C:`）和可选 `label`
-   - 不能逐个 `stat` A-Z（断开的网络盘会卡线程）
-   - 用一次有时限的系统命令取盘符，不经过线程池；命令由你选，在报告里说明
-   - `label` 能顺带拿到就带，拿不到就不带
+5. **Windows drives** (08 §6 item 4):
+   - Include `drives` when listing a root. Each entry has `letter` (such as `C:`) and optional `label`.
+   - Do not `stat` A–Z individually. Disconnected network drives can block threads.
+   - Use one time-bounded system command to obtain drives without using the thread pool. Choose the command and explain it in the report.
+   - Include `label` if available from the same operation, otherwise omit it.
 
-6. **Windows 隐藏文件夹**（08 §6 第 4 项）：
-   - `fs.Stats` 不带 Windows 文件属性，没有现成接口
-   - 只按名字判断：以 `.` 开头，或在固定名单里（见第 1 项）
-   - 少数用户自己设成隐藏的文件夹会显示出来，这是可以接受的
+6. **Windows hidden folders** (08 §6 item 4):
+   - `fs.Stats` has no Windows file attributes, and no ready-made interface is available.
+   - Determine hidden status by name only: a leading `.`, or the fixed list from item 1.
+   - A few folders manually marked hidden by users will remain visible. This is acceptable.
 
-7. **经由电脑访问的设备**（08 §3.5）：
-   - 平板/iPad 请求 `folder.list` 时，如果 `machineId` 是远程设备的，请求要经由那台电脑的 Node 转发
-   - Node 侧实现 `folder.list` 操作（和 Host 侧逻辑相同）
-   - 电脑作为中间人，把平板的请求转发给 Node，把 Node 的响应转回平板
+7. **Devices accessed through a computer** (08 §3.5):
+   - For a tablet/iPad `folder.list` request whose `machineId` identifies a remote device, forward the request through the computer to its Node.
+   - Implement `folder.list` on Node with the same logic as Host.
+   - The computer forwards tablet requests to Node and returns Node responses to the tablet.
 
-8. **Rust 核心方法**：
-   - `packages/supervisor-mobile/src/lib.rs` 增加 `folder_list` 函数（通过 UniFFI 暴露）
-   - Kotlin 调用层增加对应调用
-   - iOS Swift 层目前无仓库，只在报告里说明接口签名
+8. **Rust core method**:
+   - Add `folder_list` to `packages/supervisor-mobile/src/lib.rs`, exposed through UniFFI.
+   - Add the corresponding Kotlin call.
+   - iOS Swift currently has no repository. Document the interface signature in the report only.
 
-9. **文案规则**（06 §1、08 §1）：
-   - 界面上不出现 Host、Node、Machine、Supervisor、Relay 等技术术语
-   - 错误文案按 08 §1 的规定，例如：
-     - macOS 被系统拒绝（`systemPrivacy: true`）："没有权限打开这个文件夹。请在 Mac 的'系统设置 › 隐私与安全性 › 文件和文件夹'里，允许 CodeTether 访问，然后重试。"
-     - macOS 超时："Mac 上可能弹出了授权窗口。请在 Mac 上点'允许'，然后重试。"
-     - 普通权限不足："没有权限打开这个文件夹。"
-     - 超时（其他系统）："这个文件夹读取超时，可能是网络盘。可以重试。"
-     - 名额占满："这台电脑正在等其他文件夹的授权或读取，请稍后再试。"
+9. **UI wording rules** (06 §1, 08 §1):
+   - Do not expose technical terms such as Host, Node, Machine, Supervisor, or Relay in the UI.
+   - Follow 08 §1 for error messages, for example:
+     - macOS system denial (`systemPrivacy: true`): "You do not have permission to open this folder. In Mac System Settings › Privacy & Security › Files and Folders, allow CodeTether access, then retry."
+     - macOS timeout: "A permission dialog may be open on the Mac. Click Allow on the Mac, then retry."
+     - General insufficient permission: "You do not have permission to open this folder."
+     - Timeout on other systems: "Reading this folder timed out. It may be a network drive. You can retry."
+     - All slots occupied: "This computer is waiting for permission or other folder reads. Try again shortly."
 
-**应该完成**：
+**Expected**:
 
-10. **电脑上的浏览入口**（08 §3.7）：
-    - 桌面端给配对设备添加项目时，改为可以浏览文件夹（和本机一样）
-    - 手动输入路径保留作为浏览的补充
-    - 位置：`apps/web/src/components/projects/add-project-fields.tsx:193`
+10. **Desktop browsing entry** (08 §3.7):
+    - Allow browsing folders when adding a project for a paired device, as for local projects.
+    - Retain manual path entry as a supplement to browsing.
+    - Location: `apps/web/src/components/projects/add-project-fields.tsx:193`.
 
-## 已知情况
+## Known Facts
 
-- 现在配对设备只能输入完整路径（`add-project-fields.tsx:193`）
-- Node 侧只有单个路径的校验 `project_location.validate`，没有列目录的能力
-- libuv 线程池默认 4 个线程，整个进程共用（详见 08 §3.3"不能拖住其他读写"）
-- macOS TCC 授权：Host 是桌面应用的 sidecar，Node 是 launchd 单独启动的服务，授权分开记（08 §3.3）
-- 这轮在 Mac 上运行，可以实测 macOS 的授权弹窗行为
+- Paired devices currently require a complete path (`add-project-fields.tsx:193`).
+- Node only validates an individual path with `project_location.validate`. It cannot list directories.
+- The libuv thread pool defaults to 4 threads shared by the whole process (see 08 §3.3, "Must not block other reads and writes").
+- macOS TCC permissions: Host is the desktop application's sidecar, while Node is a separate launchd service. Their permissions are recorded separately (08 §3.3).
+- This round runs on Mac, allowing real testing of macOS permission dialogs.
 
-## 边界
+## Boundaries
 
-**自己决定**：
-- Windows 盘符的获取命令（`wmic`、`Get-PSDrive`、`vol` 或其他；在报告里说明）
-- 游标的具体实现（内存缓存还是 HMAC）
-- 经由电脑访问的设备的转发实现方式
+**Decide independently**:
+- The Windows drive-discovery command (`wmic`, `Get-PSDrive`, `vol`, or another command), explaining the choice in the report.
+- Cursor implementation, such as an in-memory cache or HMAC.
+- Forwarding for devices accessed through a computer.
 
-**先问用户**：
-- 需要改 `main` 以外的基础设施
-- 需要改已冻结的 Phase 边界
+**Ask the user first**:
+- Changing infrastructure outside `main`.
+- Changing frozen Phase boundaries.
 
-**不做**：
-- `provider-sessions.discover`、`provider-sessions.adopt`（B4c）
-- T1b 和 iPad 的添加项目界面（B4 三轮都合进 `main` 以后做）
-- 读取或打印凭据
-- 推送 `main`、合并、打标签
+**Do not**:
+- Implement `provider-sessions.discover` or `provider-sessions.adopt` (B4c).
+- Implement T1b or iPad Add Project UI before all three B4 rounds merge into `main`.
+- Read or print credentials.
+- Push `main`, merge, or tag.
 
-## 报告
+## Report
 
-追加到 `~/agenthub-archive/b4b-report.md`（新文件）：
+Append to `~/agenthub-archive/b4b-report.md` (a new file):
 
-- 1 到 10 每一项改了什么、对应的提交
-- Windows 盘符的获取命令选择和理由
-- macOS TCC 授权的实测结果（哪些文件夹会触发弹窗、Node 是否单独授权）
-- 帧大小实测（12 KiB 预算下每层最多几个文件夹、Windows 盘符列表的大小）
-- 限流的实现方式（计数器在哪里、怎么释放）
-- Rust 函数签名（方便 iOS 后续实现）
-- Kotlin 调用层改动
-- typecheck / lint / Rust / Android / build / test 结果
-- 推送后的远端提交
-- 没做完的事和原因
+- Changes and corresponding commits for items 1–10.
+- Windows drive-discovery command and reasons for choosing it.
+- Real macOS TCC results, including folders that trigger dialogs and whether Node requires separate permission.
+- Measured frame sizes (folders per level within 12 KiB and the Windows drive-list size).
+- Concurrency-limit implementation, including counter ownership and release.
+- Rust function signature for subsequent iOS work.
+- Kotlin call-layer changes.
+- typecheck / lint / Rust / Android / build / test results.
+- Remote commit after pushing.
+- Unfinished work and reasons.

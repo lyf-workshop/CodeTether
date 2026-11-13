@@ -1,83 +1,83 @@
-# 任务：B0 远程访问上线（部署 Control Plane 迁移 0008 和公网 Relay，做强制 Relay 验证）
+# Task. B0 remote access go-live (deploy Control Plane migration 0008 and public Relay, then verify forced Relay)
 
-在这台 Windows 电脑上运行，通过 SSH 操作 us-vps-01。依据：`docs/ROADMAP.md` 顶部的 B0、`docs/ux-redesign/03-project-plan.md` §4 和 §6、`docs/PHASE10A1-MULTI-DEVICE-SUPERVISOR-TRANSPORT.md`、`docs/PHASE9B2-REMOTE-HOST-SUPERVISOR.md`、`apps/control-plane/README.md`、`apps/relay/README.md`。
+Run on this Windows computer and access us-vps-01 through SSH. References are B0 at the top of `docs/ROADMAP.md`, §§4 and 6 of `docs/ux-redesign/03-project-plan.md`, `docs/PHASE10A1-MULTI-DEVICE-SUPERVISOR-TRANSPORT.md`, `docs/PHASE9B2-REMOTE-HOST-SUPERVISOR.md`, `apps/control-plane/README.md`, and `apps/relay/README.md`.
 
-开始前确认这份文件有 5 个二级标题，最后一节是“报告”。
+Before starting, confirm this file has five second-level headings and the last section is "Report".
 
-## 目标
+## Goals
 
-1. us-vps-01 上的 Control Plane 更新到 `main`，数据库迁移到 0008。
-2. 公网 Relay 部署好并能从外网连上。
-3. 这台 Windows 上的 Host 配好 Relay，Relay presence 在线。
-4. 有一个开发用的诊断页，能做强制 Relay 的只读验证。Mac 上的跨设备验证另写一份提示词，不在这次范围内。
+1. Update the Control Plane on us-vps-01 to `main` and migrate the database to 0008.
+2. Deploy a public Relay reachable from outside the network.
+3. Configure Relay for the Host on this Windows computer and bring Relay presence online.
+4. Provide a development diagnostic page for forced-Relay read-only verification. Mac cross-device validation will have its own prompt and is outside this task.
 
-怎么做、按什么顺序做，由你根据服务器上的实际情况判断。部署、改服务器配置、提交和推送分支都可以做。
+Choose the implementation and order based on actual server conditions. Deployment, server configuration changes, commits, and branch pushes are authorized.
 
-## 已知情况
+## Known facts
 
-- **桌面版不用重新打包。** Phase 10A 和 10A.1 的代码已经在 `main`（`454f414`）。已装的 `v0.1.0-alpha.2`（`0f624ae`）包含 Control Plane、Relay 和 Host 的全部相关改动，之后这几个应用的代码没有变。
-- **迁移 0008**（`apps/control-plane/migrations/0008_host_supervisor_presence.sql`）：
-  - 只新增表 `control_plane.host_supervisor_presence` 和一个索引，没有回退脚本，旧代码不受这张表影响。
-  - 迁移由 `runMigrations` 在启动时自动执行，也可以单独运行 `migrate`。它在事务里执行，记录每个文件的 SHA-256，文件内容和记录不一致时拒绝执行。
-  - 文档只记录到 0006 上线，0007 很可能已经上线。
-- **Control Plane 的运行方式要到服务器上查。** 它只监听回环地址，默认端口 4320，由反向代理对外提供 api.codetether.org。仓库里没有它的部署配置。
-- **Relay 不能放在 HTTP 反向代理后面。** 它是原生 TLS，ALPN 是 `codetether-relay/1`。
-  - 如果 443 已经被官网或 api 占用，可选的办法：
-    - 单独的公网 IP；
-    - 单独的端口，比如 8443；
-    - 在现有入口前按 SNI 做四层分流。这会改动官网和 api 的入口，选它之前先和用户确认。
-  - 仓库里有 systemd 单元 `apps/relay/deploy/codetether-relay.service` 和配置模板 `relay.config.public-ca.example.json`。
-  - 管理端口 `127.0.0.1:9443` 不要对外开放。
-  - Relay 第一次启动时生成随机身份。状态目录 `/var/lib/codetether-relay` 删了，身份就变了，所以要备份。
-  - 证书续期后要重启 Relay。
-- **Host 在运行时读 Relay 配置。** 3 个环境变量要么都设，要么都不设：`CODETETHER_SUPERVISOR_RELAY_ENDPOINT`、`CODETETHER_SUPERVISOR_RELAY_ID`、`CODETETHER_SUPERVISOR_RELAY_FINGERPRINT`（`apps/host/src/api/supervisor-transport-manager.ts:1197`）。要确认 Desktop 启动 Host 时会把它们传过去（`apps/desktop/src-tauri/src/host_supervisor.rs`）。
-- **强制 Relay 的开关已经不在了。** `8ddf668` 删除 v3 界面时把它一起去掉了。
-  - 网页里已经没有代码调用 `connectRemoteSupervisor`（`apps/web/src/runtime/account/remote-supervisor.ts:408`）。
-  - Host 的 `/api/v1/remote-supervisor/connections` 仍然接受 `forceRelay`（`apps/host/src/api/local-http-server.ts:154`）。
-- **旧 Relay 不清楚。** 以前阿里云上有一台 Relay（构建 `git-2b1a67606f24`），现在还在不在不清楚。查到了就在报告里说明，不用处理。
-- **数据库连接。** 可以读服务器上 Control Plane 的环境文件来拿连接串，用来备份和查 `control_plane.schema_migrations`。不要打印连接串。
-- **不要拿 smoke 做部署后的检查。** `pnpm --filter @codetether/control-plane smoke:supabase-postgres` 不是只读的：它会执行迁移，还会写入测试数据再回滚（`apps/control-plane/src/native-postgres-smoke.ts:275`）。它的表白名单 `expectedTables`（同文件第 11 行）也漏了 0007 的 `host_access_requests` 和 0008 的 `host_supervisor_presence`，在已经迁移过的数据库上一定会失败。
-  - 在分支上把这两张表补进白名单，并加一条测试。
-  - 部署后的检查改用 `/healthz`、`/readyz` 和 `schema_migrations` 查询。
-- **SSH。** 这台电脑上应该已经配好了访问 us-vps-01 的 SSH。需要密码或口令时，把命令写成 `! …` 交给用户执行。
+- **No desktop repackaging is needed.** Phase 10A and 10A.1 code is already on `main` (`454f414`). The installed `v0.1.0-alpha.2` (`0f624ae`) includes all relevant Control Plane, Relay, and Host changes, and those applications have not changed since.
+- **Migration 0008** (`apps/control-plane/migrations/0008_host_supervisor_presence.sql`).
+  - It adds only `control_plane.host_supervisor_presence` and one index. There is no rollback script, and the table does not affect old code.
+  - `runMigrations` executes it automatically at startup, or `migrate` can run separately. It runs in a transaction, records each file's SHA-256, and rejects a mismatch between file content and the recorded checksum.
+  - Deployment documentation only records migration 0006. Migration 0007 is likely already deployed.
+- **Inspect how the Control Plane runs on the server.** It listens only on loopback, defaults to port 4320, and is exposed as api.codetether.org by a reverse proxy. Its deployment configuration is not in the repository.
+- **Relay cannot run behind an HTTP reverse proxy.** It uses native TLS with ALPN `codetether-relay/1`.
+  - If the website or API already occupies 443, options include the following.
+    - A separate public IP.
+    - A separate port such as 8443.
+    - Layer-4 SNI routing in front of the existing ingress. This changes website and API ingress, so ask the user before choosing it.
+  - The repository contains systemd unit `apps/relay/deploy/codetether-relay.service` and configuration template `relay.config.public-ca.example.json`.
+  - Do not expose management port `127.0.0.1:9443` publicly.
+  - Relay generates a random identity on first startup. Deleting `/var/lib/codetether-relay` changes that identity, so back it up.
+  - Restart Relay after certificate renewal.
+- **The Host reads Relay configuration at runtime.** Set either all or none of `CODETETHER_SUPERVISOR_RELAY_ENDPOINT`, `CODETETHER_SUPERVISOR_RELAY_ID`, and `CODETETHER_SUPERVISOR_RELAY_FINGERPRINT` (`apps/host/src/api/supervisor-transport-manager.ts:1197`). Verify that Desktop passes them when starting the Host (`apps/desktop/src-tauri/src/host_supervisor.rs`).
+- **The forced-Relay switch no longer exists.** `8ddf668` removed it along with the v3 UI.
+  - No web code calls `connectRemoteSupervisor` anymore (`apps/web/src/runtime/account/remote-supervisor.ts:408`).
+  - The Host's `/api/v1/remote-supervisor/connections` still accepts `forceRelay` (`apps/host/src/api/local-http-server.ts:154`).
+- **The old Relay's status is unknown.** A Relay previously ran on Alibaba Cloud (build `git-2b1a67606f24`). Report it if found, without changing it.
+- **Database connection.** You may read the server's Control Plane environment file to obtain the connection string for backup and querying `control_plane.schema_migrations`. Do not print the connection string.
+- **Do not use smoke for post-deployment checks.** `pnpm --filter @codetether/control-plane smoke:supabase-postgres` is not read-only. It runs migrations and writes test data before rolling back (`apps/control-plane/src/native-postgres-smoke.ts:275`). Its `expectedTables` allowlist (line 11 of the same file) also omits 0007's `host_access_requests` and 0008's `host_supervisor_presence`, so it will fail on an already migrated database.
+  - Add both tables to the allowlist on the branch and add a test.
+  - Use `/healthz`, `/readyz`, and a `schema_migrations` query for post-deployment checks.
+- **SSH.** SSH access to us-vps-01 should already be configured on this computer. If a password or passphrase is required, provide the command as `! …` for the user to run.
 
-## 诊断页
+## Diagnostic page
 
-- 在新分支上实现，比如 `b0/relay-go-live`，工作区放在 `D:/Projects/Software/agenthub-b0-relay-go-live`。
-- 页面只在开发构建里出现，例如 `#/dev/supervisor-check`，正式构建里不要带上。
-- 复用 `connectRemoteSupervisor`。用户选一台同账号的 Host，再选“自动”或“只走 Relay”。
-- 依次只读调用 `host.bootstrap`、`machine.list`、`machine.get`、`project.list`、`conversation.list`、`conversation.get`、`conversation.history`。
-- 每一步显示是否成功、走的是 direct 还是 relay、耗时和错误类型。会话标题、提示词和路径不显示。
-- 这个页面只读：不新建会话、不发消息、不申请 `supervisor_control`。
-- 门禁：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`。
+- Implement on a new branch such as `b0/relay-go-live`, with the worktree at `D:/Projects/Software/agenthub-b0-relay-go-live`.
+- Include the page only in development builds, for example `#/dev/supervisor-check`. Exclude it from production builds.
+- Reuse `connectRemoteSupervisor`. Let the user choose a Host under the same account and then "Automatic" or "Relay only".
+- Sequentially make read-only calls to `host.bootstrap`, `machine.list`, `machine.get`, `project.list`, `conversation.list`, `conversation.get`, and `conversation.history`.
+- Show success, direct or relay transport, duration, and error type for each step. Do not display conversation titles, prompts, or paths.
+- The page is read-only. Do not create conversations, send messages, or request `supervisor_control`.
+- Gates are `pnpm typecheck`, `pnpm lint`, `pnpm test`, and `pnpm build`.
 
-开发版和安装版都用 4317 端口。用开发版测试时先退出安装版，并用独立的数据目录，例如 `CODETETHER_DATA_DIR=D:/Projects/Software/agenthub-work/b0-check-data`。
+Development and installed builds both use port 4317. Exit the installed build before development testing and use a separate data directory, such as `CODETETHER_DATA_DIR=D:/Projects/Software/agenthub-work/b0-check-data`.
 
-## 注意事项
+## Notes
 
-- **备份。** 改动之前先备份，并写清怎么回退：
-  - Control Plane 的 `control_plane` schema；
-  - 当前的代码目录和进程配置；
-  - Relay 的状态目录和配置。
+- **Backups.** Back up the following before changes and document rollback.
+  - The Control Plane's `control_plane` schema.
+  - The current code directory and process configuration.
+  - Relay state and configuration.
 
-  备份复制一份到 `D:/Projects/Software/agenthub-archive/b0-backups/`。Relay 的状态备份里有私钥，只放在这个目录里。
+  Copy the backups to `D:/Projects/Software/agenthub-archive/b0-backups/`. The Relay state backup contains a private key and belongs only in this directory.
 
-- **凭据。** 数据库连接串、Supabase 密钥和证书私钥不要打印，也不要写进仓库、日志或报告。`relayId` 和 `relayFingerprint` 是公开信息，可以写。
-- **服务器上的其他项目。** us-vps-01 上还有官网和其他项目。会影响它们的操作，比如改官网或 api 的入口、重启它们的服务，或者删除数据，先和用户确认。部署完确认它们和部署前一样正常。
-- **授权。** 现有的授权 `hauth_e6c2bb245dac4a12820a66237b30a093` 和 Host 身份保持不变。验证时发现身份、授权代际或 scope 和预期不一致，先停下来查原因。
-- **Phase 9C 的临时 LAN 助手。** 退役步骤在 `docs/PHASE10A-CROSS-NETWORK-HOST-AUTHORIZATION.md:24-39`。在报告里列出这台电脑上还残留的部分，由用户决定什么时候清理。
+- **Credentials.** Never print database connection strings, Supabase keys, or certificate private keys, or write them to the repository, logs, or report. `relayId` and `relayFingerprint` are public and may be recorded.
+- **Other server projects.** us-vps-01 also hosts the website and other projects. Ask before actions affecting them, such as changing website or API ingress, restarting their services, or deleting data. After deployment, verify they are as healthy as before.
+- **Authorization.** Preserve existing authorization `hauth_e6c2bb245dac4a12820a66237b30a093` and Host identity. If verification finds an unexpected identity, authorization generation, or scope, stop and investigate.
+- **Phase 9C temporary LAN helper.** Retirement steps are in `docs/PHASE10A-CROSS-NETWORK-HOST-AUTHORIZATION.md:24-39`. List what remains on this computer in the report and let the user decide when to clean it up.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/b0-report.md`。很长的命令输出放到 `D:/Projects/Software/agenthub-archive/b0-logs/`；整理日志时去掉凭据，但保留报错的行。
+Write to `D:/Projects/Software/agenthub-archive/b0-report.md`. Put lengthy command output in `D:/Projects/Software/agenthub-archive/b0-logs/`. Remove credentials when organizing logs while preserving error lines.
 
-报告内容：
+Include the following.
 
-- 服务器上的实际情况：Control Plane 怎么运行、部署前迁移到了哪一版、443 被谁占用；
-- 选了哪个 Relay 端口方案，为什么；
-- 每一步做了什么，用什么命令验证，结果如何；
-- 备份放在哪里、SHA-256，以及回退方法；
-- Relay 的 `relayId`、`relayFingerprint`、地址和证书到期时间；
-- Windows 上 Relay presence 的状态，诊断页跑出的结果；
-- 分支名和提交列表；
-- 没做完的事和原因。
+- Actual server conditions, including how the Control Plane runs, the pre-deployment migration version, and who occupies 443.
+- Chosen Relay port arrangement and rationale.
+- Actions at each step, verification commands, and results.
+- Backup locations, SHA-256 values, and rollback method.
+- Relay `relayId`, `relayFingerprint`, address, and certificate expiration.
+- Windows Relay presence status and diagnostic page results.
+- Branch name and commit list.
+- Unfinished work and reasons.

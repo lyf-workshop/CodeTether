@@ -1,79 +1,79 @@
-# 任务：B1 修复，Supervisor 响应超过帧上限时返回 internal
+# Task. Fix B1 internal errors when Supervisor responses exceed the frame limit
 
-在 Windows 上运行。这轮要改代码：分支从 `main` 开出，命名 `fix/b1-supervisor-internal`，工作区放 `D:/Projects/Software/agenthub-work/fix-b1-supervisor-internal`。依据：`D:/Projects/Software/agenthub-archive/t1a-report.md` 的"真机验收（vivo X60）"一节、Mac 上 `~/agenthub-archive/i1-report.md` 的 iPad 真机结果（要点抄在"已知情况"里）、`docs/DEVELOPMENT-PROCESS.md`（在 `origin/ux/design` 上，用 `git show` 读）。
+Run on Windows. This round changes code. Create branch `fix/b1-supervisor-internal` from `main`, with the worktree at `D:/Projects/Software/agenthub-work/fix-b1-supervisor-internal`. References are the "Physical-device acceptance (vivo X60)" section of `D:/Projects/Software/agenthub-archive/t1a-report.md`, the iPad physical-device results in `~/agenthub-archive/i1-report.md` on the Mac (key points copied into "Known facts"), and `docs/DEVELOPMENT-PROCESS.md` (read from `origin/ux/design` with `git show`).
 
-如果你已经按这份提示词的上一版开始了，读完这一版，按新的目标和已知情况继续，不用从头来。
+If work already began under the previous revision of this prompt, read this revision and continue with its updated goals and facts. Do not restart from scratch.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has four second-level headings and the last section is "Report".
 
-## 目标
+## Goals
 
-现象：安卓（vivo X60 连 Windows）和 iPad（连 Mac）都已登录、配对成功，但读取电脑内容时，自动模式和"只走 Relay"都收到 Supervisor 的 `internal`，工作区加载不出来。之前的模拟器验收只用单台机器的合成数据，全部通过；这次对的是真实数据。
+Symptom. Android (vivo X60 connected to Windows) and iPad (connected to Mac) both logged in and paired successfully, but reading computer contents returns Supervisor `internal` in both automatic and "Relay only" modes, preventing workspace loading. Previous emulator acceptance passed with synthetic single-machine data. This run uses real data.
 
-iPad 那边已经定位到一处：Mac 上 `machine.get` 的响应按 Supervisor 的投影算约 17,148 字节，超过实际 16,384 字节的帧上限，发送失败被压成 `internal`。Windows 上有三台机器和真实的 Codex 项目，很可能是同一个原因，但要你自己确认。
+The iPad investigation found one cause. Projected Supervisor `machine.get` on Mac is approximately 17,148 bytes, exceeding the actual 16,384-byte frame limit. The send failure becomes `internal`. Windows has three machines and real Codex projects, likely causing the same issue, but confirm independently.
 
-要做到：
+Required outcomes follow.
 
-1. **确认根因**：对 Windows Host 的真实数据，用仓库里的 Supervisor 测试客户端或开发诊断页（`#/dev/supervisor-check`），不用手机，找出哪些读取操作返回 `internal`，以及原因。不只看 `machine.get`。
-2. **所有读取响应放进帧里**：Supervisor 返回给设备的每个读取操作的响应，都要放得进 16 KiB 的帧。真实数据再大也不能因为超限而失败。至少覆盖 `host.bootstrap`、`machine.list`、`machine.get`、`project.list`、`project.get`、`conversation.list`、`conversation.get`、`conversation.history`、`conversation.recent`、`attention.list` 和变更读取。
-3. **超限时能看出来**：Host 在发送前就能发现响应会超限。这时通过现有的 `onDiagnostic` 记一条，带操作名、传输方式、字节数，不带内容。其他失败也一样记操作名、传输方式、错误码或异常类名、耗时，不记请求和响应的内容、路径、会话标题。
-4. **回归测试**：用足够大的数据（多个 AI 工具、多个安装位置、多台机器、很长的标题和路径）覆盖第 2 项的每个操作，断言响应在帧上限内，并且客户端要的字段还在。
-5. **验证**：对 Windows Host 的真实数据，用测试客户端经直连和经 Relay 把第 2 项的操作各跑一遍，全部成功。
+1. **Confirm the root cause.** With real Windows Host data, use the repository's Supervisor test client or development diagnostic page (`#/dev/supervisor-check`) without a phone to identify every read returning `internal` and why. Investigate beyond `machine.get`.
+2. **Fit every read response into a frame.** Every Supervisor read response sent to a device must fit in a 16 KiB frame. Large real data must not fail because of size. Cover at least `host.bootstrap`, `machine.list`, `machine.get`, `project.list`, `project.get`, `conversation.list`, `conversation.get`, `conversation.history`, `conversation.recent`, `attention.list`, and change reads.
+3. **Make oversize responses diagnosable.** Before sending, the Host must detect responses that exceed the limit. Record an existing `onDiagnostic` event with operation, transport, and byte count, without content. For other failures, likewise record operation, transport, error code or exception class, and duration, excluding request or response contents, paths, and conversation titles.
+4. **Regression tests.** Use sufficiently large data with multiple AI tools, installation locations, machines, and long titles and paths for every operation in item 2. Assert each response stays within the frame limit and preserves fields clients need.
+5. **Verification.** Run every operation in item 2 against real Windows Host data through both direct and Relay test-client connections, all successfully.
 
-手机和 iPad 的复测要更新 Mac 和 Windows 的安装版，这轮不做。完成后告诉用户。
+Phone and iPad retests require updating installed Mac and Windows builds and are outside this round. Tell the user when finished.
 
-## 已知情况
+## Known facts
 
-- **实际的帧上限是 16 KiB**：
-  - `packages/supervisor-transport/src/server.ts:9` 用的是 `@codetether/machine-transport` 的 `FramedMachineConnection`，它的上限是 `machineTransportLimits.maximumFrameBytes`，16 KiB（`packages/machine-transport/src/constants.ts`）。
-  - `supervisorTransportLimits.maximumFrameBytes` 写的是 256 KiB（`packages/supervisor-transport/src/constants.ts:12`），但不是线上真正生效的值。
-  - 手机和平板的 Rust 核心读帧也按 16 KiB（`packages/supervisor-mobile/src/wire.rs:13`、`:373`）。
-  - 已经装到设备上的安卓和 iPad 应用都是这个核心，所以**不提高帧上限**，在 Host 这边把响应收小。
-- **`machine.get` 没有限制大小**：`apps/host/src/api/supervisor-transport-manager.ts:273-287` 把本机 `getMachine` 的 `machine`、`providers`、`providerLifecycles`、`connection`、`providerDiscovery`、`relay` 原样转出去。对比之下，`conversation.recent` 和 `attention.list` 用了 `boundedRows`（`apps/host/src/api/supervisor-operations.ts:20-97`，12 KiB）。
-- **发送失败被压成 `internal`**：响应在 `try` 里发送，帧超限时 `FramedMachineConnection` 抛错，`catch`（`server.ts:645-659`）用 `supervisorReadErrorCode`（`server.ts:803`）把它归成 `internal`，再发一个很小的失败帧，这个能发出去。失败路径没有诊断，所以 Host 日志和设备上都看不到原因。
-- **谁在读这些响应**：
-  - 安卓 `apps/android/app/src/main/java/org/codetether/app/remote/RemoteSupervisor.kt`（`machine.get` 在 :70、:193、:293）；
-  - iPad `apps/ios/Sources/CodeTether/SupervisorClient.swift`（在 `origin/i1/ipad-app` 上，`machine.get` 在 :217、:579、:674）；
-  - 桌面经 `apps/web/src/runtime/account/remote-supervisor.ts` 远程读另一台电脑，走的是同一个 Supervisor 传输，所以电脑之间远程读取也会碰到这个上限；
-  - 开发诊断页 `apps/web/src/dev/supervisor-check-model.ts`。
-- **收小的规则**：
-  - 先查清这几个客户端实际用到 `machine.get` 等响应的哪些字段。客户端用到的字段和含义不能变，客户端没用到的字段可以不发。
-  - 数组要有上限。
-  - 还放不下时，按固定顺序截断，并让客户端看得出被截断了（`data` 里加字段是兼容的，安卓用 `org.json`、iOS 和 Rust 核心对 `data` 都不检查多出来的字段）。
-  - 列表沿用 `boundedRows` 的思路，在截断处给续读的游标。
-  - 具体怎么收由你定，报告里写清楚每个操作的规则。
-- **另一个已知缺口**：单条过大的历史记录或事件也会超限，同样返回 `internal`（T1a 报告的"后端缺口"）。`conversation.history` 在第 2 项里，一起处理：单条放不下时截断这一条的内容并标出来，不能让整页失败。
-- **其他失败原因**：Windows Host 有三台机器，其中经 Node 连的远程设备可能不在线；iPad 也看到另一台电脑报 `computer_unavailable`，原因没查。确认帧超限是主因后，顺带看一下有没有"一台机器不可达导致整页读取失败"的情况，有就一起修，没有就在报告里写明。
-- **已排除的网络层**：手机到控制服务 443、Relay 8443、Windows 4318 的 TCP 可达；Windows 到 Relay 的 TLS 1.3 正常；Host 持有已收到 `supervisor.ready(role=host)` 的 Relay 连接；本机 HTTP 的三台机器详情 GET 都成功。
-- **和 B4 的关系**：B4 的设计（`docs/ux-redesign/08-remote-management.md` §3.2）打算把错误原因放进失败响应的 `data.reason`。这轮不做，线上的失败帧不变，只做 Host 端的诊断。§3.6 的帧预算以这轮的规则为准，报告里写清楚。
-- **冻结边界**：Protocol v1、持久化、帧的形状、Rust 核心里 `Response` 的结构（`deny_unknown_fields`）不变；不改安卓、iOS 的代码。
-- **测试数据**：Windows 安装版是 `git-b668e53f2c79`。测试用的独立项目在 `D:/Projects/Software/agenthub-archive/t1a-vivo-x60-scratch-20261106-e2945b18`。
-- **质量检查**：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`。完整的 `pnpm test` 里 Relay 指纹限流用例（`apps/relay/test/relay-service.test.mjs:1164`）偶尔失败，单跑能过；遇到就重跑并在报告里记一笔。
+- **The actual frame limit is 16 KiB.**
+  - `packages/supervisor-transport/src/server.ts:9` uses `FramedMachineConnection` from `@codetether/machine-transport`, whose limit is `machineTransportLimits.maximumFrameBytes`, 16 KiB (`packages/machine-transport/src/constants.ts`).
+  - `supervisorTransportLimits.maximumFrameBytes` says 256 KiB (`packages/supervisor-transport/src/constants.ts:12`), but that value is not the effective production limit.
+  - The phone and tablet Rust core also reads 16 KiB frames (`packages/supervisor-mobile/src/wire.rs:13`, `:373`).
+  - The installed Android and iPad applications use that core. **Do not raise the frame limit.** Reduce Host responses instead.
+- **`machine.get` is unbounded.** `apps/host/src/api/supervisor-transport-manager.ts:273-287` forwards `machine`, `providers`, `providerLifecycles`, `connection`, `providerDiscovery`, and `relay` from local `getMachine` unchanged. In contrast, `conversation.recent` and `attention.list` use `boundedRows` (`apps/host/src/api/supervisor-operations.ts:20-97`, 12 KiB).
+- **Send failures become `internal`.** Sending occurs inside `try`. On an oversized frame, `FramedMachineConnection` throws and `catch` (`server.ts:645-659`) classifies it as `internal` through `supervisorReadErrorCode` (`server.ts:803`), then sends a small failure frame that succeeds. The failure path has no diagnostic, leaving both Host logs and devices without the reason.
+- **Consumers of these responses.**
+  - Android `apps/android/app/src/main/java/org/codetether/app/remote/RemoteSupervisor.kt` (`machine.get` at :70, :193, :293).
+  - iPad `apps/ios/Sources/CodeTether/SupervisorClient.swift` (on `origin/i1/ipad-app`, `machine.get` at :217, :579, :674).
+  - Desktop remote computer reads through `apps/web/src/runtime/account/remote-supervisor.ts` use the same Supervisor transport and face the same limit.
+  - Development diagnostic page `apps/web/src/dev/supervisor-check-model.ts`.
+- **Response reduction rules.**
+  - First identify the fields these clients actually consume from `machine.get` and other responses. Preserve consumed fields and their meaning. Unused fields may be omitted.
+  - Bound arrays.
+  - If still oversized, truncate in a deterministic order and expose truncation to clients. Adding fields inside `data` is compatible. Android uses `org.json`, and neither iOS nor the Rust core rejects extra `data` fields.
+  - Apply the `boundedRows` approach to lists and supply a continuation cursor at truncation.
+  - Choose the exact rules and document them for every operation.
+- **Another known gap.** A single oversized history record or event also returns `internal` (the T1a report's "Backend gaps"). Item 2 includes `conversation.history`. If one record cannot fit, truncate its contents with an indicator instead of failing the entire page.
+- **Other potential failures.** The Windows Host has three machines, and Node-connected remote devices may be offline. iPad also saw `computer_unavailable` from another computer, without a root cause. After confirming frame size as the main cause, check whether an unreachable machine can fail the whole page. Fix it if present, otherwise state its absence in the report.
+- **Network layers already ruled out.** Phone TCP access to control service 443, Relay 8443, and Windows 4318 succeeds. Windows-to-Relay TLS 1.3 works. The Host holds a Relay connection that received `supervisor.ready(role=host)`. Local HTTP detail GETs succeed for all three machines.
+- **Relationship to B4.** B4 design (`docs/ux-redesign/08-remote-management.md` §3.2) plans error reasons in failure `data.reason`. This round keeps production failure frames unchanged and adds only Host diagnostics. This round's frame rules govern §3.6. Document them in the report.
+- **Frozen boundaries.** Preserve Protocol v1, persistence, frame shape, and Rust core `Response` structure (`deny_unknown_fields`). Do not change Android or iOS code.
+- **Test data.** The installed Windows build is `git-b668e53f2c79`. The isolated test project is `D:/Projects/Software/agenthub-archive/t1a-vivo-x60-scratch-20261106-e2945b18`.
+- **Quality checks.** `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`. The full `pnpm test` occasionally fails the Relay fingerprint rate-limit case (`apps/relay/test/relay-service.test.mjs:1164`) although isolated execution passes. Rerun if encountered and record it.
 
-## 边界
+## Boundaries
 
-- **自己决定**：诊断的方法；收小的规则和实现；诊断记什么；测试怎么写；提交怎么拆；构建环境问题。
-- **先问用户**：
-  - 需要用户在手机、iPad 或 Windows 上本人操作；
-  - 要改帧的形状、协议版本、帧上限，或者要改安卓、iOS、Rust 核心的代码；
-  - 删掉某个客户端正在用的字段；
-  - 用修复后的构建替换 Windows 上的正式安装版（要在真实数据上验证时，优先用数据副本和独立实例，不动正式数据目录）；
-  - 改生产服务的配置；
-  - 推送 `main`、打标签。
-- **不做**：
-  - 读取或打印凭据，日志和报告里不出现令牌、密钥、连接串；
-  - 动正式安装版的数据目录和 Mac 上的正式服务；
-  - 强制推送、改写已推送的历史。
+- **Decide independently.** Diagnostic approach, response reduction rules and implementation, diagnostic fields, tests, commit breakdown, and build environment issues.
+- **Ask the user first.**
+  - Personal action on the phone, iPad, or Windows computer.
+  - Changes to frame shape, protocol version, frame limit, Android, iOS, or Rust core code.
+  - Removal of a field currently consumed by a client.
+  - Replacement of the installed Windows production build with the fixed build. Prefer a data copy and isolated instance for real-data verification, preserving the production data directory.
+  - Production service configuration changes.
+  - Pushing `main` or tagging.
+- **Do not do.**
+  - Read or print credentials, or include tokens, keys, or connection strings in logs or reports.
+  - Touch the installed production data directory or production Mac services.
+  - Force-push or rewrite pushed history.
 
-分支推送到 `origin`，不合并到 `main`，审核通过后由用户决定。
+Push the branch to `origin` without merging into `main`. The user will decide after review.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/b1-supervisor-internal-report.md`：
+Write to `D:/Projects/Software/agenthub-archive/b1-supervisor-internal-report.md`.
 
-- 根因和证据：哪些操作超限、真实数据下各多少字节，有没有其他原因；
-- 每个操作的收小规则，以及哪个客户端用到哪些字段；
-- 改动的提交和推送后的远端提交；
-- 质量检查的结果，失败的原样贴出；
-- 测试客户端对真实数据的验证结果，直连和 Relay 各一份，带每个操作的响应字节数；
-- 没做完的事和原因，以及在"完成"的哪一级。
+- Root cause and evidence, including oversized operations, real response byte counts, and other causes if any.
+- Reduction rules per operation and the fields each client consumes.
+- Change commits and the remote commit after pushing.
+- Quality check results, with failures reproduced verbatim.
+- Real-data test-client results separately for direct and Relay, including response bytes for every operation.
+- Remaining work, reasons, and the current completion level.

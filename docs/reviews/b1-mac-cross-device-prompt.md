@@ -1,47 +1,47 @@
-# 任务：B1 跨设备验收（Mac 当新设备）
+# Task: B1 cross-device acceptance (Mac as the new device)
 
-在 Mac 上运行。等 Windows 上的 `b1-pairing-fix-prompt-r1.md` 做完、`b1/pairing-remote-control` 推送到 origin 以后再开始。依据：`docs/ux-redesign/06-pairing-remote-control.md` §4 最后一项，Windows 报告 `D:/Projects/Software/agenthub-archive/b1-report.md` 的“实机步骤”2、3（用户会把要点转给你）。
+Run on the Mac. Start after `b1-pairing-fix-prompt-r1.md` has been completed on Windows and `b1/pairing-remote-control` has been pushed to origin. References: the final item in `docs/ux-redesign/06-pairing-remote-control.md` section 4, and physical-device steps 2 and 3 in the Windows report `D:/Projects/Software/agenthub-archive/b1-report.md` (the user will pass along the relevant details).
 
-开始前确认这份文件有 4 个二级标题，最后一节是“报告”。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-Windows 当电脑，Mac 用开发诊断页 `#/dev/supervisor-check` 当新设备，验证：
+Use Windows as the computer and the Mac development diagnostics page `#/dev/supervisor-check` as the new device. Verify the following.
 
-1. **配对**：Windows 生成配对码，Mac 在诊断页输入，显示已连接。Windows 设备页“手机和平板”出现这台 Mac，名称和平台（`macOS-arm64`）正确。
-2. **只走 Relay**：诊断页选“只走 Relay”，原来 7 项读取和 `conversation.recent`、`attention.list`、`conversation.changes` 都通过。
-3. **写操作和能力门控**：用户在 Windows 上准备一个测试 Turn 和一个测试待处理后，Mac 做一次 `attention.resolve` 和一次 `turn.interrupt`。不支持的 AI 工具不出现批准和停止。
-4. **上次使用**：Windows 设备页里这台 Mac 的“上次使用”更新了。
-5. **移除**：Mac 保持一条已连接的会话，用户在 Windows 设备页移除这台 Mac。记下几秒断开、Mac 再连时的错误，以及 Windows 上的测试工作是否继续运行。
-6. **重新配对**：移除后用新的配对码再配一次，能连上。最后在 Windows 上移除，不留测试授权。
+1. **Pairing**: Windows generates a pairing code. Enter it on the Mac diagnostics page and confirm that it shows connected. This Mac appears under "Phones and tablets" on the Windows devices page with the correct name and platform (`macOS-arm64`).
+2. **Relay only**: Select "Relay only" on the diagnostics page. All seven original reads, plus `conversation.recent`, `attention.list`, and `conversation.changes`, pass.
+3. **Writes and capability gating**: After the user prepares a test Turn and a test Attention item on Windows, perform one `attention.resolve` and one `turn.interrupt` from the Mac. AI tools that do not support approval or stopping must not show those actions.
+4. **Last used**: The "Last used" value for this Mac on the Windows devices page updates.
+5. **Removal**: Keep a session connected on the Mac while the user removes this Mac from the Windows devices page. Record how many seconds disconnection takes, the error on reconnect, and whether the test work on Windows continues running.
+6. **Pair again**: Pair once more with a new code after removal and confirm that connection succeeds. Finally remove the device on Windows so no test authorization remains.
 
-## 已知情况
+## Known facts
 
-- **代码**：`git fetch origin`，在 `origin/b1/pairing-remote-control` 上新建一个干净的工作区，例如 `~/agenthub-work/b1-mac-check`。不动 Mac 上已有的工作区和它们的未提交改动。
-- **开发版**：
-  - 构建配置用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在启动的 shell 里加载，不打印内容。
-  - 另外设 `CODETETHER_CONTROL_PLANE_URL=https://api.codetether.org`、`VITE_CODETETHER_SUPERVISOR_CHECK=1`，`CODETETHER_DATA_DIR` 指向一个新的独立目录，例如 `~/agenthub-work/b1-mac-check-data`。
-  - 启动：`apps/desktop` 下 `node scripts/run-tauri.mjs dev --config src-tauri/tauri.dev.conf.json`。
-  - Host sidecar 用核对过 SHA256 的官方 Node 打，版本和 Mac 第 8 轮相同。第 7 轮用 `/tmp` 里的 Node 25.5.0 打过，Host 起不来。
-  - 开发版和安装版都用 4317。先用 `osascript -e 'quit app "CodeTether"'` 退出安装版，测完用 `open -a /Applications/CodeTether.app` 重新打开。
-- **设备身份**：Mac 用自己现有的设备身份登录同一账号。没有的话，在诊断页主窗口勾选注册。
-- **要用户在 Windows 上做的**（到这一步时停下来告诉用户，等用户回复）：
-  - 从托盘退出 Windows 安装版，用 `windows-dev-launch.mjs` 启动 B1 开发版；
-  - 让控制服务临时放开 `http://127.0.0.1:5173`（Mac 开发版也是这个来源），用 `b1-logs/control-plane-test-origin*.py`，测完恢复；
-  - 打开“添加设备 › 添加手机或平板”，把 6 位码告诉你，并保持窗口开着直到显示“已添加”；
-  - 准备测试 Turn 和测试待处理，最后做移除。
-- 日志脱敏时保留 `[codetether:host]` 开头的报错行。
+- **Code**: Run `git fetch origin` and create a clean worktree from `origin/b1/pairing-remote-control`, for example `~/agenthub-work/b1-mac-check`. Preserve the Mac's existing worktrees and their uncommitted changes.
+- **Development build**:
+  - Load build configuration in the launching shell with `set -a; . ~/agenthub-work/v4-build.env; set +a`, without printing its contents.
+  - Also set `CODETETHER_CONTROL_PLANE_URL=https://api.codetether.org` and `VITE_CODETETHER_SUPERVISOR_CHECK=1`. Point `CODETETHER_DATA_DIR` at a new isolated directory such as `~/agenthub-work/b1-mac-check-data`.
+  - Launch from `apps/desktop` with `node scripts/run-tauri.mjs dev --config src-tauri/tauri.dev.conf.json`.
+  - Build the Host sidecar with the official Node version whose SHA256 has been verified, using the same version as Mac round 8. The Host failed to start when round 7 used Node 25.5.0 from `/tmp`.
+  - Both development and installed builds use 4317. First exit the installed build with `osascript -e 'quit app "CodeTether"'`. Reopen it after testing with `open -a /Applications/CodeTether.app`.
+- **Device identity**: Sign into the same account using the Mac's existing device identity. If it has none, select registration in the main diagnostics window.
+- **User actions on Windows** (stop at each relevant step, tell the user, and wait for a reply):
+  - Exit the installed Windows build from its tray and launch the B1 development build with `windows-dev-launch.mjs`;
+  - Temporarily allow `http://127.0.0.1:5173` on the control service (the Mac development build has the same origin), using `b1-logs/control-plane-test-origin*.py`, and restore it afterward;
+  - Open "Add device > Add phone or tablet", provide the six-digit code, and keep the window open until it shows "Added";
+  - Prepare the test Turn and Attention item, then perform removal at the end.
+- Keep error lines beginning with `[codetether:host]` when redacting logs.
 
-## 注意事项
+## Precautions
 
-- 不读 `.secrets/`、其他 `.env`、凭据文件、`~/.codex/auth.json` 和 `~/.claude.json`。`v4-build.env` 只按上面的方法加载。
-- 不动 Mac 安装版的数据目录。写操作只用用户准备的测试目标。
+- Do not read `.secrets/`, other `.env` files, credential files, `~/.codex/auth.json`, or `~/.claude.json`. Load `v4-build.env` only as described above.
+- Preserve the installed Mac build's data directory. Perform writes only against test targets prepared by the user.
 
-## 报告
+## Report
 
-追加到 `~/agenthub-archive/v4-acceptance-report-mac.md`，新开一节“B1 跨设备”：
+Append a new "B1 cross-device" section to `~/agenthub-archive/v4-acceptance-report-mac.md`.
 
-- 用的提交、Node 版本和它的 SHA256；
-- 目标 1 到 6 每项的结果和依据（日志或只截 CodeTether 窗口的截图）；
-- 移除的断开秒数和再连时的错误；
-- 没做完的事和原因。
+- Commit used, Node version, and its SHA256;
+- Result and evidence for each goal 1 through 6 (logs or screenshots cropped to the CodeTether window);
+- Seconds to disconnect after removal and the reconnect error;
+- Incomplete work and its reasons.

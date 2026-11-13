@@ -1,58 +1,58 @@
-# 任务：B4 Mac 文件夹授权实测
+# Task: B4 Mac folder-permission investigation
 
-在 Mac 上运行。这是设计前的实测，不是 B4 的实现：测完只交报告，不改任何设计文档，不合并代码。
+Run on the Mac. This is an empirical investigation before design, not the B4 implementation. Deliver only a report after testing; do not edit design documents or merge code.
 
-开始前确认这份提示词有 4 个二级标题，最后一节是“报告”。
+Before starting, confirm that this prompt has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-背景：CodeTether 的下一步（B4）要让平板远程浏览电脑上的文件夹。在 Mac 上读文件的进程有两个，macOS 对“桌面”“文稿”“下载”这类受保护的文件夹会弹授权窗口，现在不知道弹窗时读取会怎样，也不知道授权记在哪个进程名下。要实测，结果决定 B4 怎么设计超时、限流和提示文案。
+Background: CodeTether's next stage (B4) will let a tablet browse computer folders remotely. Two processes read files on the Mac. macOS prompts for permission to protected folders such as Desktop, Documents, and Downloads. We do not yet know what happens to reads while that prompt is open, or which process receives permission. Results will determine B4's timeout, concurrency limits, and user-facing messages.
 
-- **Host**：桌面应用 `CodeTether.app`（标识 `com.codetether.desktop`，ad-hoc 签名）拉起的 Node SEA 子进程。浏览这台 Mac 自己的文件夹时用它。
-- **CodeTether Node**：launchd 单独启动的用户服务 `com.codetether.node`，程序在 `~/Library/Application Support/CodeTether/Node/bin/codetether-node`，没有应用包，构建时 ad-hoc 签名。从别的电脑浏览这台 Mac 时用它。预计授权按程序路径记录。
+- **Host**: the Node SEA child launched by desktop `CodeTether.app` (identifier `com.codetether.desktop`, ad-hoc signed), used to browse this Mac's own folders.
+- **CodeTether Node**: the separate user service `com.codetether.node` under launchd, executable `~/Library/Application Support/CodeTether/Node/bin/codetether-node`. It has no application bundle and is ad-hoc signed during the build. It browses this Mac from another computer. Permission is expected to be tracked by executable path.
 
-回答下面 7 个问题。Host 和 Node 各测一遍，桌面、文稿、下载至少各测一次。
+Answer these seven questions. Test Host and Node separately, covering Desktop, Documents, and Downloads at least once each.
 
-1. **只看属性会不会弹窗**：对受保护的文件夹本身和它里面的子文件夹做 `stat` 和 `access(R_OK | X_OK)`，不 `readdir`、不打开。有没有弹窗；结果里能不能看出没有权限。
-2. **读取会不会一直阻塞**：`readdir` 从调用到返回多久；弹窗是在调用还没返回时出现，还是返回后才出现；不点的话会不会一直不返回。
-3. **拒绝后再读**：点“不允许”后立刻再读同一个文件夹，是马上失败（记下错误码），还是又弹一次、又阻塞。
-4. **授权记在哪里**：Host 的允许是不是记在 `com.codetether.desktop` 上；进程重启后还在不在；重新构建（ad-hoc 签名变了）后会不会失效，失效时是再弹窗还是直接拒绝。
-5. **卡住时占不占线程**：一个读取卡在弹窗上时，同一进程里 `fs.promises.stat('/tmp')` 和 `dns.promises.lookup('localhost')` 要多久；4 个读取同时卡住时，这两个是不是停到点完弹窗才返回。（Node.js 的文件操作和 `dns.lookup` 共用默认 4 个线程的线程池，这一项验证卡住的读取会不会拖住其他操作。）
-6. **Node 会不会弹窗**（只测 Node）：launchd 启动、没有应用包的程序读受保护的文件夹时，是弹窗（窗口上写的名字是什么）、直接拒绝，还是一直阻塞。拒绝后，在系统设置的哪里能重新允许。
-7. **Node 更新后**（只测 Node）：同一路径换成内容不同的程序（签名跟着变）后，之前的允许还在不在。同一个程序复制到另一个路径，算不算新程序。
+1. **Do metadata checks prompt?** Call `stat` and `access(R_OK | X_OK)` on the protected folder itself and a child folder, without `readdir` or opening it. Does a prompt appear, and do results indicate missing permission?
+2. **Can reads block indefinitely?** Measure `readdir` from invocation to completion. Does the prompt appear before the call completes or afterward? If nobody responds, does the call remain blocked?
+3. **Read again after denial**: immediately reread the same folder after clicking "Don't Allow". Does it fail immediately (record the error code), or prompt and block again?
+4. **Where is permission recorded?** Is Host permission attributed to `com.codetether.desktop`? Does it survive process restart? Does rebuilding with a changed ad-hoc signature invalidate it? If invalidated, does it prompt again or reject immediately?
+5. **Does blocking occupy worker threads?** While one read waits on a prompt, measure `fs.promises.stat('/tmp')` and `dns.promises.lookup('localhost')` in the same process. With four blocked reads, do these operations wait until the prompts are answered? (Node.js file operations and `dns.lookup` share the default four-thread pool; this verifies whether blocked reads delay other operations.)
+6. **Does Node prompt?** (Node only.) When a launchd-started executable without an app bundle reads a protected folder, does it prompt (under what displayed name), reject immediately, or block indefinitely? Where in System Settings can permission be granted after denial?
+7. **After updating Node** (Node only): replace the executable at the same path with different contents, changing its signature. Does prior permission survive? Does copying the identical executable to another path count as a new program?
 
-另做一个对照：在 `/tmp` 下建一个 `chmod 000` 的文件夹，`readdir` 记下错误码，用来和问题 3 的错误码对比，看授权拒绝和普通权限不足能不能区分。
+Also run a control case: create a folder under `/tmp` with `chmod 000`, call `readdir`, and record the error code. Compare with question 3 to see whether privacy denial and ordinary filesystem permission denial can be distinguished.
 
-## 怎么测
+## Test method
 
-**探针必须跑在被测的进程里。** 系统按“负责的进程”记授权：终端拉起的进程算终端的，`tauri dev` 和从终端直接运行 `.app` 里的程序也算终端的。所以：
+**The probe must run inside the process under test.** The system attributes permission to the responsible process. Children launched from Terminal are attributed to Terminal; this includes `tauri dev` and directly running the executable inside an `.app` from Terminal. Therefore:
 
-- Host：在 Host 进程里加一个只用于这次实测的探针。用构建好的 `CodeTether.app`，通过 `open` 打开，让应用照常拉起 Host。确认 `Info.plist` 里的标识是 `com.codetether.desktop`，`codesign -dv` 记下 CDHash。
-- Node：用加了同一探针的 `codetether-node`，由 launchd 作为 LaunchAgent 启动，不从终端运行。
-- 文件操作用 `fs.promises`，走进程正常的线程池。每次记开始和结束时间、耗时、结果或错误码（`EPERM`、`EACCES` 等）。问题 5 的“卡住”用 3 秒 `Promise.race` 模拟超时，超时后继续观察那次调用实际什么时候返回。
-- 怎么把操作交给探针，你自己定。建议探针每 500 ms 看一次一个测试目录下的请求文件，执行后写结果文件，这样终端只写请求，文件操作发生在被测进程里。测试目录放在 `~/agenthub-work/b4-tcc/` 下，不放进受保护的文件夹。探针只在测试目录存在时启用，只操作请求里给的路径。
+- Host: add a probe only for this investigation inside Host. Launch the built `CodeTether.app` with `open`, letting it start Host normally. Verify identifier `com.codetether.desktop` in `Info.plist` and record CDHash with `codesign -dv`.
+- Node: use `codetether-node` with the same probe, launched as a LaunchAgent by launchd rather than directly from Terminal.
+- Use `fs.promises` through the process's normal thread pool. Record start/end times, duration, and result or error code (`EPERM`, `EACCES`, etc.). For question 5, simulate a timeout with a three-second `Promise.race`, then keep observing when the original call actually finishes.
+- Decide how requests reach the probe. One option is to poll a request file in a test directory every 500 ms and write a result file after execution. Terminal writes only requests; file operations happen in the tested process. Place the test directory under `~/agenthub-work/b4-tcc/`, outside protected folders. Enable the probe only while this directory exists, and operate only on requested paths.
 
-**代码**：`git fetch origin`，从 `origin/main`（`b668e53`）新建本地分支 `spike/b4-mac-folder-access`，工作区 `~/agenthub-work/b4-mac-folder-access`，不动 Mac 上已有的工作区和它们的未提交改动。不推送，不合并。测完把改动存成 `~/agenthub-archive/b4-mac-folder-access.patch`。
+**Code**: run `git fetch origin`, create local branch `spike/b4-mac-folder-access` from `origin/main` (`b668e53`), and use worktree `~/agenthub-work/b4-mac-folder-access`. Preserve existing Mac worktrees and uncommitted changes. Do not push or merge. Save the changes afterward as `~/agenthub-archive/b4-mac-folder-access.patch`.
 
-**构建**：
+**Build**:
 
-- 构建配置用 `set -a; . ~/agenthub-work/v4-build.env; set +a` 在构建的 shell 里加载，不打印内容。
-- Host：在仓库根目录运行 `pnpm desktop:build`，产物是 `apps/desktop/src-tauri/target` 下的 `CodeTether.app`。Host sidecar 用核对过 SHA256 的官方 Node 打，版本和之前 Mac 验收时相同；用别的 Node 版本打过 Host 起不来。
-- Node：`pnpm node:sea`，产物在 `apps/node/dist/sea/`，构建脚本会做 ad-hoc 签名（`apps/node/scripts/build-node.mjs`）。
+- Load configuration in the build shell with `set -a; . ~/agenthub-work/v4-build.env; set +a`, without printing its contents.
+- Host: run `pnpm desktop:build` from the repository root. Output is `CodeTether.app` under `apps/desktop/src-tauri/target`. Build the sidecar with the official Node version whose SHA256 has been verified, matching previous Mac acceptance; other Node versions previously produced a Host that could not start.
+- Node: run `pnpm node:sea`; output is under `apps/node/dist/sea/`. The build script performs ad-hoc signing (`apps/node/scripts/build-node.mjs`).
 
-**Host 的隔离**：
+**Host isolation**:
 
-- 不替换 `/Applications/CodeTether.app`。实测的 app 放在工作区里打开。
-- 实测的 app 不能用正式数据目录 `~/Library/Application Support/CodeTether`。可以在 spike 里改默认目录，或者用 `launchctl setenv CODETETHER_DATA_DIR ...` 后再 `open`（桌面应用在 `apps/desktop/src-tauri/src/system_tray.rs:180` 读这个变量），测完 `launchctl unsetenv`。
-- 两个版本都用 4317 端口。先用 `osascript -e 'quit app "CodeTether"'` 退出安装版，测完用 `open -a /Applications/CodeTether.app` 重新打开。
+- Keep `/Applications/CodeTether.app` in place. Launch the investigation app from the worktree.
+- Never use production data at `~/Library/Application Support/CodeTether`. Either change the default in the spike or use `launchctl setenv CODETETHER_DATA_DIR ...` before `open` (read in `apps/desktop/src-tauri/src/system_tray.rs:180`). Run `launchctl unsetenv` afterward.
+- Both versions use 4317. Exit the installed build first with `osascript -e 'quit app "CodeTether"'`, then reopen it after testing with `open -a /Applications/CodeTether.app`.
 
-**Node 的隔离**：
+**Node isolation**:
 
-- 不动正式的 `com.codetether.node` 服务、它的程序、数据目录和配对。
-- 实测的 Node 放在新路径，例如 `~/agenthub-work/b4-tcc/node-r1/bin/codetether-node`，用自己的数据目录和标签（例如 `com.codetether.node.b4probe-r1`），plist 照正式那份的参数写（见 `apps/node/src/service-installation.ts` 的 plist 模板：`--data-dir`、`--bind 127.0.0.1`、`--port 0`，`RunAtLoad`），用 `launchctl bootstrap gui/$(id -u)` 启动。它不需要配对。
-- 每测一轮换一个新路径和新标签。新路径对系统来说是没有记录的新程序，这样不用清系统的授权记录。问题 7 会检验这个假设；如果发现授权不按路径记录，停下来告诉用户，不要改用清整类授权的办法。
+- Preserve the production `com.codetether.node` service, executable, data directory, and pairing.
+- Put the investigation Node at a new path, such as `~/agenthub-work/b4-tcc/node-r1/bin/codetether-node`, with its own data directory and label (for example `com.codetether.node.b4probe-r1`). Follow production plist arguments (template in `apps/node/src/service-installation.ts`: `--data-dir`, `--bind 127.0.0.1`, `--port 0`, and `RunAtLoad`) and start with `launchctl bootstrap gui/$(id -u)`. Pairing is unnecessary.
+- Use a new path and label each round. A new path is expected to appear as a program with no system permission record, avoiding resets. Question 7 checks this assumption. If permission is not path-based, stop and tell the user instead of resetting an entire permission category.
 
-**清旧记录**：只对 Host 用，开始前和测完各跑一次。先告诉用户这会同时清掉已安装的 CodeTether 对这三个文件夹的授权，以后安装版会再问一次。
+**Reset old records**: for Host only, once before testing and once afterward. First tell the user this also clears installed CodeTether's permissions for these three folders, so the installed build will prompt again later.
 
 ```bash
 tccutil reset SystemPolicyDesktopFolder com.codetether.desktop
@@ -60,42 +60,42 @@ tccutil reset SystemPolicyDocumentsFolder com.codetether.desktop
 tccutil reset SystemPolicyDownloadsFolder com.codetether.desktop
 ```
 
-**顺序**：Host 和 Node 各按下面走一遍。
+**Sequence**: perform these steps separately for Host and Node.
 
-1. 请用户在访达里建好 `~/Desktop/b4-probe/child`、`~/Documents/b4-probe/child`、`~/Downloads/b4-probe/child`，再各建两个空子文件夹 `a`、`b`。用访达建，免得终端自己弹授权窗口。
-2. 桌面（拒绝）：问题 1，然后对 `~/Desktop/b4-probe` 做 `readdir`。先只让这一个卡着，量问题 5 的 `stat` 和 `dns.lookup`；再对 `child`、`a`、`b` 各发一个 `readdir`，凑满 4 个，再量一次。请用户至少等 20 秒再点“不允许”，记下各个调用实际返回的时间。然后立刻再读一次（问题 3）。
-3. 文稿（允许）：`readdir ~/Documents/b4-probe`，请用户等 5 秒后点“允许”。然后重启被测进程（Host 退出再打开实测 app；Node 用 `launchctl kickstart -k`）再读（问题 4）。
-4. 重新构建：做一个不影响行为的小改动重新构建，确认 CDHash 变了。Host 换成新 app 打开；Node 在同一路径换上新程序后 `kickstart`。再读文稿（问题 4、7）。
-5. 只测 Node：把第 3 步被允许过的那个程序原样复制到新路径、新标签，再读文稿（问题 7）。
-6. 下载：再走一遍问题 1 和问题 2，点“允许”，确认和桌面、文稿一致。
-7. 只测 Node：记下弹窗上写的名字。拒绝和允许之后，请用户在“系统设置 › 隐私与安全性 › 文件和文件夹”和“完全磁盘访问权限”里找这个程序，记下在哪里能看到、能不能在那里改（问题 6）。
+1. Ask the user to create `~/Desktop/b4-probe/child`, `~/Documents/b4-probe/child`, and `~/Downloads/b4-probe/child` in Finder, with two empty subfolders `a` and `b` in each. Use Finder so Terminal does not prompt for its own permission.
+2. Desktop (deny): run question 1, then `readdir` on `~/Desktop/b4-probe`. With only that read blocked, measure `stat` and `dns.lookup` for question 5. Issue one `readdir` each for `child`, `a`, and `b` to reach four blocked reads, then measure again. Ask the user to wait at least 20 seconds before clicking "Don't Allow" and record each call's actual completion time. Immediately read again (question 3).
+3. Documents (allow): call `readdir ~/Documents/b4-probe`; ask the user to wait five seconds before clicking "Allow". Restart the tested process (close/reopen the investigation app for Host; use `launchctl kickstart -k` for Node), then read again (question 4).
+4. Rebuild: make a small behavior-neutral change, rebuild, and confirm CDHash changed. Open the new Host app; replace Node at the same path and `kickstart`. Read Documents again (questions 4 and 7).
+5. Node only: copy the executable allowed in step 3 unchanged to a new path and label, then read Documents again (question 7).
+6. Downloads: repeat questions 1 and 2, click "Allow", and confirm consistency with Desktop and Documents.
+7. Node only: record the name displayed in the prompt. After denial and allowance, ask the user to find the program in "System Settings > Privacy & Security > Files and Folders" and "Full Disk Access". Record where it appears and whether permission can be changed there (question 6).
 
-**要用户做的**（到这一步时停下来告诉用户，等用户回复）：建测试文件夹；每次弹窗前说清楚要等几秒、点哪个按钮；问题 6、7 去系统设置里看。
+**User actions** (stop at the relevant step, explain it, and wait for a reply): create test folders; before each prompt, specify the delay and button; check System Settings for questions 6 and 7.
 
-**收尾**：
+**Cleanup**:
 
-- `launchctl bootout` 所有实测的 Node 标签，删掉它们的 plist、程序和数据目录；删掉实测 app 的构建产物。
-- 再跑一次上面的 `tccutil reset`，重新打开安装版。
-- 确认正式的 `com.codetether.node` 仍在运行（`launchctl print gui/$(id -u)/com.codetether.node`），并请用户确认 Windows 设备页上这台 Mac 仍在线。
-- 测试文件夹和系统设置里残留的实测程序条目，问用户要不要删。
+- `launchctl bootout` every investigation Node label and remove its plist, executable, and data directory. Remove investigation app build outputs.
+- Run the `tccutil reset` commands again and reopen the installed build.
+- Confirm production `com.codetether.node` remains running (`launchctl print gui/$(id -u)/com.codetether.node`) and ask the user to verify this Mac still appears online on the Windows devices page.
+- Ask whether to remove test folders and leftover investigation-program entries in System Settings.
 
-## 注意事项
+## Precautions
 
-- 不读 `.secrets/`、其他 `.env`、凭据文件、`~/.codex/auth.json` 和 `~/.claude.json`。`v4-build.env` 只按上面的方法加载。
-- 你自己的命令不要直接读 `~/Desktop`、`~/Documents`、`~/Downloads` 里的内容，也不要用终端 `ls` 它们。否则授权记到终端名下，测不出被测进程的行为。需要看结果时读探针写出的结果文件。
-- `launchctl`、`open`、`tccutil`、`codesign` 需要在不受沙箱限制的环境运行。如果被拦住，停下来告诉用户，不要绕开。
-- 不直接读写 `TCC.db`，不给终端开完全磁盘访问权限，不跑不带应用标识的 `tccutil reset`（那会清掉所有程序的授权）。
-- 截图只截授权窗口和系统设置里相关的那一栏，不截其他窗口。
-- 探针代码只在 spike 分支上，不进入任何要合并的分支。
+- Do not read `.secrets/`, other `.env` files, credential files, `~/.codex/auth.json`, or `~/.claude.json`. Load `v4-build.env` only as described above.
+- Your commands must not directly read contents of `~/Desktop`, `~/Documents`, or `~/Downloads`, including Terminal `ls`. Otherwise permission is attributed to Terminal and the tested process's behavior cannot be measured. Inspect probe result files instead.
+- `launchctl`, `open`, `tccutil`, and `codesign` require an unsandboxed environment. If blocked, stop and tell the user; do not bypass it.
+- Do not directly read/write `TCC.db`, grant Terminal Full Disk Access, or run `tccutil reset` without an application identifier (which clears permissions for every program).
+- Capture only permission prompts and the relevant System Settings section, excluding other windows.
+- Keep probe code on the spike branch, outside any branch intended for merging.
 
-## 报告
+## Report
 
-写到 `~/agenthub-archive/b4-mac-folder-access.md`：
+Write `~/agenthub-archive/b4-mac-folder-access.md`.
 
-- 用的提交、`sw_vers` 的输出、芯片型号、打 SEA 用的 Node 版本和 SHA256、每个被测程序的标识和 CDHash（重新构建前后各一个）。
-- 一张表：问题 × 进程（Host / Node）× 文件夹，每格写操作、结果或错误码、耗时（毫秒）、有没有弹窗和弹窗出现的时刻。
-- 问题 5 的 `stat` 和 `dns.lookup` 耗时：没有卡住时、卡住 1 个时、卡住 4 个时。
-- `chmod 000` 对照的错误码。
-- 弹窗截图和弹窗上的名字，问题 6 在系统设置里的位置。
-- 每个问题一句结论，只写看到的现象，不写设计建议。
-- 没做完的事和原因，收尾做了哪些。
+- Commit used, `sw_vers` output, chip model, Node version and SHA256 for SEA, and each tested program's identifier and CDHash (before/after rebuilding).
+- A table by question, process (Host / Node), and folder, with operation, result/error code, milliseconds, whether a prompt appeared, and when it appeared in each cell.
+- Question 5 `stat` and `dns.lookup` durations with zero, one, and four blocked reads.
+- Error code from the `chmod 000` control case.
+- Prompt screenshots, displayed names, and System Settings locations for question 6.
+- One conclusion per question, limited to observed behavior without design recommendations.
+- Incomplete work and reasons, plus cleanup performed.

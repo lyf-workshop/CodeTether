@@ -1,54 +1,54 @@
-# 任务：安卓重试收到明确失败时退出"结果待确认"
+# Task. Exit "Result pending confirmation" when an Android retry receives a definitive failure
 
-在 Windows 上运行。这轮要改代码：从 `e4bdd57`（`origin/fix/relay-create-uncertain`）开出分支 `fix/android-retry-explicit-failure`，工作区放 `D:/Projects/Software/agenthub-work/fix-android-retry-explicit-failure`。只改 `apps/android`。依据：`docs/reviews/i1-fix-prompt-r2.md` 的"必须修"第 2、3 项（在 `origin/ux/design` 上，用 `git show` 读），`D:/Projects/Software/agenthub-archive/relay-create-uncertain-report.md`。
+Run on Windows. This round changes code. Create branch `fix/android-retry-explicit-failure` from `e4bdd57` (`origin/fix/relay-create-uncertain`), with the worktree at `D:/Projects/Software/agenthub-work/fix-android-retry-explicit-failure`. Change only `apps/android`. References are required fixes 2 and 3 in `docs/reviews/i1-fix-prompt-r2.md` (read from `origin/ux/design` with `git show`) and `D:/Projects/Software/agenthub-archive/relay-create-uncertain-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has four second-level headings and the last section is "Report".
 
-## 目标
+## Goal
 
-现象：发送或新建进入"结果待确认"后，用原 actionId 重试，即使 Host 明确拒绝，界面还是显示待确认，用户只能杀掉应用。
+Symptom. After a send or create enters "Result pending confirmation", retrying with the original actionId leaves the UI pending even if the Host explicitly rejects it. The user can only kill the app.
 
-规则和 iPad 第 2 轮修复一致：
+Use the same rules as the second round of iPad fixes.
 
-- **重试成功**：清掉待确认，按成功处理（发送留在会话里，新建打开新会话），只处理一次。
-- **重试收到 Host 的明确拒绝**（`invalid_request`、`not_found`、`conflict`、`operation_not_allowed`、`unsupported`），或者 Rust 核心在发送前本地检查失败：清掉待确认，显示原因。草稿和新建窗口里的输入保留，用户改了可以再提交，再提交用新的 actionId。
-- **其他失败**（连接断开、超时、`session_expired`、`authorization_revoked`、`internal`、协议错误、响应对不上）：保留待确认，仍然可以用原 actionId 重试。
-- 第一次提交和重试用同一套分类：复用 `RemoteSupervisor.kt` 现有的 `uncertainErrors`，不另写一份。
-- `action.get` 返回的 `not_found` 不算明确失败。它只说明 Host 查不到这个 actionId，不说明操作没生效，保持待确认，和现在一样。上面列的 `not_found` 只指重发操作本身得到的结果。
-- 明确失败清掉待确认后，刷新一次对应的会话或项目列表。如果中间 Host 重启过，去重记录会丢，第一次那次可能已经生效，刷新后用户能看到。
+- **Retry succeeds.** Clear the pending state and handle success once. Sending stays in the conversation, while creation opens the new conversation.
+- **The retry receives an explicit Host rejection** (`invalid_request`, `not_found`, `conflict`, `operation_not_allowed`, or `unsupported`), or the Rust core fails a local pre-send check. Clear the pending state and show the reason. Preserve the draft and create-dialog inputs so the user can edit and submit again with a new actionId.
+- **Other failures** (disconnect, timeout, `session_expired`, `authorization_revoked`, `internal`, protocol errors, or a mismatched response). Keep the pending state and allow another retry with the original actionId.
+- Initial submission and retry use the same classification. Reuse the existing `uncertainErrors` in `RemoteSupervisor.kt` instead of creating another copy.
+- A `not_found` from `action.get` is not definitive failure. It only means the Host cannot find this actionId, not that the operation had no effect. Keep it pending as today. The `not_found` above refers only to the response to resubmitting the operation itself.
+- After definitive failure clears the pending state, refresh the affected conversation or project list once. A Host restart may have lost the deduplication record even though the first attempt took effect. Refreshing lets the user see that outcome.
 
-要做到：
+Required outcomes follow.
 
-1. 按上面的规则修复，发送和新建两条路径都要改。
-2. 测试走控制器的真实代码路径，至少覆盖：
-   - 待确认 → 重试收到明确失败 → 清掉，显示原因，草稿还在，再提交用新的 actionId；
-   - 待确认 → 重试结果不确定 → 仍然待确认，还是原 actionId；
-   - 待确认 → 重试成功 → 清掉，只成功一次；
-   - 进程恢复后的待确认 → 重试收到明确失败 → 清掉；
-   - `action.get` 返回 `not_found` → 仍然待确认。
-3. Gradle 门禁 `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest` 通过，专用模拟器上相关的仪器测试通过。
+1. Implement these rules for both sending and creating.
+2. Exercise the controller's real code paths in tests, covering at least the following cases.
+   - Pending confirmation → retry receives definitive failure → clear pending, show the reason, keep the draft, and use a new actionId on resubmission.
+   - Pending confirmation → retry is uncertain → remain pending with the original actionId.
+   - Pending confirmation → retry succeeds → clear pending and handle success only once.
+   - Pending confirmation restored after process recreation → retry receives definitive failure → clear pending.
+   - `action.get` returns `not_found` → remain pending.
+3. Pass Gradle gates `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest` and the relevant instrumentation tests on the dedicated emulator.
 
-## 已知情况
+## Known facts
 
-- 相关代码：`apps/android/app/src/main/java/org/codetether/app/ui/PendingMutations.kt`、`ui/TabletController.kt`、`remote/RemoteSupervisor.kt`。T1a 第 2 轮怎么保存原请求、怎么做只读确认，写在 `D:/Projects/Software/agenthub-archive/t1a-report.md` 的"审核修复 r2"。
-- 模拟器只用专用的 `codetether_t1a_pixel_tablet_api36`，不要动其他模拟器。
-- 平板验收可能正在用真机，不要把新 APK 装到平板或手机上。
-- 构建环境照 T1a 的做法：子进程用环境变量白名单，不读 `.env`。
+- Relevant code is `apps/android/app/src/main/java/org/codetether/app/ui/PendingMutations.kt`, `ui/TabletController.kt`, and `remote/RemoteSupervisor.kt`. The T1a second-round approach to saving the original request and read-only confirmation is in the "Review fixes r2" section of `D:/Projects/Software/agenthub-archive/t1a-report.md`.
+- Use only the dedicated `codetether_t1a_pixel_tablet_api36` emulator. Leave other emulators alone.
+- Physical tablet acceptance may be in progress. Do not install a new APK on a tablet or phone.
+- Follow the T1a build environment approach. Use an environment-variable allowlist for child processes and do not read `.env`.
 
-## 边界
+## Boundaries
 
-- **自己决定**：修复方式；测试怎么写；提交怎么拆；构建环境问题。
-- **先问用户**：要改 `apps/android` 以外的代码；把新构建装到平板或手机上。
-- **不做**：读取或打印凭据；推送 `main`、合并、打标签；强制推送。
+- **Decide independently.** Fix implementation, tests, commit breakdown, and build environment issues.
+- **Ask the user first.** Changes outside `apps/android`, or installation of a new build on a tablet or phone.
+- **Do not do.** Read or print credentials, push `main`, merge, tag, or force-push.
 
-推送分支到 `origin`，不合并。
+Push the branch to `origin` without merging.
 
-## 报告
+## Report
 
-追加到 `D:/Projects/Software/agenthub-archive/t1a-report.md`，新开一节"重试明确失败修复"：
+Append a new "Definitive retry failure fix" section to `D:/Projects/Software/agenthub-archive/t1a-report.md`.
 
-- 根因：现在的代码在哪里把重试的明确失败当成了不确定；
-- 改动的提交和推送后的远端提交；
-- 测试和门禁的结果，失败的原样贴出；
-- 新 debug APK 的大小和 SHA-256；
-- 没做完的事和原因，以及在"完成"的哪一级。
+- Root cause and the code that currently treats a definitive retry failure as uncertain.
+- Change commits and the remote commit after pushing.
+- Test and gate results, with failures reproduced verbatim.
+- Size and SHA-256 of the new debug APK.
+- Remaining work, reasons, and the current completion level.

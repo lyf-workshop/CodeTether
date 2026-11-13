@@ -1,61 +1,61 @@
-# 任务：B1 审核修复和 Windows 补测（第 1 轮）
+# Task: B1 review fixes and additional Windows testing (round 1)
 
-在这台 Windows 电脑上运行。工作区 `D:/Projects/Software/agenthub-b1-pairing`，分支 `b1/pairing-remote-control`（当前 `955d567`）。依据：设计 `docs/ux-redesign/06-pairing-remote-control.md`，上一轮报告 `D:/Projects/Software/agenthub-archive/b1-report.md`。
+Run on this Windows computer. Worktree `D:/Projects/Software/agenthub-b1-pairing`, branch `b1/pairing-remote-control` (currently `955d567`). References: design `docs/ux-redesign/06-pairing-remote-control.md` and previous report `D:/Projects/Software/agenthub-archive/b1-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是“报告”。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-### A. 修审核发现的问题
+### A. Fix issues found in review
 
-每项都加测试，修之前失败、修之后通过。
+Add tests for every item that fail before the fix and pass afterward.
 
-1. **续期由 Host 自己判断。** 现在 `local-supervisor-presence.tsx:124-131` 对控制服务标了 `renewalEligible` 的设备都签，`renewPairedDevice`（`pairing-client.ts:402`）和 `signAuthorization`（`:484`）只核对身份字段。控制服务出错或被攻破时，Host 会给已移除的设备续 31 天。
-   - 签之前在本机核对：本机有这台设备启用中的 grant，`deviceFingerprint`、`deviceKeyGeneration` 和它一致；配对没有在本机撤销；剩不到 15 天，或者已过期但符合 06 §3.3 的补签条件。
-   - 不满足时不签，也不影响其他设备的续期。
-2. **本机撤销不能被协调循环恢复。**
-   - `activate`（`supervisor-transport-manager.ts:710`）不看本机撤销表，协调循环会把已撤销的 grant 重新设为启用。控制服务撤销失败时（移除时网络出错），设备页显示的状态和本机不一致。
-   - `disableDevice`（`:1127-1134`）只在撤销记录第一次写入时断开连接。重试移除时，如果中间被重新激活过，连接不会断。
-   - 改成：已撤销的配对不能再激活；每次撤销验证通过都断开这台设备的连接。同一台设备重新配对（新的配对根）要仍然可用。grant 里没有配对根 ID，怎么在激活时判断由你决定。
-3. **`attention.list` 截断要告诉调用方。** `supervisor-operations.ts:98` 用 `boundedRows` 丢掉超出的项，但不像 `conversation.recent`（`:86`）那样返回 `truncated`。调用方看到的总数和条目对不上。协议 schema 和客户端一起改。
-4. **控制权限的 grant 只给 Host 自己签过的授权。** `reconcileSupervisorGrantSnapshot`（`remote-supervisor.ts:396-457`）在 `main` 上只给 `supervisor_read` 签 grant，这个分支扩到了 `supervisor_control`：控制服务列出来、`grant` 为空的授权，网页就用 Host 密钥签。控制服务不保存授权的 Host 签名，Host 没法确认这份控制授权是它在配对或续期时签过的。
-   - 改成只给有本机证据的控制授权签 grant，例如 Host 记下自己签过的授权 ID，或者控制服务保存并返回 Host 签名再验签。方案由你选。
-   - 如果改了控制服务，照上一轮的方法备份、部署、写回退。
+1. **The Host decides whether to renew.** Currently `local-supervisor-presence.tsx:124-131` signs for every device marked `renewalEligible` by the control service. `renewPairedDevice` (`pairing-client.ts:402`) and `signAuthorization` (`:484`) check only identity fields. If the control service malfunctions or is compromised, the Host renews a removed device for 31 days.
+   - Before signing, verify locally that an active grant exists for this device, with matching `deviceFingerprint` and `deviceKeyGeneration`; pairing has not been revoked locally; and fewer than 15 days remain, or it has expired and meets the re-signing conditions in 06 section 3.3.
+   - If these conditions fail, do not sign. Renewal for other devices must remain unaffected.
+2. **The reconciliation loop must not restore a local revocation.**
+   - `activate` (`supervisor-transport-manager.ts:710`) ignores the local revocation table, so the reconciliation loop can reactivate revoked grants. If control-service revocation fails (a network error during removal), the devices page and local state disagree.
+   - `disableDevice` (`:1127-1134`) disconnects only when the revocation record is first inserted. Retrying removal will not disconnect a connection that was reactivated in between.
+   - Change this so revoked pairings cannot be reactivated and every validated revocation disconnects the device. Pairing the same device again with a new pairing root must still work. Grants contain no pairing-root ID, so decide how activation should establish this.
+3. **Tell callers when `attention.list` is truncated.** `supervisor-operations.ts:98` uses `boundedRows` to discard excess items but does not return `truncated` as `conversation.recent` (`:86`) does. Callers receive totals that disagree with the items. Update the protocol schema and client together.
+4. **Issue control grants only for authorizations the Host itself signed.** On `main`, `reconcileSupervisorGrantSnapshot` (`remote-supervisor.ts:396-457`) signs grants only for `supervisor_read`. This branch extends it to `supervisor_control`: when the control service lists an authorization with an empty `grant`, the web app signs it with the Host key. The control service does not retain the authorization's Host signature, so the Host cannot confirm that it signed that control authorization during pairing or renewal.
+   - Restrict control-grant signing to authorizations backed by local evidence. For example, record authorization IDs signed by the Host, or have the control service retain and return the Host signature for verification. Choose the approach.
+   - If the control service changes, follow the previous backup, deployment, and rollback procedure.
 
-### B. 小问题
+### B. Smaller issues
 
-5. `boundedChanges`（`supervisor-operations.ts:51-57`）：某个偏移处的第一条去掉 diff 后仍然超过预算，就返回 503，调用方永远翻不过这一页。改成能继续往后翻，例如只留路径并计入省略数。
-6. `supervisor-operations.ts:17` 的注释说 Supervisor 和 Machine 一样是 16 KiB 帧，实际是 256 KiB。改注释，12 KiB 的预算可以不动。
+5. `boundedChanges` (`supervisor-operations.ts:51-57`): if the first item at an offset still exceeds the budget after removing its diff, it returns 503 and callers can never page past it. Allow pagination to continue, for example by retaining only the path and counting the omission.
+6. The comment at `supervisor-operations.ts:17` says Supervisor uses the same 16 KiB frames as Machine. Its actual limit is 256 KiB. Correct the comment; the 12 KiB budget may remain.
 
-### C. Windows 补测（06 §4 上一轮没做完的）
+### C. Additional Windows testing (unfinished items from 06 section 4)
 
-7. 经公网 Relay 的三项写操作：`attention.resolve`、`approval.resolve`、`turn.interrupt`，加上 `conversation.archive` 的 409。用专门的测试项目和测试 Turn，不碰已有的会话和待处理。
-8. 诊断页上，不支持批准和停止的 AI 工具不显示这两个按钮。
-9. 生产环境的续期和补签：新配对一个测试授权，在控制服务里把它的到期时间改短，确认 60 秒循环会续期；再让它过期、重启开发版，确认会补签。改之前备份这几行，只动这个测试授权，测完撤销。
-10. 移除后再连被拒绝时的错误分类，上一轮没记下来。
+7. Three writes through the public Relay: `attention.resolve`, `approval.resolve`, and `turn.interrupt`, plus the 409 response for `conversation.archive`. Use dedicated test projects and Turns, preserving existing conversations and Attention items.
+8. On the diagnostics page, AI tools without approval and stopping support must not show either button.
+9. Production renewal and re-signing: pair a new test authorization, shorten its expiry in the control service, and verify that the 60-second loop renews it. Then let it expire, restart the development build, and verify re-signing. Back up those rows before modifying them, change only this test authorization, and revoke it after testing.
+10. Record the error classification when a reconnect is rejected after removal. The previous round did not capture it.
 
-都通过后推送 `b1/pairing-remote-control` 到 origin，Mac 验收要用。
+After all items pass, push `b1/pairing-remote-control` to origin for Mac acceptance.
 
-## 已知情况
+## Known facts
 
-- 上一轮门禁全绿：`pnpm test` 2,404 项 0 失败，desktop `cargo test` 80 项通过。
-- 生产控制服务跑的是 `af3a607`，迁移到 0009。回退链接 `/opt/codetether/control-plane/.b1-20261102-01-rollback`，部署方式见 `b1-report.md`。
-- 公网测试要临时放开开发来源 `http://127.0.0.1:5173` 的 CORS，用上一轮的脚本（`b1-logs/control-plane-test-origin*.py`），测完恢复。
-- 开发版启动器 `b1-logs/windows-dev-launch.mjs` 用独立数据目录 `D:/Projects/Software/agenthub-work/b1-check-data`。开发版和安装版都用 4317，先从托盘退出安装版，测完重新打开。
-- 构建后 `Cargo.toml` 和 15 个 `permissions/autogenerated/*.toml` 可能显示修改但和索引按字节相同（CRLF），这时用 `git checkout --` 恢复。
+- Previous gates all passed: `pnpm test` had 2,404 tests with zero failures; desktop `cargo test` passed 80 tests.
+- The production control service runs `af3a607`, migrated through 0009. Rollback link `/opt/codetether/control-plane/.b1-20261102-01-rollback`; deployment instructions are in `b1-report.md`.
+- Public testing requires temporarily allowing CORS for the development origin `http://127.0.0.1:5173`. Use the previous scripts (`b1-logs/control-plane-test-origin*.py`) and restore afterward.
+- Development launcher `b1-logs/windows-dev-launch.mjs` uses the isolated data directory `D:/Projects/Software/agenthub-work/b1-check-data`. Both builds use 4317. Exit the installed build from the tray first, then reopen it after testing.
+- After builds, `Cargo.toml` and 15 `permissions/autogenerated/*.toml` files may appear modified while matching the index byte-for-byte (CRLF). In that case restore them with `git checkout --`.
 
-## 注意事项
+## Precautions
 
-- 凭据不打印，也不进仓库和报告。
-- 改生产数据前先备份，只改测试用的授权。
-- 门禁：`pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`，加上 desktop 的 `cargo test`。
+- Never print credentials or include them in the repository or report.
+- Back up production data before changing it, and modify only test authorizations.
+- Gates: `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`, and desktop `cargo test`.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/b1-fix-report-r1.md`，长输出放到 `b1-logs/`。
+Write `D:/Projects/Software/agenthub-archive/b1-fix-report-r1.md`. Put long output in `b1-logs/`.
 
-- 每项做了什么，加了哪些测试；第 4 项选了哪个方案、为什么；
-- 补测每项的结果和日志；
-- 改了控制服务的话，写部署、备份和回退；
-- 提交列表、门禁结果、推送结果；
-- 没做完的事和原因。
+- What changed for each item and which tests were added; the approach selected for item 4 and its rationale;
+- Results and logs for every additional test;
+- Deployment, backup, and rollback details if the control service changed;
+- Commit list, gate results, and push result;
+- Incomplete work and its reasons.

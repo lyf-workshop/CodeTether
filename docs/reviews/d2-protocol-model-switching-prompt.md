@@ -1,47 +1,47 @@
-# 任务：D2 协议扩展 — 会话内切换模型
+# Task: D2 protocol extension - model switching within conversations
 
-在 Mac 或 Windows 上运行。依据：`docs/ux-redesign/10-desktop-improvements.md` I3（Composer）的 Q3 决定，目标是让用户在 CodeTether 里使用 Codex/Claude 时体验与原生 app 一致。
+Run on Mac or Windows. Reference: the Q3 decision for I3 (Composer) in `docs/ux-redesign/10-desktop-improvements.md`. The goal is to make Codex/Claude usage in CodeTether consistent with their native apps.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-扩展 Protocol v1，支持在已有会话内切换模型和推理强度，而不需要新建会话。
+Extend Protocol v1 to switch models and reasoning effort within an existing conversation without creating another conversation.
 
-**必须改**：
+**Required changes**:
 
-1. **新增 `conversation.updateModel` 接口**（或类似名称）：
-   - 路径：`PATCH /api/v1/conversations/:conversationId/model`
-   - 请求体：
+1. **Add `conversation.updateModel` or an equivalently named endpoint**:
+   - Path: `PATCH /api/v1/conversations/:conversationId/model`
+   - Request body:
      ```json
      {
-       "model": "gpt-4o",           // 可选，切换模型
-       "reasoning": "high"           // 可选，切换推理强度（Claude）
+       "model": "gpt-4o",           // Optional model switch
+       "reasoning": "high"           // Optional reasoning-effort switch (Claude)
      }
      ```
-   - 响应：更新后的会话摘要（`ConversationSummary`）
-   - 权限：只有会话所属的 Machine 在线且有控制权限时才能切换
-   - 限制：
-     - 不能切换 Provider（Codex 不能换成 Claude，反之亦然）
-     - 只能切换该 Provider 支持的模型
-     - 如果 Provider 不支持模型切换，返回 `operation_not_allowed`
+   - Response: updated `ConversationSummary`
+   - Permission: the conversation's Machine must be online and the caller must have control permission
+   - Restrictions:
+     - Provider cannot change (Codex cannot become Claude, or vice versa)
+     - Only models supported by that Provider may be selected
+     - Return `operation_not_allowed` if the Provider cannot switch models
 
-2. **`ConversationSummary` 增加当前模型和推理强度字段**：
-   - `currentModel?: string`：当前使用的模型 ID（如 `"gpt-4o"`、`"claude-opus-5-5"`）
-   - `currentReasoning?: string`：当前推理强度（如 `"high"`、`"medium"`）
-   - 只有支持切换的 Provider 才返回这两个字段
+2. **Add current model and reasoning fields to `ConversationSummary`**:
+   - `currentModel?: string`: currently used model ID (e.g. `"gpt-4o"`, `"claude-opus-5-5"`)
+   - `currentReasoning?: string`: current reasoning effort (e.g. `"high"`, `"medium"`)
+   - Return these fields only for Providers that support switching
 
-3. **`ProviderDescriptor` 增加可用模型列表**：
+3. **Add available models to `ProviderDescriptor`**:
    - `availableModels?: Array<{ id: string; name: string; description?: string }>`
-   - 例如 Codex 返回：
+   - Example Codex response:
      ```json
      [
-       { "id": "gpt-4o", "name": "GPT-4o", "description": "最新的 GPT-4 优化版本" },
+       { "id": "gpt-4o", "name": "GPT-4o", "description": "The latest optimized GPT-4 version" },
        { "id": "gpt-4", "name": "GPT-4" },
-       { "id": "o1-preview", "name": "o1 Preview", "description": "深度推理模型" }
+       { "id": "o1-preview", "name": "o1 Preview", "description": "Deep reasoning model" }
      ]
      ```
-   - 例如 Claude 返回：
+   - Example Claude response:
      ```json
      [
        { "id": "claude-opus-5-5", "name": "Opus 5.5" },
@@ -49,69 +49,69 @@
        { "id": "claude-haiku-5-5", "name": "Haiku 5.5" }
      ]
      ```
-   - 如果 Provider 不支持模型列表，字段为空或不返回
+   - Leave the field empty or omit it if the Provider offers no model list
 
-4. **Host 实现**：
-   - Codex adapter：
-     - 读取 Codex 的可用模型列表（如果 Codex 提供）
-     - 切换模型时调用 Codex 的模型切换接口（如果支持）
-     - 如果 Codex 不支持会话内切换，返回 `operation_not_allowed`
-   - Claude adapter：
-     - 返回固定的 Claude 模型列表（Opus/Sonnet/Haiku）
-     - 切换模型时修改下一轮 Turn 的模型参数
-     - 推理强度对应 Claude 的 `--effort` 参数
-   - 数据库：在 `conversations` 表增加 `current_model` 和 `current_reasoning` 字段（可为空）
-   - SQLite migration：新增 migration 015（`conversation_model_switching`）
+4. **Host implementation**:
+   - Codex adapter:
+     - Read Codex's available models if exposed
+     - Call its model-switching interface if supported
+     - Return `operation_not_allowed` if in-conversation switching is unsupported
+   - Claude adapter:
+     - Return the fixed Claude model list (Opus/Sonnet/Haiku)
+     - Change the next Turn's model parameter when switching
+     - Map reasoning effort to Claude's `--effort`
+   - Database: add nullable `current_model` and `current_reasoning` to `conversations`
+   - SQLite migration: add migration 015 (`conversation_model_switching`)
 
-5. **SSE 事件**：
-   - 模型切换成功后发送 `conversation.updated` 事件，包含新的 `currentModel` 和 `currentReasoning`
-   - 前端收到事件后更新 Composer 显示
+5. **SSE events**:
+   - After successful switching, emit `conversation.updated` with new `currentModel` and `currentReasoning`
+   - Update the Composer when the frontend receives it
 
-6. **远程会话支持**：
-   - 远程 Codex/Claude 会话也支持模型切换
-   - Node 端的 adapter 同样实现模型切换逻辑
-   - 通过 Supervisor 协议传递模型切换请求
+6. **Remote conversations**:
+   - Support model switching for remote Codex/Claude conversations too
+   - Implement the same switching logic in Node adapters
+   - Carry switch requests through the Supervisor protocol
 
-**边界**：
+**Constraints**:
 
-- **不改变 Provider**：Codex 会话不能切换成 Claude，反之亦然
-- **不影响历史**：切换模型只影响下一轮 Turn，历史 Turn 保持原模型
-- **降级行为**：如果切换失败（Provider 不支持、模型不可用），返回明确错误，不影响已有会话
-- **权限检查**：只有有控制权限的客户端可以切换模型
+- **Provider stays fixed**: no Codex-to-Claude switching or vice versa
+- **History stays intact**: switching affects only the next Turn; historical Turns retain their models
+- **Failure behavior**: unsupported switching or unavailable models return explicit errors while preserving the conversation
+- **Permission checks**: only clients with control permission may switch
 
-## 已知情况
+## Known facts
 
-- 当前新建会话时固定 Provider、模型、推理强度，会话内不能切换
-- `ConversationSummary` 有 `provider` 字段，但没有 `currentModel`
-- `ProviderDescriptor` 有 `capabilities`，但没有 `availableModels`
-- Codex 和 Claude Code 的原生 CLI 是否支持会话内切换模型？待验证
-  - 如果原生不支持，我们自己实现（通过重新创建 session 或调整参数）
+- Provider, model, and reasoning are currently fixed on creation, with no in-conversation switching
+- `ConversationSummary` has `provider` but no `currentModel`
+- `ProviderDescriptor` has `capabilities` but no `availableModels`
+- Native Codex/Claude Code CLI support for in-conversation switching requires verification
+  - If unsupported natively, implement it ourselves through session recreation or adjusted parameters
 
-## 边界
+## Boundaries
 
-- **自己决定**：
-  - 接口路径和命名（`updateModel`、`switchModel`、`setModel` 都可以）
-  - 数据库字段命名
-  - 如何判断 Provider 是否支持模型切换
-  - 如果原生 CLI 不支持，如何在 adapter 里实现
-- **先问用户**：
-  - 要改 Protocol v1 以外的协议（如 Supervisor 协议）
-  - 要修改 frozen 的 Phase 边界
-  - 需要用户提供 Codex/Claude 的测试账号或密钥
-- **不做**：
-  - 不自动切换模型（由用户手动选择）
-  - 不推荐模型（只列出可用的）
-  - 不支持自定义模型（只用 Provider 提供的）
+- **Decide independently**:
+  - Endpoint path/name (`updateModel`, `switchModel`, or `setModel`)
+  - Database field names
+  - How to determine Provider switching support
+  - Adapter implementation when native CLI support is absent
+- **Ask the user first**:
+  - Changes to protocols other than Protocol v1 (such as Supervisor)
+  - Changes to frozen Phase boundaries
+  - User-supplied Codex/Claude test accounts or keys
+- **Do not**:
+  - Switch automatically; users choose manually
+  - Recommend models; list available models only
+  - Add custom models; use only Provider-supplied models
 
-## 报告
+## Report
 
-完成后写到 `~/agenthub-archive/d2-protocol.md`：
+Write `~/agenthub-archive/d2-protocol.md` afterward.
 
-- 新增的接口路径和请求/响应格式
-- 数据库 migration 的内容
-- Codex/Claude adapter 的实现方式（是否调用原生接口，还是自己实现）
-- 测试：本地 Codex 会话切换模型、本地 Claude 会话切换模型和推理强度、远程会话切换
-- 如果原生 CLI 不支持，说明你是怎么实现的
-- 提交哈希和推送的远端分支
+- Endpoint paths and request/response formats
+- Database migration contents
+- Codex/Claude adapter approach (native interface or our own implementation)
+- Tests for local Codex switching, local Claude model/effort switching, and remote switching
+- Implementation details where native CLI support is absent
+- Commit hash and pushed remote branch
 
-分支名：`feat/d2-model-switching`，推送到 `origin`，不合并到 `main`。
+Branch `feat/d2-model-switching`; push to `origin`, without merging into `main`.

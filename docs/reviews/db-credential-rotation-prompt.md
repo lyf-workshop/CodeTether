@@ -1,56 +1,56 @@
-# 任务：轮换控制服务的数据库连接凭据
+# Task: Rotate the Control Service's Database Connection Credentials
 
-在 Windows 上运行，服务器部分通过 SSH 操作。这是生产运维，不改仓库代码，不提交。依据：B0 报告 `D:/Projects/Software/agenthub-archive/b0-report.md`（控制服务的部署方式、备份和回退的做法），T1a 报告 `D:/Projects/Software/agenthub-archive/t1a-report.md` 的"凭据事件"一节。
+Run on Windows, using SSH for server operations. This is production operations work. Do not change repository code or commit. References: the B0 report `D:/Projects/Software/agenthub-archive/b0-report.md` (control-service deployment, backup, and rollback), and "Credential incident" in the T1a report `D:/Projects/Software/agenthub-archive/t1a-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-T1a 时一次 NDK 冒烟测试的 panic 输出把继承的环境变量写进了工具记录和本地日志，其中有 `CODETETHER_CONTROL_PLANE_DATABASE_URL` 的数据库连接凭据。本地日志已经覆盖，工具记录撤不回来，所以这个凭据要当成已经泄露。同时泄露的 `SUPABASE_PUBLISHABLE_KEY` 本来就是公开给客户端的，不用轮换。
+During T1a, panic output from an NDK smoke test wrote inherited environment variables to tool records and local logs, including the database credentials in `CODETETHER_CONTROL_PLANE_DATABASE_URL`. The local log has been overwritten, but the tool record cannot be withdrawn, so treat the credential as exposed. The also-exposed `SUPABASE_PUBLISHABLE_KEY` is intentionally public to clients and does not need rotation.
 
-要做到：
+Required outcomes:
 
-1. **查清凭据的范围**：这个连接串用的是哪个数据库角色，还有谁在用它（控制服务、迁移脚本、本机的测试或构建脚本）。只看用户名和主机名，不看、不打印密码。
-2. **查清泄露的来源**：为什么 Windows 上构建 Android 的子进程能继承到这个变量（用户或系统级环境变量、某个被自动加载的文件、某个启动脚本）。开发机的全局环境里不应该有生产数据库的凭据。
-3. **换掉密码**：让旧密码失效，控制服务改用新密码。
-4. **确认恢复**：控制服务正常运行，`healthz`、`readyz` 返回 200；两台电脑的 Host 在线发布返回 2xx；用旧密码连接数据库失败。
-5. **清掉多余的副本**：本机上不该有的副本删掉或移走，来源（第 2 项）去掉，并告诉用户还有哪些地方保存着新凭据。
+1. **Determine the credential's scope**. Identify the database role and every consumer, including the control service, migration scripts, and local test/build scripts. Inspect only the username and hostname. Do not view or print passwords.
+2. **Determine the source of exposure**. Find why Windows Android-build subprocesses inherited the variable, such as user/system environment variables, an automatically loaded file, or a startup script. Production database credentials do not belong in the development machine's global environment.
+3. **Replace the password**. Invalidate the old password and configure the control service with the new one.
+4. **Confirm recovery**. The control service runs normally, `healthz` and `readyz` return 200, Host presence publications from both computers return 2xx, and database connections using the old password fail.
+5. **Remove unnecessary copies**. Delete or move copies that should not be local, remove the source identified in item 2, and tell the user where the new credential remains stored.
 
-## 已知情况
+## Known Facts
 
-- 控制服务在 us-vps-01，由 `codetether-control-plane.service` 管理，以 `codetether` 用户运行，工作目录 `/opt/codetether/control-plane/current/apps/control-plane`（B0 报告）。
-- 数据库是 Supabase 的 PostgreSQL 17。控制服务通过 `NODE_EXTRA_CA_CERTS=/etc/codetether/supabase-root-2021-ca.pem` 校验证书，沿用这条校验链，不要关掉 TLS 校验。
-- 换密码有两种可能：
-  - 连接串用的是 Supabase 的主数据库密码：要在 Supabase 控制台重置，这一步只能用户本人做，而且会影响所有用这个密码的地方。
-  - 连接串用的是单独的角色：可以用有权限的连接执行 `ALTER ROLE` 改密码。
-  - 先查清是哪种，告诉用户，再决定。
-- 新密码：随机生成，足够长。生成后直接写进服务器上控制服务的配置，不经过终端回显、命令行参数、日志或本机文件。
-- 切换的影响：控制服务重启会让账号登录、设备注册、配对、Host 在线发布中断几秒。Relay 和已建立的直连、Relay 连接不受影响。
-- SSH：之前几次在 banner 阶段超时。连接不稳时不要做到一半：先备份配置、准备好新配置，再在一次连接里完成换密码、换配置和重启。
+- The control service runs on us-vps-01, managed by `codetether-control-plane.service`, under user `codetether`, with working directory `/opt/codetether/control-plane/current/apps/control-plane` (B0 report).
+- The database is Supabase PostgreSQL 17. The service verifies certificates through `NODE_EXTRA_CA_CERTS=/etc/codetether/supabase-root-2021-ca.pem`. Preserve this verification chain and keep TLS verification enabled.
+- Two password scenarios are possible:
+  - The connection uses Supabase's main database password. It must be reset in the Supabase console by the user personally and affects every consumer of that password.
+  - The connection uses a separate role. An authorized connection can change it through `ALTER ROLE`.
+  - Identify the scenario and inform the user before choosing a procedure.
+- New password: generate a sufficiently long random value and write it directly into the server's control-service configuration, without terminal echo, command-line arguments, logs, or local files.
+- Cutover impact: restarting the control service interrupts login, device registration, pairing, and Host presence publication for several seconds. Relay and established direct/Relay connections are unaffected.
+- SSH has previously timed out during banner exchange. Avoid leaving a partial cutover on an unstable connection. Back up configuration and prepare the new configuration first, then change the password, configuration, and restart in one connection.
 
-## 边界
+## Boundaries
 
-- **自己决定**：查范围和来源的方法；备份和切换的具体做法；验证的方法。
-- **先问用户**：
-  - 换密码之前，以及需要用户在 Supabase 控制台操作时；
-  - 重启控制服务之前；
-  - 删除本机文件，或修改 Windows 的用户、系统环境变量；
-  - 发现控制服务以外还有别的服务在用这个凭据。
-- **不做**：
-  - 读取、打印、复制任何密码、连接串的完整内容、令牌和私钥，日志和报告里只出现用户名和主机名；
-  - 改数据库的结构和数据，改控制服务的代码或其他配置；
-  - 动服务器上的其他服务。
+- **Decide independently**: methods for tracing scope and source, backup/cutover procedures, and verification methods.
+- **Ask the user first**:
+  - Before changing the password and whenever the user must operate the Supabase console.
+  - Before restarting the control service.
+  - Before deleting local files or changing Windows user/system environment variables.
+  - If any service other than the control service uses the credential.
+- **Do not**:
+  - Read, print, or copy passwords, complete connection strings, tokens, or private keys. Logs and reports may show usernames and hostnames only.
+  - Change database schema/data, control-service code, or other configuration.
+  - Touch other services on the server.
 
-失败时按 B0 的回退办法恢复原配置，确认控制服务恢复后再告诉用户。注意：旧密码已经失效时，回退的是"配置回到能用的状态"，不是回到旧密码。
+On failure, restore the original configuration using B0's rollback procedure, verify service recovery, then inform the user. Once the old password is invalid, rollback means returning configuration to a working state rather than restoring the old password.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/db-credential-rotation-report.md`：
+Write to `D:/Projects/Software/agenthub-archive/db-credential-rotation-report.md`:
 
-- 角色名、主机名，用这个凭据的地方；
-- 泄露的来源和你怎么处理的；
-- 换密码的方式（控制台还是 `ALTER ROLE`），以及谁操作的；
-- 备份位置和回退办法；
-- 完成标准第 4 项的验证结果；
-- 还有哪些地方保存着新凭据；
-- 没做完的事和原因。
+- Role name, hostname, and credential consumers.
+- Source of exposure and how it was handled.
+- Password-change mechanism (console or `ALTER ROLE`) and who performed it.
+- Backup location and rollback procedure.
+- Verification results for goal item 4.
+- Remaining locations storing the new credential.
+- Unfinished work and reasons.

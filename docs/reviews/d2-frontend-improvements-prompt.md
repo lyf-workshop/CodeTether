@@ -1,80 +1,79 @@
-# 任务：D2.1 前端改进 — 项目选择器、会话列表、路径截断、按钮 Tooltip
+# Task: D2.1 Frontend Improvements — Project Selector, Conversation Lists, Path Truncation, and Button Tooltips
 
-在 Windows 上运行。接着在 `feat/d2-frontend-flatten-composer` 上做（当前是 `876834c`）。根据代码审查反馈，优化 5 个 UI/UX 细节。提交推送到同一分支，不新建分支。
+Run on Windows. Continue on `feat/d2-frontend-flatten-composer` (currently `876834c`). Improve 5 UI/UX details based on code review. Commit and push to the same branch without creating another branch.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-**必须改**：
+**Required changes**:
 
-1. **项目选择器分组头优化**（优先级中）：
-   - 当前：HTML `<optgroup>` 标签（原生，可能不够显眼）
-   - 改为：更显眼的分组头样式
-   - 方案：如果 shadcn/ui Select 支持自定义分组头，用灰色背景 + 加粗文字；如果不支持，保持原状并在报告说明
-   - 位置：`apps/web/src/components/conversations/new-conversation-selection.ts` 或相关文件
-   - 测试：有多个电脑时，分组头应该清晰可见
+1. **Improve project-selector group headings** (medium priority):
+   - Current: native HTML `<optgroup>` labels, which may not stand out enough.
+   - Change to more prominent group headings.
+   - Approach: if shadcn/ui Select supports custom group headings, use a gray background and bold text. Otherwise retain the current implementation and explain in the report.
+   - Location: `apps/web/src/components/conversations/new-conversation-selection.ts` or related files.
+   - Test: group headings should be clear when multiple computers are present.
 
-2. **会话列表超长显示**（优先级中）：
-   - 当前：设备详情页显示"最近的会话 1"，但设计说"最近 10 条"
-   - 改为：检查实现代码，当会话 > 10 条时是否有加载更多或分页
-   - 方案：如果没有，加一个"查看全部会话"链接或分页控制
-   - 位置：`apps/web/src/components/machines/machine-conversations-section.tsx` 附近
-   - 测试：创建 10+ 条会话，验证显示效果
+2. **Long conversation lists** (medium priority):
+   - Current: the device detail page displays "Recent conversations 1", while the design specifies the most recent 10.
+   - Check whether the implementation supports loading more or pagination when there are more than 10 conversations.
+   - Approach: if neither exists, add a "View all conversations" link or pagination controls.
+   - Location: near `apps/web/src/components/machines/machine-conversations-section.tsx`.
+   - Test: create 10+ conversations and verify the display.
 
-3. **新建会话项目路径截断优化**（优先级低）：
-   - 当前：项目路径显示被截断（"C:\Users\Administrator\AppData\Local\Temp\codetether-d2-frontend-ev..."）
-   - 改为：用 HTML `title` 属性显示完整路径
-   - 方案：给项目路径的 DOM 元素加 `title={fullPath}`
-   - 位置：`apps/web/src/components/conversations/new-conversation-fields.tsx` 附近
-   - 测试：Hover 项目路径时显示完整路径
+3. **Improve truncated paths in New Conversation** (low priority):
+   - Current: project paths are truncated, for example "C:\Users\Administrator\AppData\Local\Temp\codetether-d2-frontend-ev...".
+   - Show the full path through the HTML `title` attribute.
+   - Approach: add `title={fullPath}` to the path's DOM element.
+   - Location: near `apps/web/src/components/conversations/new-conversation-fields.tsx`.
+   - Test: hovering over the project path reveals the complete path.
 
-4. **附件和语音按钮 Tooltip**（优先级低）：
-   - 当前：附件和语音按钮是禁用状态（灰色），无提示
-   - 改为：添加 Tooltip 说"即将推出"
-   - 方案：给按钮外包 shadcn/ui Tooltip 组件，或用原生 `title` 属性
-   - 位置：`apps/web/src/components/conversation/composer.tsx` 附近（Paperclip 和 Mic 按钮）
-   - 测试：Hover 附件和语音按钮时显示"即将推出"
+4. **Attachment and voice button tooltips** (low priority):
+   - Current: attachment and voice buttons are disabled and gray, without an explanation.
+   - Add "Coming soon" tooltips.
+   - Approach: wrap buttons in shadcn/ui Tooltip or use native `title` attributes.
+   - Location: near `apps/web/src/components/conversation/composer.tsx` (Paperclip and Mic buttons).
+   - Test: hovering over attachment and voice buttons shows "Coming soon".
 
-5. **项目卡片的项目数量显示**（优先级低）：
-   - 当前：显示 "1 个项目"（仅文字）
-   - 改为：可以考虑加项目图标，但这个是优化而非必须
-   - 方案：如果有时间，在数字前加 Folder 或 FolderOpen 图标；否则保持原状
-   - 位置：`apps/web/src/components/machines/machine-summary-card.tsx` 附近
-   - 测试：设备卡片显示项目数量时是否更直观
+5. **Project counts on cards** (low priority):
+   - Current: plain text such as "1 project".
+   - Consider adding a project icon. This is an optional improvement.
+   - Approach: add a Folder or FolderOpen icon before the count if time permits, otherwise retain the current display.
+   - Location: near `apps/web/src/components/machines/machine-summary-card.tsx`.
+   - Test: assess whether the device card's project count is clearer.
 
-## 边界
+## Boundaries
 
-**自己决定**：
-- 如果 shadcn/ui Select 的分组不支持自定义样式，可以保持原状并在报告说明
-- 附件和语音按钮的 Tooltip 是用 shadcn/ui 组件还是原生 `title` 属性，自己选
+**Decide independently**:
+- If shadcn/ui Select cannot style group headings, retain the existing version and explain in the report.
+- Choose shadcn/ui tooltips or native `title` attributes for attachment and voice buttons.
 
-**先问用户**：
-- 要改 `packages/ui` 的共享组件或 Select 组件行为（可以改，但先说）
+**Ask the user first**:
+- Changing shared `packages/ui` components or Select behavior is allowed, but discuss it first.
 
-**不做**：
-- 不改 Composer 的占位功能（模型切换、剩余上下文进度条等，等 D2.1c）
-- 不做其他新功能，仅优化这 5 个 UI 细节
+**Do not**:
+- Change Composer placeholders such as model switching or the remaining-context progress bar, pending D2.1c.
+- Add other features. Limit work to these 5 UI details.
 
-## 报告
+## Report
 
-追加到 `~/agenthub-archive/d2-frontend.md`，新增"改进完成"一节：
+Append an "Improvements completed" section to `~/agenthub-archive/d2-frontend.md`:
 
-- 1 到 5 每一项改了什么、对应的提交
-- shadcn/ui Select 组件是否支持自定义分组样式（如果尝试过）
-- 会话列表超长时的实现方案（分页/加载更多）
-- 项目路径 Tooltip 的测试截图（Hover 时显示完整路径）
-- 附件和语音按钮 Tooltip 的测试截图
-- 项目卡片是否添加了图标
-- 再次运行 pnpm typecheck / lint / test / build，确认全通过
-- 提交哈希和推送状态
+- Changes and corresponding commits for each item 1–5.
+- Whether shadcn/ui Select supports custom group styles, if investigated.
+- The approach for long conversation lists (pagination or loading more).
+- Project-path tooltip screenshots showing the complete path on hover.
+- Attachment and voice tooltip screenshots.
+- Whether project icons were added to cards.
+- Rerun pnpm typecheck / lint / test / build and confirm all pass.
+- Commit hash and push status.
 
 ---
 
-## 已知情况
+## Known Facts
 
-- 当前分支：`feat/d2-frontend-flatten-composer` @ `876834c`
-- 已通过：typecheck、lint、968 个 Web 测试、构建
-- 一个未改动的 Relay 鉴权测试失败（不阻塞）
-- 目标：优化这 5 个 UI/UX 细节，然后推送同一分支
-
+- Current branch: `feat/d2-frontend-flatten-composer` @ `876834c`.
+- Passed: typecheck, lint, 968 Web tests, and build.
+- One unchanged Relay authentication test fails, without blocking this task.
+- Goal: improve these 5 UI/UX details and push to the same branch.

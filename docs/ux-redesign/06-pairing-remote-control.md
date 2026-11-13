@@ -1,141 +1,141 @@
-# 06 · 配对和远程控制（B1）
+# 06 · Pairing and Remote Control (B1)
 
-日期：2026-11-03。依据：03 §1.1（简化后的多设备）和 §4 的 B1、04 的 A3–A6、`main` `d3be8ed` 的代码。
+Date — 2026-11-03. References are 03 §1.1 (simplified multi-device support) and B1 in §4, A3–A6 in 04, and the code at `main` `d3be8ed`.
 
-## 1. 用的人看到什么
+## 1. What Users See
 
-### 电脑上
+### On the Computer
 
-- **设备页 `/devices`**：
-  - 上面照旧按电脑分节，每节是那台电脑上的项目；
-  - 最下面新增一节“手机和平板”，列出配对过的手机和平板，每行显示名称、系统、上次使用和“移除”；
-  - 页面右上角是“添加设备”按钮。
-- **添加设备 `/add`**：
-  - **添加手机或平板**：点开后显示 6 位配对码和倒计时，说明写“在手机上的 CodeTether 里登录同一账号，输入这个码”。对方输对后，窗口变成“已添加 · vivo X60”，按钮是“完成”。
-  - **添加另一台电脑**：E1 之前还是现在的 CodeTether Node 配对，E1 之后换成同一个配对码。
-- **移除**：确认框写“移除后 vivo X60 会立刻断开，要再用就重新配对。电脑上正在运行的工作不受影响。”。
-- 设置 › 账号 只留账号信息和退出登录。现在那里的只读列表“已允许访问的手机和平板”移到设备页。
+- **Devices page `/devices`**
+  - Keep the existing computer sections at the top, with each computer's projects.
+  - Add a “Phones and tablets” section at the bottom, listing paired phones and tablets with name, operating system, last use, and “Remove.”
+  - Place “Add device” at the top right.
+- **Add Device `/add`**
+  - **Add phone or tablet** opens a six-digit pairing code and countdown, with the instruction “Sign in to the same account in CodeTether on your phone and enter this code.” After successful entry, the dialog shows “Added · vivo X60” and a “Done” button.
+  - **Add another computer** continues using the current CodeTether Node pairing flow until E1, then switches to the same pairing-code flow.
+- **Remove** uses the confirmation “Removing vivo X60 disconnects it immediately. Pair again to use it later. Work running on the computer is unaffected.”
+- Settings › Account retains only account information and sign-out. Move its current read-only “Phones and tablets allowed to access this computer” list to Devices.
 
-### 新设备上（手机界面在 M1 做，B1 先用开发诊断页模拟）
+### On the New Device (Mobile UI Arrives in M1, with a Development Diagnostic Page Simulating It in B1)
 
-登录同一账号 → 输入配对码 → 显示“已连接 Windows 台式机”。不用先选电脑：配对码本身就指明了是哪台电脑。
+Sign in to the same account → Enter the pairing code → See “Connected to Windows desktop.” The user does not choose a computer first because the code already identifies it.
 
-### 配对码规则
+### Pairing Code Rules
 
-- 6 位数字，5 分钟有效，只能用一次；关掉窗口或点“取消”就马上作废。
-- 同一账号里输错 5 次，当前所有有效的配对码都作废，要在电脑上重新生成。
-- 只认登录同一账号的设备。
+- Six digits, valid for five minutes, single use. Closing the dialog or clicking “Cancel” invalidates the code immediately.
+- Five incorrect entries under the same account invalidate all its currently valid codes. Generate a new code on the computer.
+- Only devices signed in to the same account are accepted.
 
-### 文案
+### Wording
 
-界面上不出现这些词：Host、Node（E1 之后）、Machine、ProductDevice、Supervisor、Relay、授权、grant、指纹。错误提示只说发生了什么、怎么办，例如：
+The UI must not expose the terms Host, Node (after E1), Machine, ProductDevice, Supervisor, Relay, authorization, grant, or fingerprint. Errors explain what happened and how to proceed, for example the following.
 
-- “配对码不对，还可以试 3 次”
-- “配对码已过期，请在电脑上重新生成”
-- “这台电脑现在连不上，请确认它开着并且联网”
+- “Incorrect pairing code. Three attempts remaining.”
+- “This pairing code has expired. Generate a new one on the computer.”
+- “This computer cannot be reached right now. Check that it is on and connected to the internet.”
 
-## 2. 现在的代码（`main` 上核实）
+## 2. Current Code (Verified on main)
 
-- **授权**：控制服务只存储授权、回答连接时的检查，不签任何东西。
-  - 授权由 Host 密钥签名，存在 `host_device_authorizations`（迁移 0001:175）。
-  - 数据库的 CHECK 只允许 `supervisor_read`（0001:185，0007 也一样）。
-  - 有效期 30 天（`host-identity-service.ts:143`），没有续期路径（`:1824-1827`）。
-- **控制权限**：只看 Host 本机的 `host_supervisor_control` 表，连接时不检查 grant 里的 scope。
-  - 授予它的本机接口 `/api/v1/supervisor/control/approve`（`local-http-server.ts:605`）不检查请求来源，本机任何程序都能调用。
-- **撤销**：
-  - 现有的撤销接口只允许设备撤销自己（`server.ts:849`，`:2136-2143`）。电脑撤销不了手机。
-  - 断开要等：会话最长 5 分钟（`constants.ts:22`），清理循环 60 秒一次（`local-supervisor-presence.tsx:23`）。
-- **申请和批准（Phase 10A）**：控制服务的接口还在（`server.ts:533-703`），v4 把界面删掉了。
-- **远程操作**一共 12 个（`packages/supervisor-transport/src/protocol.ts:280-376`）。本机已有可以复用的函数：
+- **Authorization** — Control Plane only stores authorizations and answers connection checks. It signs nothing.
+  - Host's key signs authorizations stored in `host_device_authorizations` (migration 0001:175).
+  - The database CHECK allows only `supervisor_read` (0001:185, also unchanged in 0007).
+  - Authorizations last 30 days (`host-identity-service.ts:143`), with no renewal path (`:1824-1827`).
+- **Control permissions** — Only the local Host's `host_supervisor_control` table is consulted. Connection checks do not inspect the scope in the grant.
+  - The local grant endpoint `/api/v1/supervisor/control/approve` (`local-http-server.ts:605`) does not validate the request origin, allowing any local program to call it.
+- **Revocation**
+  - Existing revocation endpoints let devices revoke only themselves (`server.ts:849`, `:2136-2143`). The computer cannot revoke a phone.
+  - Disconnection is delayed. Sessions last up to five minutes (`constants.ts:22`), and the cleanup loop runs every 60 seconds (`local-supervisor-presence.tsx:23`).
+- **Requests and approvals (Phase 10A)** — Control Plane endpoints remain (`server.ts:533-703`), although v4 removed their UI.
+- **Remote operations** total 12 (`packages/supervisor-transport/src/protocol.ts:280-376`). Existing local functions available for reuse include the following.
   - `archiveConversation`
-  - `interruptTurn`（检查 `capabilities.interrupt`）
+  - `interruptTurn` (checks `capabilities.interrupt`)
   - `resolveApproval`
   - `resolveAttention`
   - `listAttention`
 
-  这些都在 `host-service.ts` 里，都带 `actionId` 幂等。
+  They all reside in `host-service.ts` and support `actionId` idempotency.
 
-- **Relay**：只能通过 3 个环境变量设置（`supervisor-transport-manager.ts:1197`）。控制服务的地址是编译时写进去，再由 Desktop 传给 Host 的（`host_supervisor.rs:265-271`），Relay 可以照这个做。
-- **配对码**：Node 的 6 位码生成和常量可以复用（`packages/machine-transport/src/pairing-code.ts`，`constants.ts:31-33`）。它的校验用 OPAQUE、存在内存里，不适合跨网络、由控制服务居中的配对。
-- **设备平台**：桌面版注册时把平台写死成 `macOS-arm64`，Windows 也一样（`control-plane-client.ts:396-402`），设备列表会显示错。
+- **Relay** — Configurable only through three environment variables (`supervisor-transport-manager.ts:1197`). The Control Plane address is embedded at build time and passed from Desktop to Host (`host_supervisor.rs:265-271`). Relay can follow that pattern.
+- **Pairing codes** — Node's six-digit generation and constants can be reused (`packages/machine-transport/src/pairing-code.ts`, `constants.ts:31-33`). Its OPAQUE validation and in-memory storage are unsuitable for cross-network pairing mediated by Control Plane.
+- **Device platform** — Desktop registration hardcodes `macOS-arm64`, including on Windows (`control-plane-client.ts:396-402`), causing incorrect device-list labels.
 
-## 3. 怎么实现
+## 3. Implementation
 
-### 3.1 配对码（控制服务居中，Host 密钥签名）
+### 3.1 Pairing Codes (Mediated by Control Plane and Signed with Host's Key)
 
-1. 电脑上点“添加手机或平板”：网页向控制服务创建一个配对会话（这台 Host、5 分钟有效），拿到 6 位码。
-   - 控制服务只存码的带密钥哈希（HMAC，密钥只在服务端），以及失败次数。
-2. 新设备上输入码：设备用自己的 ProductDevice 身份提交。
-   - 控制服务在同一账号的有效会话里比对；
-   - 对上了，就把会话标成“已被 某设备 使用”，并生成待签名的授权内容：这台 Host、这台设备、设备密钥、权限、到期时间。
-3. 电脑上的窗口开着时，每 2 秒查一次会话状态。看到“已使用”：
-   - 用 Host 密钥签名，走现有的 Tauri `host_identity_key_sign`；
-   - 提交给控制服务确认，控制服务用现有的方式验签后写入授权；
-   - 窗口显示“已添加 · 设备名”。电脑上不用再点允许（用户决定）。
-4. 签名只在这个窗口里、只针对这个会话自动进行，窗口关了就不签。授权的权威仍然是 Host 密钥签名，控制服务只负责居中。
+1. Clicking “Add phone or tablet” on the computer makes the web app create a pairing session through Control Plane for this Host, valid for five minutes, and receive a six-digit code.
+   - Control Plane stores only a keyed code hash (HMAC, with a server-only key) and a failed-attempt count.
+2. The new device submits the code using its own ProductDevice identity.
+   - Control Plane compares it against active sessions for the same account.
+   - On a match, it marks the session “Claimed by device” and produces the authorization payload for signing, including this Host, the device, its key, permissions, and expiry.
+3. While the computer's dialog remains open, poll session state every two seconds. Upon a claim, perform the following.
+   - Sign with Host's key through the existing Tauri `host_identity_key_sign` command.
+   - Submit confirmation to Control Plane, which verifies the signature through the existing path and stores the authorization.
+   - Show “Added · Device name.” No additional Allow click on the computer is required, as decided by the user.
+4. Automatic signing occurs only in this dialog and for this session. Closing the dialog stops signing. Host's key signature remains the authorization authority, with Control Plane serving as intermediary.
 
-旧的申请和批准接口不再有界面调用，接口先保留。
+The old request and approval endpoints lose their UI callers but remain available for now.
 
-### 3.2 一种权限
+### 3.2 One Permission
 
-- 新的授权用 `supervisor_control`，它包含读。新增迁移 0009，放开 CHECK，旧的 `supervisor_read` 记录保留。
-- Host 判断能不能控制时，改成看 Host 签名的授权和 grant 里的 scope。
-- 删掉本机接口 `/api/v1/supervisor/control/approve` 和 `host_supervisor_control` 这条路。删掉以后，控制权限只能来自电脑界面上的配对，本机其他程序拿不到。
-- 能不能批准、停止，仍然按 AI 工具的能力和本机现有的门控判断，和电脑上一样。
+- New authorizations use `supervisor_control`, which includes read access. Add migration 0009 to extend the CHECK while preserving old `supervisor_read` records.
+- Host determines control permission from the Host-signed authorization and the grant's scope.
+- Remove the local `/api/v1/supervisor/control/approve` endpoint and the `host_supervisor_control` path. Control permission then comes only from pairing through the computer UI and cannot be acquired by other local programs.
+- Approval and stop still follow AI tool capabilities and the existing local gates, as on the computer.
 
-### 3.3 自动续期
+### 3.3 Automatic Renewal
 
-- 有效期仍然是 30 天。
-- 电脑开着时，已有的 60 秒循环会检查：剩不到 15 天、并且这台设备最近 30 天连过的授权，就用 Host 密钥签一份新的提交上去。新授权顶替旧的，旧的记为已替换。
-- 电脑关了很久、授权在这期间过期的：下次打开电脑时，只要那台设备在过期前 30 天内用过，就自动补签。
-- 超过 30 天没用的设备自然失效。设备页上显示“已失效，重新配对”。
+- Authorization duration remains 30 days.
+- While the computer is on, the existing 60-second loop checks authorizations. If fewer than 15 days remain and the device has connected in the last 30 days, sign and submit a replacement with Host's key. The new authorization supersedes the old one, which is marked replaced.
+- If the computer has been off long enough for authorization to expire, renew on the next startup provided the device was used within the 30 days preceding expiry.
+- Devices unused for more than 30 days expire naturally. The Devices page shows “Expired. Pair again.”
 
-### 3.4 移除立刻断开
+### 3.4 Immediate Disconnection on Removal
 
-- 设备页点“移除”：
-  - 网页先让本机 Host 立刻停用这台设备的连接，关掉已有的连接；
-  - 再用 Host 密钥签一份撤销提交给控制服务，这需要控制服务新增一个由 Host 签名的撤销接口。
-- 手机自己退出配对，或者账号里撤销了手机：电脑在下一次握手时就会知道，最长 5 分钟。这种情况可以接受，写进说明。
+- Clicking “Remove” on Devices triggers the following.
+  - The web app first asks local Host to disable connections from this device immediately and close existing connections.
+  - Then it signs a revocation with Host's key and submits it to Control Plane. This requires a new Host-signed revocation endpoint in Control Plane.
+- If the phone unpairs itself or the account revokes it, the computer learns of this at the next handshake, within five minutes. This delay is acceptable and must be documented.
 
-### 3.5 Relay 自动配置
+### 3.5 Automatic Relay Configuration
 
-- 在 `host_supervisor.rs` 里，Relay 的地址、ID 和指纹照控制服务地址的做法，编译时写入，再传给 Host。环境变量仍然可以覆盖。
-- 这 3 个值是公开信息，现在的值：
+- In `host_supervisor.rs`, embed Relay's address, ID, and fingerprint at compile time and pass them to Host, following the Control Plane address pattern. Environment variables can still override them.
+- These three values are public information. Their current values follow.
   - `tls://relay.codetether.org:8443`
   - `relay_d41fc913a6e74e65b916467b97bc299b`
   - `k1TqjlBhncNd1_fFKmuDr1uHOAYKOhVg7C92mopj0sg`
-- 以后换 Relay，靠 U1 的一键更新发新版本。
+- Future Relay changes ship through new versions using U1's one-click updater.
 
-### 3.6 新增远程操作
+### 3.6 Additional Remote Operations
 
-门控、`actionId` 幂等、409 忙碌、运行中不能归档，全部和本机一致。
+Gating, `actionId` idempotency, busy 409 responses, and refusal to archive running conversations all match local behavior.
 
-| 操作                   | 作用                               | 复用                     |
+| Operation | Purpose | Reuses |
 | ---------------------- | ---------------------------------- | ------------------------ |
-| `conversation.recent`  | 按电脑读取最近会话，不需要先选项目 | 侧栏“最近的会话”用的查询 |
-| `attention.list`       | 待处理列表                         | `listAttention`          |
-| `attention.resolve`    | 处理完成项                         | `resolveAttention`       |
-| `approval.resolve`     | 批准 / 拒绝                        | `resolveApproval`        |
-| `turn.interrupt`       | 停止                               | `interruptTurn`          |
-| `conversation.changes` | 读取变更                           | 本机变更面板的数据       |
+| `conversation.recent` | Read recent conversations by computer without first selecting a project | Query used by the sidebar's Recent Conversations |
+| `attention.list` | Inbox list | `listAttention` |
+| `attention.resolve` | Resolve completed items | `resolveAttention` |
+| `approval.resolve` | Approve or reject | `resolveApproval` |
+| `turn.interrupt` | Stop | `interruptTurn` |
+| `conversation.changes` | Read changes | Local changes-panel data |
 
-### 3.7 顺手修的
+### 3.7 Related Fixes
 
-- 桌面版注册时按真实系统写平台（`Windows-x64`、`macOS-arm64` 等）。
-- 设备显示名用系统给的名字，比如电脑名或手机型号。
+- Register Desktop with the actual platform, such as `Windows-x64` or `macOS-arm64`.
+- Use a system-provided device display name, such as the computer name or phone model.
 
-## 4. 验收
+## 4. Acceptance
 
-- 在电脑上生成配对码，用开发诊断页 `#/dev/supervisor-check`（B0 加的，B1 给它加“输入配对码”）当作新设备输入，配对成功。
-  - 配对码的这些情况都要测：过期、输错 5 次、取消、用过一次再用。
-- 配对后经 Relay，“只走 Relay”模式下，原来 7 项读取和 §3.6 的新操作都通过；对不支持的 AI 工具，批准和停止不出现。
-- 移除后，已有连接在几秒内断开，再连会被拒绝。
-- 把授权到期时间改短来模拟，确认自动续期和补签。
-- 本机其他程序直接调用旧的授予接口会失败，接口已经不存在。
-- Windows 和 Mac 跨设备各配对一次：Windows 当电脑，Mac 用开发诊断页当新设备。Mac 那一步另写提示词。
+- Generate a code on the computer and enter it on the development diagnostic page `#/dev/supervisor-check` as the new device. B0 added that page, and B1 adds pairing-code entry. Verify successful pairing.
+  - Test expired codes, five incorrect attempts, cancellation, and reuse of a consumed code.
+- After pairing, use Relay in “Relay only” mode. All seven existing reads and the new operations in §3.6 must pass. Unsupported AI tools must not display approval or stop.
+- After removal, existing connections disconnect within seconds and reconnection is rejected.
+- Simulate a shorter authorization duration to verify renewal and renewal after expiry.
+- Direct calls from other local programs to the old permission-grant endpoint fail because it no longer exists.
+- Perform one cross-device pairing each on Windows and Mac, using Windows as the computer and the Mac development diagnostic page as the new device. The Mac step has a separate prompt.
 
-## 5. 不在 B1
+## 5. Outside B1
 
-- 手机和平板的界面（M1、M2）。
-- 电脑之间用配对码、电脑上点“允许”、Node 迁移（E1）。
-- 推送（B2）。
+- Phone and tablet interfaces (M1, M2).
+- Computer-to-computer pairing codes, an Allow action on the computer, and Node migration (E1).
+- Push notifications (B2).

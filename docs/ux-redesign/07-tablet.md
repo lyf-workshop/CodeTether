@@ -1,136 +1,136 @@
-# 07 · 平板应用（T1）
+# 07 · Tablet Application (T1)
 
-日期：2026-11-03。依据：04 的 T1 列、03 §5（Android 原生，Kotlin + Compose，Rust 连接核心）、06（配对和远程操作）、电脑 v4 原型。原型在 `tablet/`。
+Date — 2026-11-03. Based on the T1 column in 04, 03 §5 (native Android using Kotlin + Compose and a Rust connection core), 06 (pairing and remote operations), and the desktop v4 prototype. Tablet prototypes are in `tablet/`.
 
-## 1. 决定（2026-11-03 你的回答）
+## 1. Decisions (Your Answers on 2026-11-03)
 
-- **平板能做电脑上的全部操作**，不用再开远程桌面。只有下面几件事还要在电脑前做：
-  - 配对新设备：配对码只显示在电脑上，这是安全边界；
-  - 安装和登录 Codex、Claude Code：要用电脑上的浏览器或终端；
-  - 电脑第一次启动时的设置和诊断。
-- **布局和电脑一样**：左边侧栏是 最近的会话 / 待处理 / 设备 › 项目 › 会话，右边是内容。会用电脑版就会用平板版。
-- **视觉用 iPadOS 式**：分组列表、大标题、半透明导航栏、居中的表单窗口。
-- **颜色和电脑一样简约**（2026-11-03 你的决定）：墨色单色，主按钮、选中、发送用墨色（深色模式下是白色），蓝色只用于链接和运行中，紫色只出现在应用图标上。
-- **先做平板，手机布局后补**（2026-11-03 你的决定）：平板是第一个 Android 界面，M0 的连接验证并进平板第一轮。
-- **CC Switch 式的切换放在后面**：在平板上切换 AI 工具用的 API 服务和模型配置。先列进后续规划，做之前单独调查。
+- **The tablet can perform all computer operations**, eliminating the need for a remote desktop. Only the following still require being at the computer.
+  - Pairing a new device. The code appears only on the computer, which is a security boundary.
+  - Installing and signing in to Codex or Claude Code through the computer's browser or terminal.
+  - Initial computer setup and diagnostics.
+- **Use the same layout as desktop**. The left sidebar contains Recent Conversations / Inbox / Devices › Projects › Conversations, with content on the right. Desktop users should already know how to use the tablet.
+- **Use iPadOS-style visuals**, with grouped lists, large titles, translucent navigation bars, and centered form dialogs.
+- **Keep colors as restrained as desktop**, as you decided on 2026-11-03. Primary buttons, selection, and send use monochrome ink colors (white in dark mode). Blue is reserved for links and running status. Purple appears only in the app icon.
+- **Build tablet first and add the phone layout later**, as you decided on 2026-11-03. Tablet is the first Android UI, and M0 connection verification becomes part of the first tablet round.
+- **Defer CC Switch-style configuration switching**. Switching AI tools' API services and model configurations from the tablet goes into Future Plans, with separate research before implementation.
 
-AI 工具本身的限制平板上也一样，和电脑上相同：批准、停止、逐行变更只有电脑本机上的 Codex；经由电脑访问的设备上的 Codex 只能对话；Claude Code 只读取和搜索文件。
+The AI tools' limitations remain the same as on desktop. Approval, stop, and line-by-line changes are available only for Codex running locally on the computer. Codex on devices reached through a computer supports conversation only. Claude Code only reads and searches files.
 
-## 2. 布局
+## 2. Layout
 
-|          | 横屏（1280×800 dp）                              | 竖屏（800×1280 dp）                      |
+| Element | Landscape (1280×800 dp) | Portrait (800×1280 dp) |
 | -------- | ------------------------------------------------ | ---------------------------------------- |
-| 侧栏     | 常驻，宽 300                                     | 收起，点左上角按钮从左边滑出，点外面收回 |
-| 内容     | 列表页最大宽 820；会话阅读区最大宽 760           | 同左                                     |
-| 变更面板 | 在右边打开（宽 420），侧栏自动收起，可以再叫出来 | 从右边盖在会话上面（宽 520）             |
-| 表单窗口 | 居中，宽 560（文件夹和导入宽 680）               | 同左                                     |
+| Sidebar | Persistent, 300 wide | Collapsed. The top-left button slides it in from the left. Tapping outside dismisses it. |
+| Content | List pages up to 820 wide, conversation reading area up to 760 | Same |
+| Changes panel | Opens on the right, 420 wide. The sidebar collapses automatically and can be reopened. | Overlays the conversation from the right, 520 wide |
+| Form dialogs | Centered, 560 wide. Folder and import dialogs use 680. | Same |
 
-侧栏内容：
+Sidebar content follows.
 
-- 顶部：应用名、搜索会话（Ctrl K）。
-- 最近的会话、待处理（带数量角标）。
-- 设备：每台设备一行，下面是它的项目，项目下面是最近 5 个会话。每台设备行右边有“＋”（添加项目）。经由电脑访问的设备写“经由 某台电脑”；离线的整组变灰。
-- 底部固定：设置。
+- Top contains the application name and conversation search (Ctrl K).
+- Recent Conversations and Inbox, with a count badge.
+- Devices have one row each, followed by their projects and each project's five most recent conversations. Each device row has a “+” for Add Project on its right. Devices reached through a computer display “Via Computer name.” Offline groups are dimmed.
+- Settings is fixed at the bottom.
 
-外接键盘：Ctrl N 新建会话，Ctrl K 搜索会话，Ctrl Enter 发送，Esc 关闭窗口。iPad 上用 ⌘。
+External keyboard shortcuts are Ctrl N for New Conversation, Ctrl K for conversation search, Ctrl Enter for send, and Esc to close a dialog. Use ⌘ on iPad.
 
-## 3. 视觉
+## 3. Visuals
 
-- 分组背景 `#f2f2f7`，行和卡片白色圆角 12；深色用黑底和 `#1c1c1e`。
-- 列表页用 32 号大标题和一句说明；会话页用居中的两行标题（会话标题 / 设备 › 项目 · AI 工具）。
-- 颜色和电脑的 `packages/ui/src/styles/globals.css` 对齐：
-  - 主按钮、发送按钮、选中的筛选和勾选、开关打开：墨色 `#1c1c1e`，上面白字；深色模式反过来，`#f2f2f7` 上面深色字。
-  - 侧栏选中行：灰底加粗，不用色块。
-  - 链接：`#135e9c`（深色 `#7cc0f2`），和电脑 `--ct-accent-text` 一样。
-  - 状态色：运行中蓝 `#1a7fd0`、等待批准橙、已完成绿、失败红，都配文字，不只靠颜色。
-  - 应用内的标志是墨色方块加 `>_`。紫色只在应用图标（启动器图标）上。
-  - 不跟随 Android 壁纸取色（Material You）；浅色、深色、跟随系统照常。
-- 点击区域不小于 48 dp（Android 要求，比 iPadOS 的 44 大）。
-- Token 在 `tablet/tablet.css`。
+- Grouped background is `#f2f2f7`, with white rows and cards rounded to 12. Dark mode uses a black background and `#1c1c1e` cards.
+- List pages have 32-point large titles and one explanatory sentence. Conversation pages have centered two-line titles (conversation title / Device › Project · AI tool).
+- Align colors with desktop's `packages/ui/src/styles/globals.css`.
+  - Primary buttons, send, selected filters and checkmarks, and enabled switches use ink `#1c1c1e` with white text. Dark mode reverses this to `#f2f2f7` with dark text.
+  - Sidebar selection uses a gray background and bold text, without a colored block.
+  - Links use `#135e9c` (dark mode `#7cc0f2`), matching desktop `--ct-accent-text`.
+  - Status colors use blue `#1a7fd0` for running, orange for awaiting approval, green for completed, and red for failed. Include text rather than relying on color alone.
+  - The in-app mark is an ink-colored square with `>_`. Purple appears only in the launcher icon.
+  - Do not adopt Android wallpaper colors (Material You). Light, dark, and system appearance modes remain supported.
+- Touch targets must be at least 48 dp, as required by Android, compared with iPadOS's 44.
+- Tokens are in `tablet/tablet.css`.
 
-在 Compose 里要自己做这套样式，不能直接用 Material 3 组件的默认外观，工作量会比纯 Material 大一些。系统自己的界面（通知、权限弹窗、指纹解锁）保持 Android 原样。
+Implement this styling in Compose instead of using the default Material 3 appearance. This requires more work than a pure Material UI. System-owned notifications, permission dialogs, and fingerprint unlocking retain Android's native appearance.
 
-## 4. 页面
+## 4. Pages
 
-截图在 `tablet/png/`，用 `bash docs/ux-redesign/tablet/export-png.sh` 重新导出。
+Screenshots are in `tablet/png/`. Regenerate them with `bash docs/ux-redesign/tablet/export-png.sh`.
 
-| 页面       | 路由                         | 截图           | 说明                                                                                          |
+| Page | Route | Screenshots | Description |
 | ---------- | ---------------------------- | -------------- | --------------------------------------------------------------------------------------------- |
-| 登录       | `#/signin`                   | 01-01、01-02   | 邮箱登录码；只能登录已有账号                                                                  |
-| 第一次配对 | `#/pair`                     | 01-03 至 01-05 | 输入电脑上的 6 位码；输错、过期的提示照 06 §1                                                 |
-| 最近的会话 | `#/home`                     | 02-01          | 首页。“需要你处理”在最上面，和“待处理”同一份数据、数字一致；“正在运行”第二节；下面每台设备一节，每节 5 条 |
-| 待处理     | `#/inbox`                    | 02-02          | 分段：全部 / 等待批准 / 已完成待查看 / 失败；批准就在列表里做                                 |
-| 会话       | `#/c/:id`                    | 02-03 至 02-09、02-13 | 审批卡、运行中（能停止 / 不能停止）、失败卡和重试、导入的会话、更多菜单（置顶、重命名、归档）；停止先确认（02-13） |
-| 变更       | `#/c/:id?panel=changes`      | 02-04、02-14   | 入口是带文字的“变更 N”，没有变更不显示；文件列表和逐行 diff，默认换行，“换行”开关（02-14）；不支持的会话说明原因 |
-| 新建会话   | 窗口                         | 02-10、02-11   | 项目 → AI 工具 → 推理强度（只有 Claude Code）→ 第一条消息。离线项目和没登录的 AI 工具列出原因 |
-| 搜索会话   | 窗口                         | 02-12          | 按标题找已读取的会话                                                                          |
-| 设备       | `#/devices`、`#/devices/:id` | 03-01 至 03-03 | 每台设备的项目、最近会话、AI 工具状态、连接方式；“输入配对码”加另一台电脑                     |
-| 项目       | `#/projects/:id`             | 03-04 至 03-06 | 会话 / 已归档、状态筛选、项目内搜索、以前的会话（勾选导入）、重命名和移除                     |
-| 添加项目   | 窗口                         | 03-07 至 03-09 | 选设备 → 浏览文件夹 → 名称 → 找到以前的会话，勾选导入                                         |
-| 设置       | `#/settings`                 | 04-01 至 04-05 | 账号、可以使用的电脑（移除）、通知、后台保持连接、解锁确认、外观、连接检查、后续规划          |
-| 被移除     | `#/home?removed=1`           | 04-06          | 说明哪台电脑移除了它、怎么重新配对                                                            |
-| 竖屏和深色 |                              | 05-01 至 05-06 | 竖屏侧栏、竖屏变更面板、深色、加设备边框的展示图                                              |
+| Sign-in | `#/signin` | 01-01, 01-02 | Email sign-in code. Existing accounts only. |
+| First pairing | `#/pair` | 01-03 to 01-05 | Enter the computer's six-digit code. Incorrect and expired messages follow 06 §1. |
+| Recent Conversations | `#/home` | 02-01 | Home. “Needs your attention” comes first, sharing the Inbox data and counts. “Running” is second, followed by a section per device with five conversations each. |
+| Inbox | `#/inbox` | 02-02 | Segments for All / Awaiting Approval / Completed Awaiting Review / Failed. Approvals happen within the list. |
+| Conversation | `#/c/:id` | 02-03 to 02-09, 02-13 | Approval cards, running states with and without stop support, failure and retry, imported conversations, and a More menu (pin, rename, archive). Stop requires confirmation (02-13). |
+| Changes | `#/c/:id?panel=changes` | 02-04, 02-14 | Labeled “Changes N,” hidden when there are no changes. File list and line-by-line diff, wrapping by default with a Wrap toggle (02-14). Explain unsupported conversations. |
+| New Conversation | Dialog | 02-10, 02-11 | Project → AI tool → Reasoning effort (Claude Code only) → First message. Explain offline projects and tools requiring sign-in. |
+| Conversation Search | Dialog | 02-12 | Search titles of already-loaded conversations. |
+| Devices | `#/devices`, `#/devices/:id` | 03-01 to 03-03 | Each device's projects, recent conversations, AI tool status, and connection method. “Enter pairing code” adds another computer. |
+| Project | `#/projects/:id` | 03-04 to 03-06 | Conversations / Archived, status filters, project search, earlier conversations with selected import, rename, and remove. |
+| Add Project | Dialog | 03-07 to 03-09 | Select device → Browse folders → Name → Find earlier conversations and select them for import. |
+| Settings | `#/settings` | 04-01 to 04-05 | Account, available computers with removal, notifications, background connection, unlock confirmation, appearance, connection check, and future plans. |
+| Removed | `#/home?removed=1` | 04-06 | Identify the computer that removed this device and explain how to pair again. |
+| Portrait and Dark Mode | | 05-01 to 05-06 | Portrait sidebar, portrait changes overlay, dark mode, and a presentation image with a device bezel. |
 
-### 交互规则（2026-11-09 你的决定，依据 09）
+### Interaction Rules (Your Decisions on 2026-11-09, Based on 09)
 
-- **需要你处理**：只放要你动手的（等待批准、已完成待查看、失败），和侧栏“待处理”同一份数据，数字一致。运行中的放“正在运行”。
-- **变更入口**：会话页右上角写“变更 3”（3 是文件数），没有变更时不显示。
-- **diff 换行**：默认自动换行；面板里的“换行”开关关掉后横向滚动。记住上次的选择。
-- **停止先确认**：“停止这一轮？已经做了的修改会保留，可以接着发消息。”解锁确认（04 的 A7）做了以后换成解锁。批准不加确认。确认也挡住连点：点了发送马上再点同一位置，不会直接停掉。
-- **新消息**：已经在底部才跟着滚；不在底部时显示“有新消息”，点了回到最新。打开会话停在最新的地方。
-- **新建会话**：从项目页、设备页、侧栏项目行打开时，项目预选好；第一条消息至少 4 行高；Ctrl Enter（iPad ⌘↩）开始。
-- **返回（只在 iPad）**：会话标题下的“设备 › 项目”可以点，回到那一层；从左边缘右滑返回上一页。安卓用系统返回键，不做这两样。
-- **后台刷新**：不禁用输入框和按钮；失败只在页面上显示状态，不弹窗。只有用户自己点的操作失败才弹窗。
+- **Needs your attention** contains only items requiring user action (awaiting approval, completed awaiting review, failed), using the same data and count as the sidebar Inbox. Running conversations go in “Running.”
+- **Changes entry** reads “Changes 3” at the top right of a conversation, where 3 is the file count. Hide it when there are no changes.
+- **Diff wrapping** is enabled by default. Turning off the panel's Wrap toggle enables horizontal scrolling. Remember the last choice.
+- **Confirm before stopping** with “Stop this turn? Changes already made will be kept, and you can send another message.” Replace confirmation with unlock once 04's A7 is implemented. Do not add confirmation to approval. Confirmation also prevents rapid double clicks from stopping a turn when the user clicks the send location again immediately after sending.
+- **New messages** follow automatically only when the user is already at the bottom. Otherwise show “New messages,” which returns to the latest content when clicked. Open a conversation at its latest content.
+- **New Conversation** preselects the project when opened from a project page, device page, or sidebar project row. The first message is at least four lines high. Ctrl Enter (iPad ⌘↩) starts the conversation.
+- **Back navigation (iPad only)** makes Device › Project below the conversation title clickable and supports a rightward swipe from the left edge to return to the previous page. Android uses system Back and does not implement these two interactions.
+- **Background refresh** leaves fields and buttons enabled. Failures appear as page status without a dialog. Only failures of operations explicitly initiated by the user open a dialog.
 
-## 5. 和 04 相比平板多出来的
+## 5. Tablet Additions Compared with 04
 
-| 功能                        | 04 原来   | 现在         | 后端               |
+| Feature | Previously in 04 | Now | Backend |
 | --------------------------- | --------- | ------------ | ------------------ |
-| P1 添加项目，浏览文件夹     | —         | T1           | B4                 |
-| P2 添加时找出以前的会话     | —         | T1           | B4                 |
-| P5 项目页的以前的会话       | —         | T1           | B4                 |
-| P6 移除项目                 | —         | T1           | B4                 |
-| C3 项目内搜索               | T1（B1+） | T1           | B4                 |
-| C4 置顶、重命名、归档、恢复 | L         | T1           | B4（归档 B1 已做） |
-| C5 搜索会话 Ctrl K          | L         | T1，只按标题 | 不需要             |
-| 设置 › 可以使用的电脑       | —         | T1           | 有                 |
+| P1 Add projects and browse folders | — | T1 | B4 |
+| P2 Discover earlier conversations while adding a project | — | T1 | B4 |
+| P5 Earlier conversations on the project page | — | T1 | B4 |
+| P6 Remove projects | — | T1 | B4 |
+| C3 Project search | T1 (B1+) | T1 | B4 |
+| C4 Pin, rename, archive, and restore | L | T1 | B4 (archive already implemented in B1) |
+| C5 Conversation search, Ctrl K | L | T1, titles only | None required |
+| Settings › Available Computers | — | T1 | Available |
 
-平板上仍然没有：配对 Node、更新连接地址、Relay 设置、取消配对设备（这些在电脑上做，E1 之后大多会消失）；AI 工具安装和登录；首次启动、诊断。
+The tablet still excludes Node pairing, connection-address updates, Relay settings, and device unpairing. These happen on the computer, with most disappearing after E1. AI tool installation and sign-in, first startup, and diagnostics also remain on the computer.
 
-## 6. 新的后端阶段 B4：远程管理
+## 6. New Backend Stage B4 — Remote Management
 
-都走 Supervisor，需要控制权限，带 `actionId` 幂等，检查和本机接口一致。
+All operations use Supervisor, require control permission, support `actionId` idempotency, and perform the same checks as local interfaces.
 
-| 操作                                        | 作用                                                         | 本机已有的                                       |
+| Operation | Purpose | Existing Local Capability |
 | ------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------ |
-| `folder.list`                               | 列出一台设备上一个文件夹里的子文件夹名，一次一层，有数量上限 | 没有。电脑上用系统选择窗口                       |
-| `project.create` / `project.remove`         | 添加、移除项目                                               | 有。同一文件夹不能添加两次；有会话的项目不能移除 |
-| `provider-sessions.discover` / `.adopt`     | 扫描文件夹里以前的会话、导入                                 | 有                                               |
-| `conversation.search`                       | 项目内搜索                                                   | 有                                               |
-| `conversation.pin` / `.rename` / `.restore` | 置顶、重命名、恢复                                           | 有                                               |
+| `folder.list` | List subfolder names in one folder on a device, one level at a time with a count limit | None. Desktop uses the system folder picker. |
+| `project.create` / `project.remove` | Add and remove projects | Available. The same folder cannot be added twice, and projects containing conversations cannot be removed. |
+| `provider-sessions.discover` / `.adopt` | Scan for earlier conversations in a folder and import them | Available |
+| `conversation.search` | Project search | Available |
+| `conversation.pin` / `.rename` / `.restore` | Pin, rename, and restore | Available |
 
-- `folder.list` 是新开放的能力：可以浏览这台电脑上的所有文件夹（2026-11-04 你的决定）。从用户目录开始，可以往上一直到磁盘根目录，Windows 上列出各个盘。只返回文件夹名，不返回文件；一次一层，有数量上限；只有有控制权限的设备能用。没有权限打开的文件夹标“无法打开”；隐藏文件夹默认不显示；网络盘读取慢时超时。macOS 第一次读桌面、文稿、下载这几个文件夹时，会在 Mac 上弹授权窗口，处理办法在 B4 设计里定。
-- 这些操作对经由电脑访问的设备也可用；电脑上“给配对设备添加项目只能输入完整路径”（04 P9）也可以顺带改成浏览。
-- 手机用同一套接口，界面上显示哪些由 M 系列决定。
+- `folder.list` is a newly exposed capability that can browse all folders on the computer, as you decided on 2026-11-04. Start at the user directory and allow navigation up to the disk root, listing drives on Windows. Return folder names only, with no files, one level at a time and with a count limit. Only devices with control permission may use it. Mark inaccessible folders “Cannot open,” hide hidden folders by default, and time out slow network-drive reads. On macOS, first access to Desktop, Documents, or Downloads triggers a permission prompt on the Mac. The B4 design determines how to handle it.
+- These operations also apply to devices accessed through a computer. Desktop's current requirement to enter an absolute path when adding a project on a paired device (04 P9) may also be replaced with browsing.
+- Phones use the same interfaces. The M series determines which features their UI exposes.
 
-阶段顺序：B4 依赖 B1（B1 已合并，`9694895`），可以和 B2、B3 同时做。T1a 依赖 B1，T1b 依赖 T1a 和 B4，见 §8。
+B4 depends on B1 (merged as `9694895`) and may proceed alongside B2 and B3. T1a depends on B1. T1b depends on T1a and B4. See §8.
 
-## 7. 还要定的
+## 7. Outstanding Decisions
 
-1. ~~先做平板还是先做手机~~：先做平板（2026-11-03 你的决定），见 §8。
-2. ~~`folder.list` 的根目录范围~~：可以浏览所有文件夹（2026-11-04 你的决定），见 §6。
-3. 没有 Android 平板真机：先用模拟器的平板配置验证，验收记录写“未在真机验证”。
-4. CC Switch 式的切换：先调查 CC Switch 实际怎么切换配置、Codex 和 Claude Code 各自从哪里读这些配置，再决定要不要做、放在哪个阶段。
+1. ~~Tablet or phone first~~ — Tablet first, as you decided on 2026-11-03. See §8.
+2. ~~Root scope for `folder.list`~~ — All folders may be browsed, as you decided on 2026-11-04. See §6.
+3. No physical Android tablet is available. Validate with a tablet emulator configuration first and record “Not validated on a physical device.”
+4. For CC Switch-style switching, first investigate how CC Switch actually changes configuration and where Codex and Claude Code read it. Then decide whether to implement it and in which stage.
 
-## 8. 分两轮做
+## 8. Two Implementation Rounds
 
-先做平板，M0 的连接验证并进第一轮。手机布局（M1、M2）以后在同一个应用里补。
+Build tablet first, including M0 connection verification in the first round. Add phone layouts (M1, M2) to the same application later.
 
-| 轮次    | 内容                                                                                                                                                                                                                                                                     | 依赖                    | 提示词                                  |
+| Round | Scope | Dependencies | Prompt |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | --------------------------------------- |
-| **T1a** | Android 应用骨架、Rust 连接核心（直连和经 Relay）、设备密钥放 Keystore、登录、配对；现在后端已有的全部页面和操作：最近的会话、待处理、批准和拒绝、停止、对话、新建会话、回复、变更、归档、设备和项目、搜索会话（只按标题）、设置里的账号、可以使用的电脑、外观、连接检查 | B1（已合并，`9694895`） | `docs/reviews/t1a-tablet-app-prompt.md` |
-| **T1b** | B4 的远程管理：添加项目和浏览文件夹、以前的会话、移除项目、项目内搜索、置顶、重命名、恢复                                                                                                                                                                                | T1a + B4                | B4 之后再写                             |
-| **I1**  | iPad 应用，SwiftUI，复用 T1a 的 Rust 核心，设备密钥放 Secure Enclave；范围和 T1a 一样。用免费 Apple ID 安装（2026-11-04 你的决定）                                                                                                                                       | T1a                     | `docs/reviews/i1-ipad-app-prompt.md`    |
-| 以后    | 通知和后台保持连接（B2 + M3）、解锁确认、手机布局（M1、M2）                                                                                                                                                                                                              | —                       | —                                       |
+| **T1a** | Android application skeleton, Rust connection core (direct and Relay), device keys in Keystore, sign-in, pairing, and every page and operation already supported by the backend. This includes Recent Conversations, Inbox, approval and rejection, stop, conversations, creation, replies, changes, archive, devices and projects, title-only conversation search, and Settings sections for account, available computers, appearance, and connection checks. | B1 (merged as `9694895`) | `docs/reviews/t1a-tablet-app-prompt.md` |
+| **T1b** | B4 remote management, including adding projects, folder browsing, earlier conversations, project removal, project search, pinning, renaming, and restoration | T1a + B4 | To be written after B4 |
+| **I1** | iPad application using SwiftUI, reusing T1a's Rust core with device keys in Secure Enclave and the same scope as T1a. Install with a free Apple ID, as you decided on 2026-11-04. | T1a | `docs/reviews/i1-ipad-app-prompt.md` |
+| Later | Notifications and background connection (B2 + M3), unlock confirmation, phone layouts (M1, M2) | — | — |
 
-T1a 里还没有后端的功能（添加项目、以前的会话、置顶、重命名、恢复、项目内搜索、通知、后台保持连接、解锁确认）不出现在界面上，只列在 设置 › 后续规划 里（03 §6“界面只显示后端真实提供的能力”）。原型里画了它们，是为 T1b 和以后准备的。
+T1a features without backend support (adding projects, earlier conversations, pinning, renaming, restoration, project search, notifications, background connection, unlock confirmation) remain absent from the UI and appear only in Settings › Future Plans. See 03 §6, “The UI shows only capabilities actually provided by the backend.” The prototype includes them in preparation for T1b and later work.

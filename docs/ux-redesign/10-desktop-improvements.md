@@ -1,738 +1,738 @@
-# 10 · 桌面体验改进（D2）
+# 10 · Desktop Experience Improvements (D2)
 
-日期：2026-11-09。依据：你在使用 D1（`v0.1.0-alpha.2`）后提出的 5 个核心问题、04 需求、电脑 v4 原型、07 平板设计。
+Date — 2026-11-09. Based on the five core issues you raised after using D1 (`v0.1.0-alpha.2`), requirements in 04, the desktop v4 prototype, and the tablet design in 07.
 
-## 0. 背景
+## 0. Background
 
-D1 已发布（`v0.1.0-alpha.2`），包含账号、项目、会话、Codex/Claude Code 执行、收件箱、批准、归档搜索、通知、托盘后台等基础功能。但在实际使用中暴露了 5 个核心体验问题，影响日常操作效率和产品可用性。这些问题不是小修复，而是需要重新设计产品界面和交互的改进。
+D1 shipped as `v0.1.0-alpha.2`, with account, project, conversation, Codex/Claude Code execution, Inbox, approval, archive and search, notifications, and background tray functionality. Actual use revealed five core experience issues affecting everyday efficiency and usability. They require product UI and interaction redesign rather than small fixes.
 
-D2 阶段专门解决这 5 个问题，让桌面端达到"可以日常使用"的体验水平。
+D2 addresses these five issues to make desktop suitable for everyday use.
 
-## 1. 五个核心问题
+## 1. Five Core Issues
 
-### I1. Machine 概念暴露给用户
+### I1. The Machine Concept Is Exposed to Users
 
-**现状问题**：
-- 界面显示"Machine"层级（一台物理电脑下有多个 Machine）
-- 用户看到的是技术架构，而不是"我的电脑 → 我的项目"
-- 概念过于抽象，增加认知负担
+**Current problems**
+- The UI shows a Machine hierarchy, with multiple Machines under one physical computer.
+- Users see technical architecture instead of “My computer → My projects.”
+- Abstract concepts add cognitive overhead.
 
-**用户期望**：
-- 一台电脑直接显示它上面的项目
-- 不需要理解 Machine、Node、Host 这些技术术语
-- 扁平化的"电脑 › 项目 › 会话"层级
+**User expectations**
+- A computer directly displays its projects.
+- Users do not need to understand Machine, Node, or Host terminology.
+- A flat Computers › Projects › Conversations hierarchy.
 
-**改进目标**：
-- 前端完全隐藏 Machine 层，用户只看到"电脑"
-- 设备页和项目选择器按物理电脑分组
-- 后端架构保持不变（AGENTS.md 冻结的 Machine 边界不动）
+**Improvement goals**
+- Hide the Machine layer completely in the frontend, showing only computers.
+- Group the Devices page and project selector by physical computer.
+- Preserve backend architecture and the frozen Machine boundary in AGENTS.md.
 
-**边界**：
-- 多个 Machine 在同一台物理电脑上的情况（如 WSL + Windows）如何展示？待定
-- "经由某台电脑"的远程设备仍然显示为独立的电脑节
-- Machine、Node 等术语只在开发者工具/调试界面出现
-
----
-
-### I2. Codex/Claude Code 差异化不足
-
-**现状问题**：
-- 两个 Provider 用同一套 UI，没有体现各自特点
-- Codex 有完整的文件编辑/Shell/审批，Claude 只有只读 Tool
-- 界面上看不出来为什么选 Codex 还是 Claude
-- 用户不清楚选哪个工具更合适
-
-**能力差异**（已冻结的边界）：
-- **Codex**（本机）：对话、文件编辑、Shell、审批、停止、查看变更、Terminal 输出
-- **Codex**（远程）：对话、查看变更（只读历史）
-- **Claude Code**（本机/远程）：对话、只读文件（Read/Glob/Grep）、思考强度选择、无审批、无停止、无编辑
-
-**改进目标**：
-1. **新建会话时明确差异**：
-   - 工具选择卡片列出各自的核心能力（图标 + 短语）
-   - 不可用的能力显示为灰色或"不支持"
-   - 推荐场景提示（如"需要修改代码选 Codex，只读分析选 Claude"）
-
-2. **会话页面根据 Provider 调整**：
-   - Claude Code 会话不显示"批准"卡片、"停止"按钮
-   - 变更面板标题区分"文件变更"（Codex）和"查看的文件"（Claude）
-   - Timeline 的 Tool 卡片用不同样式（编辑 vs 只读）
-
-3. **Provider 标识**：
-   - 会话标题栏增加 Provider 图标和名称
-   - 列表里每条会话显示 Provider 类型
-
-**重要**：差异化的目标是让用户在 CodeTether 里使用 Codex 或 Claude 时，体验与各自原生 app 一致。不是做不同的前端页面，而是根据 Provider 能力动态调整界面元素。
-
-**不做**：
-- Codex 和 Claude 不使用不同的主题色或页面布局
-- 保持统一的设计语言，只调整功能可见性
+**Boundaries**
+- How multiple Machines on one physical computer, such as WSL and Windows, should appear remains undecided.
+- Remote devices accessed through another computer still have independent computer sections.
+- Machine and Node terminology appears only in developer tools and debugging interfaces.
 
 ---
 
-### I3. Composer 对话框需要重做
+### I2. Insufficient Differentiation Between Codex and Claude Code
 
-**现状问题**（对标 ChatGPT 桌面 / Codex CLI / Kiro）：
-- 当前 Composer 是固定在底部的简单输入框 + 发送按钮
-- 没有模型选择、语音输入、附件、多模态等入口
-- 多行输入的体验不够好（自动扩展、快捷键）
-- 看不到当前会话的上下文限制或剩余容量
+**Current problems**
+- Both Providers use the same UI without reflecting their characteristics.
+- Codex supports full file editing, Shell, and approval, while Claude has read-only Tools.
+- The UI does not explain why users should choose Codex or Claude.
+- Users cannot determine which tool is appropriate.
 
-**参考对象**（ChatGPT 桌面）：
-- 可以选模型（GPT-4、o1 等）
-- 可以调思考强度（reasoning effort）
-- 语音输入按钮（按住说话）
-- 附件/图片上传
-- 多行输入自动扩展，最高到屏幕一半
-- 可能还有"完全访问"权限开关
+**Capability differences** (frozen boundaries)
+- **Codex, local** supports conversation, file editing, Shell, approval, stop, changes, and Terminal output.
+- **Codex, remote** supports conversation and changes from read-only history.
+- **Claude Code, local and remote** supports conversation, read-only file tools (Read/Glob/Grep), and effort selection, without approval, stop, or editing.
 
-**改进目标**：
+**Improvement goals**
+1. **Explain the differences when creating a conversation**
+   - Tool cards list core capabilities using icons and short descriptions.
+   - Unavailable capabilities appear gray or labeled unsupported.
+   - Provide suggested use cases, such as “Choose Codex to modify code, or Claude for read-only analysis.”
 
-**第一阶段（D2.1）— 基础 Composer 重做**：
-1. **多行输入增强**：
-   - 自动扩展高度（最少 2 行，最多到视口 40%）
-   - Shift+Enter 换行，Enter 或 Ctrl+Enter 发送（可配置）
-   - 输入历史（上下箭头翻前面的消息）
-   - 草稿自动保存，切换会话时恢复
+2. **Adapt conversation pages to the Provider**
+   - Claude Code conversations hide approval cards and Stop.
+   - Distinguish panel titles as File Changes for Codex and Viewed Files for Claude.
+   - Differentiate editing and read-only Tool cards in the Timeline.
 
-2. **Provider/模型信息显示和切换**（对齐原生 app）：
-   - 输入框左上角显示当前 Provider 和模型（如"Codex · GPT-4"或"Claude Opus 5.5"）
-   - 点击可以切换模型（下拉菜单）：
-     - Codex：显示可用的 OpenAI 模型（GPT-4、o1 等）
-     - Claude：显示可用的 Claude 模型（Opus、Sonnet 等）
-   - 对于 Claude，可以调整思考强度（reasoning effort）
-   - 显示剩余上下文（进度条 + 百分比）
+3. **Identify Providers**
+   - Add the Provider icon and name to the conversation title bar.
+   - Show Provider type in every conversation list row.
 
-3. **快捷操作**：
-   - 清空输入框（Esc）
-   - 复制上一轮的输入（Ctrl+Up）
-   - @ 引用文件或上下文（如果协议支持）
+**Important** — Using Codex or Claude within CodeTether should feel consistent with their respective native applications. Dynamically adjust elements to Provider capabilities within the common UI.
 
-**协议扩展需求**：
-- 会话内切换模型需要新的 Protocol v1 接口
-- 当前新建会话时固定 Provider/模型，需要增加 `conversation.updateModel` 或类似接口
-- 或者在发送消息时允许覆盖模型参数
-
-**第二阶段（X1，在 M2 之后）— 高级功能**：
-4. **语音输入**：
-   - 按住麦克风按钮说话，松开后转文字
-   - 使用系统语音识别 API 或接入 Whisper
-   - 支持中文和英文
-
-5. **附件上传**（如果协议支持）：
-   - 拖拽文件到 Composer
-   - 点击附件按钮选择文件
-   - 预览已附加的文件
-
-6. **权限控制**（对应 04 的"完全访问"）：
-   - Approval 模式切换（总是询问 / 只读 / 完全访问）
-   - 当前权限级别显示在 Composer
-
-**第三阶段（后续）— 编辑和导出**：
-7. **编辑已发送的消息**：
-   - 每条 User 消息旁边显示"编辑"按钮
-   - 编辑后重新生成从这里开始的对话
-   - 原消息标记为"已编辑"
-
-8. **导出对话**：
-   - 导出为 Markdown、HTML、PDF
-   - 包含完整的消息、代码块、Tool 调用
-   - 保留语法高亮和格式
+**Exclusions**
+- Do not give Codex and Claude separate theme colors or page layouts.
+- Preserve a unified design language while adjusting feature visibility.
 
 ---
 
-### I4. 配对速度优化
+### I3. The Composer Needs Rebuilding
 
-**现状问题**：
-- 配对过程耗时过长（具体时长待测量）
-- 用户体验：输入配对码后等待时间长
+**Current problems**, compared with ChatGPT Desktop, Codex CLI, and Kiro
+- Composer is a simple input and send button fixed at the bottom.
+- It has no entries for model selection, voice, attachments, or multimodal input.
+- Multiline input lacks good automatic expansion and shortcuts.
+- Current context limits and remaining capacity are not visible.
 
-**改进目标**：
-- 配对总耗时控制在 1-3 秒内
-- 优化瓶颈环节
+**Reference, ChatGPT Desktop**
+- Model selection, such as GPT-4 and o1.
+- Adjustable reasoning effort.
+- A hold-to-speak voice button.
+- Attachment and image uploads.
+- Multiline input that expands up to half the screen.
+- Possibly a Full Access permissions toggle.
 
-**需要先测量的数据**：
-1. 输入配对码后，到"配对成功"的总耗时
-2. 各环节耗时分解：
-   - 前端提交到后端接收
-   - 后端验证配对码
-   - TLS 握手（如果走 Relay）
-   - 数据库写入（信任记录、端点记录）
-   - 前端轮询/SSE 收到确认
+**Improvement goals**
 
-**可能的优化方向**：
-- 减少 TLS 握手次数或使用 session resumption
-- 数据库写入改为异步（先返回成功，后台持久化）
-- 前端轮询改为 SSE 推送
-- 配对码验证逻辑简化（去掉不必要的检查）
+**First stage (D2.1) — Basic Composer Rebuild**
+1. **Enhanced multiline input**
+   - Automatic height from at least two lines to 40% of the viewport.
+   - Shift+Enter for newlines, with configurable Enter or Ctrl+Enter sending.
+   - Input history using up/down arrows for earlier messages.
+   - Automatic drafts restored when switching conversations.
 
-**待定**：
-- 具体瓶颈在哪？（需要实测日志）
-- 是否可以接受"配对后台处理中"的异步模式？（先让用户看到设备，再标记"连接中"）
+2. **Provider and model display and switching**, aligned with native apps
+   - Show Provider and model at the top left, such as “Codex · GPT-4” or “Claude Opus 5.5.”
+   - Clicking opens a model-selection dropdown.
+     - Codex lists available OpenAI models such as GPT-4 and o1.
+     - Claude lists available Claude models such as Opus and Sonnet.
+   - Claude supports adjustable reasoning effort.
+   - Show remaining context as a progress indicator and percentage.
 
----
+3. **Quick actions**
+   - Clear input with Esc.
+   - Copy the previous turn's input with Ctrl+Up.
+   - Reference files or context with @ if supported by the protocol.
 
-### I5. 对话交互重做（Timeline 样式）
+**Required protocol extensions**
+- Model switching within a conversation requires a new Protocol v1 interface.
+- Provider and model are currently fixed at creation. Add `conversation.updateModel` or an equivalent interface.
+- Alternatively, allow per-message model overrides.
 
-**现状问题**（对标 Codex CLI / Kiro）：
-- 当前 Timeline 样式过于紧凑，可读性不足
-- 代码块没有行号、语法高亮不明显、复制按钮不易发现
-- 消息间距小，长对话时视觉疲劳
-- 可能缺少折叠/展开、滚动定位等交互
+**Second stage (X1, after M2) — Advanced Features**
+4. **Voice input**
+   - Hold the microphone button to speak and transcribe on release.
+   - Use system speech recognition APIs or Whisper integration.
+   - Support Chinese and English.
 
-**参考对象**（你提供的图 5 vs 图 6）：
-- 图 5（当前平板）：紧凑风格，间距小
-- 图 6（Codex/Kiro）：桌面风格，消息间距大，代码块清晰，可能有行号、复制按钮、折叠
+5. **Attachment uploads**, if supported by the protocol
+   - Drag files into Composer.
+   - Choose files with the attachment button.
+   - Preview attached files.
 
-**改进目标**：
+6. **Permission controls**, corresponding to Full Access in 04
+   - Switch Approval mode among Always Ask, Read Only, and Full Access.
+   - Show the current permission level in Composer.
 
-**第一阶段（D2.5）— Timeline 样式重做**：
-1. **间距和布局**：
-   - 消息之间增加间距（从 12px 增加到 20px）
-   - User 消息和 Agent 消息用不同背景或对齐方式区分
-   - 最大宽度从 740px 调整为 800px
+**Third stage (later) — Editing and Export**
+7. **Edit sent messages**
+   - Add Edit next to each User message.
+   - Regenerate the conversation from the edited message.
+   - Mark the original message Edited.
 
-2. **代码块增强**：
-   - 行号（可选显示/隐藏）
-   - 语言标签（右上角显示语言名称）
-   - 复制按钮（悬停时显示，点击后提示"已复制"）
-   - 语法高亮（使用 Prism 或 highlight.js）
-   - 横向滚动条（长行不自动换行）
-
-3. **长内容折叠**：
-   - 超过 30 行的代码块默认折叠，显示"展开 N 行"
-   - 超过 500 行的 Terminal 输出折叠，显示摘要
-   - 折叠状态保存在 localStorage
-
-4. **Tool 卡片优化**：
-   - 文件读取、搜索、编辑用不同图标和颜色
-   - 失败的 Tool 显示红色边框和错误原因
-   - Tool 分组（连续的文件读取合并显示）
-
-5. **滚动和定位**：
-   - "回到最新"按钮（不在底部时显示）
-   - "跳到某一轮"（从 Inbox 或通知点进来时定位）
-   - 滚动时固定会话标题栏（sticky header）
-
-**第二阶段（D2.5+）— 高级交互**：
-6. **消息操作**（后续完成）：
-   - 编辑已发送的消息（重新生成从这里开始）
-   - 删除某条消息
-   - 复制消息文本
-   - 引用某条消息（在新输入里 @ 引用）
-
-7. **Diff 视图增强**：
-   - 侧边栏缩略图（显示哪些文件改了）
-   - 行内 diff（只高亮改动的字符）
-   - "接受这个改动"按钮（如果协议支持）
-
-8. **导出对话**（后续完成）：
-   - 导出为 Markdown、HTML、PDF
-   - 包含完整的消息、代码块、Tool 调用
-   - 保留语法高亮和格式
+8. **Export conversations**
+   - Export Markdown, HTML, and PDF.
+   - Include complete messages, code blocks, and Tool calls.
+   - Preserve syntax highlighting and formatting.
 
 ---
 
-## 2. 优先级和依赖关系
+### I4. Pairing Speed
 
-### 阶段划分
+**Current problems**
+- Pairing takes too long, with exact duration still to be measured.
+- Users wait a long time after entering a pairing code.
 
-| 阶段   | 包含的改进          | 预估工作量 | 依赖                     | 说明                                   |
+**Improvement goals**
+- Complete pairing within one to three seconds.
+- Optimize the bottlenecks.
+
+**Measurements required first**
+1. Total time from code entry to successful pairing.
+2. Time spent in each stage.
+   - Frontend submission to backend receipt.
+   - Backend code validation.
+   - TLS handshake if using Relay.
+   - Database writes for trust and endpoint records.
+   - Frontend confirmation through polling or SSE.
+
+**Possible optimizations**
+- Reduce TLS handshakes or use session resumption.
+- Write asynchronously, returning success before background persistence.
+- Replace frontend polling with SSE.
+- Simplify code validation by removing unnecessary checks.
+
+**Undecided**
+- Which stage is the bottleneck? Real measurements are required.
+- Is asynchronous “Pairing in progress” acceptable, showing the device first and marking it Connecting?
+
+---
+
+### I5. Conversation Interaction Redesign (Timeline Styling)
+
+**Current problems**, compared with Codex CLI and Kiro
+- The Timeline is too compact and difficult to read.
+- Code blocks lack line numbers, clear syntax highlighting, and discoverable copying.
+- Tight message spacing causes fatigue in long conversations.
+- Collapse, expansion, and scroll-position controls may be missing.
+
+**References, your images 5 and 6**
+- Image 5 is the current tablet's compact, tightly spaced presentation.
+- Image 6 is the Codex/Kiro desktop style, with more spacing, clear code blocks, and potentially line numbers, copying, and collapsing.
+
+**Improvement goals**
+
+**First stage (D2.5) — Timeline Restyling**
+1. **Spacing and layout**
+   - Increase message spacing from 12px to 20px.
+   - Distinguish User and Agent messages by background or alignment.
+   - Increase maximum width from 740px to 800px.
+
+2. **Enhanced code blocks**
+   - Optional line numbers.
+   - Language label at the top right.
+   - Copy on hover, with Copied feedback.
+   - Syntax highlighting through Prism or highlight.js.
+   - Horizontal scrolling without wrapping long lines.
+
+3. **Collapse long content**
+   - Collapse code blocks longer than 30 lines by default, showing “Expand N lines.”
+   - Collapse Terminal output beyond 500 lines, showing a summary.
+   - Save collapse state in localStorage.
+
+4. **Tool cards**
+   - Distinct icons and colors for reading, searching, and editing.
+   - Red borders and error reasons for failed Tools.
+   - Group consecutive file reads.
+
+5. **Scrolling and navigation**
+   - Jump to Latest when away from the bottom.
+   - Jump to a specific turn when arriving from Inbox or a notification.
+   - Sticky conversation title bar during scrolling.
+
+**Second stage (D2.5+) — Advanced Interactions**
+6. **Message actions**, for later implementation
+   - Edit sent messages and regenerate from that point.
+   - Delete individual messages.
+   - Copy message text.
+   - Reference a message through @ in new input.
+
+7. **Enhanced Diff view**
+   - Sidebar overview showing changed files.
+   - Inline diffs highlighting only changed characters.
+   - Accept This Change, if supported by the protocol.
+
+8. **Conversation export**, for later implementation
+   - Markdown, HTML, and PDF.
+   - Complete messages, code blocks, and Tool calls.
+   - Preserved syntax highlighting and formatting.
+
+---
+
+## 2. Priorities and Dependencies
+
+### Stage Breakdown
+
+| Stage | Improvements | Estimated Effort | Dependencies | Notes |
 | ------ | ------------------- | ---------- | ------------------------ | -------------------------------------- |
-| D2.1   | I1（扁平化电脑层级）+ I3.1（Composer 基础） | 中         | 无                       | 先解决最影响日常使用的两个问题         |
-| D2.2   | I2（Provider 差异化）| 小         | D2.1                     | 新建会话和会话页面的局部调整           |
-| D2.5   | I5（Timeline 重做） | 大         | D2.1                     | 对话交互的全面改进，工作量最大         |
-| D2.4   | I4（配对速度优化）  | 待定       | 测量瓶颈                 | 需要先测量，再决定优化方案和工作量     |
-| X1     | I3.2（语音/附件）   | 大         | D2.1、协议扩展、M2 之后  | 输入框高级功能，和手机端一起做         |
+| D2.1 | I1 (flatten computer hierarchy) + I3.1 (basic Composer) | Medium | None | Address the two issues with the greatest impact on daily use first. |
+| D2.2 | I2 (Provider differentiation) | Small | D2.1 | Local changes to creation and conversation pages. |
+| D2.5 | I5 (Timeline rebuild) | Large | D2.1 | Broad conversation-interaction improvements, with the largest scope. |
+| D2.4 | I4 (pairing speed) | Undecided | Bottleneck measurement | Measure first, then choose optimizations and estimate effort. |
+| X1 | I3.2 (voice/attachments) | Large | D2.1, protocol extensions, after M2 | Advanced input features developed alongside mobile. |
 
-### 推进顺序
+### Implementation Order
 
-**第一批（D2.1）**：
-1. I1 扁平化电脑层级
-2. I3.1 Composer 基础重做
+**First batch (D2.1)**
+1. I1, flatten the computer hierarchy.
+2. I3.1, rebuild the basic Composer.
 
-**第二批（D2.2）**：
-3. I2 Provider 差异化
+**Second batch (D2.2)**
+3. I2, differentiate Providers.
 
-**第三批（D2.5）**：
-4. I5 Timeline 样式重做
+**Third batch (D2.5)**
+4. I5, restyle the Timeline.
 
-**独立优化（D2.4）**：
-5. I4 配对速度（先测量，再排期）
+**Independent optimization (D2.4)**
+5. I4, measure pairing speed before scheduling improvements.
 
-**远期（X1）**：
-6. I3.2 语音输入和附件（M2 之后）
+**Longer term (X1)**
+6. I3.2, voice input and attachments after M2.
 
 ---
 
-## 3. 详细设计
+## 3. Detailed Design
 
-### 3.1 扁平化电脑层级（I1）
+### 3.1 Flatten the Computer Hierarchy (I1)
 
-#### 前端改动
+#### Frontend Changes
 
-**设备页（`/devices`）**：
-- 去掉"Machine"字样和层级
-- 每台物理电脑一个卡片：
-  - 标题：电脑名称（如"Windows 台式机""Mac mini"）
-  - 副标题：在线状态 + 连接方式（"在线 · 同一网络"或"在线 · 经互联网"）
-  - 卡片内容：
-    - 系统和架构（"Windows 11 · x64"）
-    - AI 工具状态（Codex / Claude Code 各一行）
-    - 项目数量（"3 个项目"）
-  - 操作：点击进入该电脑的详情页
+**Devices (`/devices`)**
+- Remove the Machine term and hierarchy.
+- Each physical computer has one card.
+  - Title is its name, such as “Windows desktop” or “Mac mini.”
+  - Subtitle combines online status and connection method, such as “Online · Same network” or “Online · Over internet.”
+  - Card details include the following.
+    - Operating system and architecture, such as “Windows 11 · x64.”
+    - One status row each for Codex and Claude Code.
+    - Project count, such as “3 projects.”
+  - Clicking opens that computer's details.
 
-**设备详情页（`/devices/:computerId`）**：
-- 顶部：电脑名称、在线状态、系统信息
-- 第一节：项目列表（每个项目一张卡片，显示名称、路径、最近活动）
-- 第二节：最近的会话（最近 10 条，按时间排序）
-- 第三节：AI 工具（Codex / Claude Code 的安装和运行状态）
-- 第四节：连接（连接方式、上次在线时间）
-- 底部：添加项目、配对新设备（如果是本机）
+**Device details (`/devices/:computerId`)**
+- Top shows computer name, online status, and system information.
+- First section lists projects, with one card per project showing its name, path, and recent activity.
+- Second section shows the latest 10 conversations in time order.
+- Third section shows AI tool installation and execution states for Codex and Claude Code.
+- Fourth section shows connection method and last online time.
+- Bottom contains Add Project and, for local computers, Pair New Device.
 
-**新建会话（`/conversations/new`）**：
-- 第一步"选择项目"：
-  - 按电脑分组（"这台电脑""Mac mini"）
-  - 每组下面列出该电脑的项目
-  - 离线的电脑和项目显示为灰色不可选
+**New Conversation (`/conversations/new`)**
+- The first step, Select Project, follows these rules.
+  - Group by computer, such as This Computer and Mac mini.
+  - List each computer's projects beneath its heading.
+  - Offline computers and projects are gray and unselectable.
 
-**会话列表和搜索**：
-- 会话行的"设备"字段改为显示电脑名称
-- 搜索结果的分组也按电脑名称
+**Conversation lists and search**
+- Device fields show computer names.
+- Search results also group by computer name.
 
-**边界情况**：
-- 如果一台物理电脑有多个 Machine（如 Windows + WSL）：
-  - 显示为两台电脑，分别命名为"Windows 台式机"和"Windows 台式机 (WSL)"
-  - 项目和会话分别归属到各自的 Machine
-  - 用户可以清楚地看到哪些项目在 Windows 上，哪些在 WSL 上
+**Edge cases**
+- Multiple Machines on one physical computer, such as Windows and WSL, behave as follows.
+  - Display as separate computers named “Windows desktop” and “Windows desktop (WSL).”
+  - Projects and conversations belong to their respective Machines.
+  - Users can clearly identify Windows projects and WSL projects.
 
-#### 后端不变
+#### Backend Remains Unchanged
 
-- Machine 表、项目的 `machine_id`、会话的 `machine_id` 保持不变
-- Protocol v1 的 `/machines` 接口保持不变
-- 前端查询时把同一 `computer_id` 的 Machine 聚合显示
+- Preserve the Machine table and projects' and conversations' `machine_id` fields.
+- Preserve Protocol v1 `/machines` interfaces.
+- Aggregate Machines with the same `computer_id` for frontend display.
 
-#### 术语映射
+#### Terminology Mapping
 
-| 后端/代码     | 前端显示       |
+| Backend or Code | Frontend Display |
 | ------------- | -------------- |
-| Machine       | （不显示）     |
-| Computer      | 电脑           |
-| Node          | （不显示）     |
-| Local Machine | 这台电脑       |
-| Remote Machine| （电脑名称）   |
+| Machine | Hidden |
+| Computer | Computer |
+| Node | Hidden |
+| Local Machine | This computer |
+| Remote Machine | Computer name |
 
 ---
 
-### 3.2 Provider 差异化（I2）
+### 3.2 Provider Differentiation (I2)
 
-#### 新建会话页面
+#### New Conversation Page
 
-**工具选择卡片**（从原来的 Picker 改为卡片列表）：
-- Codex 卡片：
-  - 图标：`>`（终端图标）
-  - 标题：**Codex**
-  - 副标题："完整开发能力"
-  - 能力列表（带图标）：
-    - ✅ 编辑文件
-    - ✅ 执行命令
-    - ✅ 审批确认
-    - ✅ 查看变更
-  - 推荐场景："需要修改代码、运行命令、安装依赖"
-  - 状态：
-    - 可用：显示为蓝色边框，可点击
-    - 不可用：显示为灰色，副标题改为"未安装"或"未登录"
+**Tool cards**, replacing the existing Picker with a card list
+- Codex card follows these specifications.
+  - Icon is `>` (terminal).
+  - Title is **Codex**.
+  - Subtitle is “Full development capabilities.”
+  - Capability list has icons.
+    - ✅ Edit files
+    - ✅ Execute commands
+    - ✅ Approval confirmation
+    - ✅ View changes
+  - Suggested use case is modifying code, running commands, and installing dependencies.
+  - Availability states follow.
+    - Available cards have a blue border and can be clicked.
+    - Unavailable cards are gray, with Not Installed or Not Signed In as the subtitle.
 
-- Claude Code 卡片：
-  - 图标：Claude 图标
-  - 标题：**Claude Code**
-  - 副标题："只读分析和对话"
-  - 能力列表（带图标）：
-    - ✅ 阅读文件
-    - ✅ 搜索内容
-    - ✅ 思考强度
-    - ❌ 编辑文件
-    - ❌ 执行命令
-  - 推荐场景："代码审查、理解项目、回答问题"
-  - 状态：同上
+- Claude Code card follows these specifications.
+  - Use the Claude icon.
+  - Title is **Claude Code**.
+  - Subtitle is “Read-only analysis and conversation.”
+  - Capability list has icons.
+    - ✅ Read files
+    - ✅ Search content
+    - ✅ Reasoning effort
+    - ❌ Edit files
+    - ❌ Execute commands
+  - Suggested use cases are code review, understanding projects, and answering questions.
+  - Availability styling matches the preceding rules.
 
-**推理强度选择**：
-- 只在选择 Claude Code 时显示
-- 用 Segmented Control 或 Slider
-- 选项："低""中""高"（对应 Claude 的 effort）
+**Reasoning effort selection**
+- Show only for Claude Code.
+- Use a segmented control or slider.
+- Low, Medium, and High map to Claude effort.
 
-#### 会话页面
+#### Conversation Page
 
-**标题栏**：
-- 左侧增加 Provider 图标（Codex 用 `>`，Claude 用 Claude 图标）
-- Provider 名称显示在会话标题下方（"Codex""Claude Opus 5.5"）
+**Title bar**
+- Add a Provider icon on the left, using `>` for Codex and the Claude icon for Claude.
+- Show the Provider name beneath the title, such as Codex or Claude Opus 5.5.
 
-**Timeline**：
-- Codex 的编辑操作用蓝色图标（文件、终端、Shell）
-- Claude Code 的只读操作用灰色图标（Read、Grep、Glob）
-- 审批卡片只在 Codex 会话里显示
+**Timeline**
+- Codex edits use blue file, terminal, and Shell icons.
+- Claude Code's read-only operations use gray Read, Grep, and Glob icons.
+- Approval cards appear only for Codex.
 
-**变更面板标题**：
-- Codex："文件变更（3）"
-- Claude Code："查看的文件（2）"
+**Changes panel titles**
+- Codex uses “File changes (3).”
+- Claude Code uses “Viewed files (2).”
 
-**运行说明条**：
-- Codex：显示"停止"按钮
-- Claude Code：不显示"停止"按钮，说明"Claude Code 不支持停止"
+**Running status strip**
+- Codex shows Stop.
+- Claude Code hides Stop and explains “Claude Code does not support stopping.”
 
 ---
 
-### 3.3 Composer 基础重做（I3.1）
+### 3.3 Basic Composer Rebuild (I3.1)
 
-#### 布局
+#### Layout
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Codex · GPT-4              剩余上下文 85%             [▼] │  ← Provider 信息栏
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  [输入框，最少 2 行，最多到视口 40%]                       │
-│                                                             │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  [📎 附件] [🎤 语音]          字数 125     [发送] │  ← 操作栏
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ Codex · GPT-4             Remaining context 85%               [▼]  │  ← Provider information bar
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│ [Input field, at least 2 lines, up to 40% of the viewport]          │
+│                                                                    │
+│                                                                    │
+├────────────────────────────────────────────────────────────────────┤
+│ [📎 Attach] [🎤 Voice]       Characters 125                  [Send] │  ← Action bar
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 功能细节
+#### Functional Details
 
-**Provider 信息栏**：
-- 左侧：Provider 图标 + 名称 + 模型
-- 中间：剩余上下文（进度条 + 百分比）
-- 右侧：下拉菜单（如果支持切换模型）
+**Provider information bar**
+- Left shows Provider icon, name, and model.
+- Center shows remaining context through a progress indicator and percentage.
+- Right contains a dropdown if model switching is supported.
 
-**输入框**：
-- 初始高度：2 行（约 48px）
-- 自动扩展：输入内容超过 2 行时自动增高
-- 最大高度：视口 40%（约 300-400px）
-- 超过最大高度时内部滚动
-- Placeholder：根据 Provider 显示不同提示
-  - Codex："告诉 Codex 要做什么…"
-  - Claude："问 Claude 一个问题…"
+**Input field**
+- Initial height is two lines, approximately 48px.
+- Expand automatically when input exceeds two lines.
+- Maximum height is 40% of the viewport, approximately 300–400px.
+- Scroll internally beyond that height.
+- Placeholders depend on Provider.
+  - Codex uses “Tell Codex what to do…”
+  - Claude uses “Ask Claude a question…”
 
-**快捷键**：
-- Enter：发送（可在设置里改为 Ctrl+Enter）
-- Shift+Enter：换行
-- Ctrl+Up：复制上一轮的输入
-- Esc：清空输入框
-- Ctrl+K：打开命令面板
+**Shortcuts**
+- Enter sends, configurable as Ctrl+Enter in Settings.
+- Shift+Enter inserts a newline.
+- Ctrl+Up copies the previous turn's input.
+- Esc clears input.
+- Ctrl+K opens the command palette.
 
-**操作栏**：
-- 附件按钮（X1 阶段）
-- 语音输入按钮（X1 阶段）
-- 字数统计（实时更新）
-- 发送按钮（输入为空时禁用）
+**Action bar**
+- Attachment button (X1).
+- Voice button (X1).
+- Live character count.
+- Send, disabled for empty input.
 
-**草稿保存**：
-- 每次输入后 500ms 自动保存到 localStorage
-- Key：`composer-draft-${conversationId}`
-- 切换会话时恢复草稿
+**Draft saving**
+- Save automatically to localStorage 500ms after each input change.
+- Use key `composer-draft-${conversationId}`.
+- Restore when switching conversations.
 
 ---
 
-### 3.4 Timeline 样式重做（I5）
+### 3.4 Timeline Restyling (I5)
 
-#### 整体布局
+#### Overall Layout
 
-- 最大宽度：从 740px 增加到 800px
-- 背景：浅色模式 `#fafafa`，深色模式 `#0a0a0a`
-- 消息之间间距：从 12px 增加到 20px
+- Increase maximum width from 740px to 800px.
+- Background is `#fafafa` in light mode and `#0a0a0a` in dark mode.
+- Increase message spacing from 12px to 20px.
 
-#### 消息卡片
+#### Message Cards
 
-**User 消息**：
-- 背景：白色（浅色）/ `#1a1a1a`（深色）
-- 圆角：12px
-- 内边距：16px 20px
-- 边框：无
-- 对齐：左对齐
-- 字体：15px
+**User messages**
+- Background is white in light mode and `#1a1a1a` in dark mode.
+- Corners are 12px.
+- Padding is 16px 20px.
+- No border.
+- Left aligned.
+- Font size is 15px.
 
-**Agent 消息**：
-- 背景：同 User
-- 对齐：左对齐
-- 头像：Agent 图标（Codex 或 Claude）
-- 名称：Codex / Claude（显示在消息上方）
+**Agent messages**
+- Same background as User messages.
+- Left aligned.
+- Avatar uses the Agent icon for Codex or Claude.
+- Show Codex or Claude above the message.
 
-**系统消息**（审批、失败、运行中）：
-- 背景：浅灰色（浅色）/ `#262626`（深色）
-- 边框：2px 实线，颜色根据类型（蓝/橙/红/绿）
-- 圆角：8px
-- 内边距：12px 16px
+**System messages**, including approval, failure, and running states
+- Light-gray background in light mode and `#262626` in dark mode.
+- Solid 2px border, with blue, orange, red, or green according to type.
+- Corners are 8px.
+- Padding is 12px 16px.
 
-#### 代码块
+#### Code Blocks
 
-**基础样式**：
+**Basic appearance**
 ```
-┌─────────────────────────────────────────┐
-│ JavaScript                     [复制] │  ← 标题栏
-├─────────────────────────────────────────┤
-│ 1  const greeting = "Hello, world!";    │  ← 行号 + 代码
-│ 2  console.log(greeting);               │
-│ 3                                       │
-└─────────────────────────────────────────┘
-```
-
-**实现细节**：
-- 标题栏：
-  - 左侧：语言名称（自动检测）
-  - 右侧：复制按钮（悬停时显示）
-  - 背景：`#2d2d2d`（浅色）/ `#1a1a1a`（深色）
-  - 高度：32px
-
-- 代码区：
-  - 行号：浅灰色，右对齐，宽 40px
-  - 代码：等宽字体，语法高亮（使用 Prism.js）
-  - 背景：`#1e1e1e`（浅色）/ `#0d0d0d`（深色）
-  - 内边距：12px
-  - 横向滚动（不自动换行）
-
-- 折叠：
-  - 超过 30 行默认折叠，显示前 10 行 + 后 5 行
-  - 中间显示"展开 N 行"按钮
-  - 点击展开后状态保存到 localStorage
-
-**语法高亮**：
-- 使用 Prism.js 或 highlight.js
-- 支持的语言：JavaScript、TypeScript、Python、Rust、Go、HTML、CSS、JSON、Shell、SQL
-- 自动检测语言（从 markdown 的 fence 或文件扩展名）
-
-#### Tool 卡片
-
-**布局**：
-```
-┌─────────────────────────────────────────┐
-│ [图标] 操作名称             [展开] │  ← 标题栏
-├─────────────────────────────────────────┤
-│ 详细内容（默认折叠）                    │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│ JavaScript                        [Copy]  │  ← Title bar
+├────────────────────────────────────────────┤
+│ 1  const greeting = "Hello, world!";       │  ← Line number and code
+│ 2  console.log(greeting);                  │
+│ 3                                          │
+└────────────────────────────────────────────┘
 ```
 
-**不同类型的样式**：
-- 文件读取：蓝色图标，折叠显示路径
-- 文件编辑：绿色图标，折叠显示路径 + 改动行数
-- 命令执行：橙色图标，折叠显示命令
-- 搜索：紫色图标，折叠显示关键词 + 结果数
-- 失败：红色边框，自动展开显示错误
+**Implementation details**
+- Title bar follows these specifications.
+  - Left contains the automatically detected language.
+  - Right contains Copy, shown on hover.
+  - Background is `#2d2d2d` in light mode and `#1a1a1a` in dark mode.
+  - Height is 32px.
 
-**分组**：
-- 连续的同类 Tool（如 3 次文件读取）合并为一个卡片
-- 标题显示"读取了 3 个文件"
-- 展开后列出每个文件
+- Code area follows these specifications.
+  - Light-gray, right-aligned line numbers in a 40px column.
+  - Monospace code with Prism.js syntax highlighting.
+  - Background is `#1e1e1e` in light mode and `#0d0d0d` in dark mode.
+  - Padding is 12px.
+  - Horizontal scrolling without wrapping.
 
-#### 滚动和定位
+- Collapsing follows these rules.
+  - Above 30 lines, collapse by default to the first 10 and last 5 lines.
+  - Show “Expand N lines” between them.
+  - Save expansion state to localStorage.
 
-**"回到最新"按钮**：
-- 不在底部时显示（距离底部 > 200px）
-- 位置：右下角，浮动按钮
-- 样式：圆形，蓝色背景，向下箭头图标
-- 点击后平滑滚动到底部
+**Syntax highlighting**
+- Use Prism.js or highlight.js.
+- Support JavaScript, TypeScript, Python, Rust, Go, HTML, CSS, JSON, Shell, and SQL.
+- Detect language from the Markdown fence or file extension.
 
-**跳到某一轮**：
-- 从 Inbox 或通知点进来时，URL 带 `?turn=<turnId>`
-- 自动滚动到该 Turn，并高亮 2 秒
-- 高亮样式：黄色背景，渐变消失
+#### Tool Cards
 
-**Sticky 标题栏**：
-- 滚动时会话标题栏固定在顶部
-- 显示会话标题 + Provider + 项目
-- 背景：半透明毛玻璃效果
+**Layout**
+```
+┌─────────────────────────────────────────────┐
+│ [Icon] Operation                  [Expand] │  ← Title bar
+├─────────────────────────────────────────────┤
+│ Details, collapsed by default               │
+└─────────────────────────────────────────────┘
+```
 
----
+**Styles by type**
+- File reads use a blue icon, with path visible while collapsed.
+- File edits use a green icon, with path and changed-line count visible while collapsed.
+- Command execution uses an orange icon, showing the command while collapsed.
+- Search uses a purple icon, showing keywords and result count while collapsed.
+- Failures have a red border and expand automatically to show the error.
 
-### 3.5 配对速度优化（I4）
+**Grouping**
+- Merge consecutive Tools of one type, such as three file reads, into one card.
+- The title reads “Read 3 files.”
+- Expansion lists each file.
 
-#### 测量方案
+#### Scrolling and Navigation
 
-在以下位置添加时间戳日志：
+**Jump to Latest**
+- Show when more than 200px from the bottom.
+- Float at the bottom right.
+- Use a circular blue button with a downward arrow.
+- Clicking scrolls smoothly to the bottom.
 
-**前端**（`apps/web`）：
-1. 用户点击"连接电脑"按钮
-2. 前端发送配对请求
-3. 前端收到配对成功响应
-4. SSE 收到设备上线事件
+**Jump to a specific turn**
+- Links from Inbox or notifications include `?turn=<turnId>`.
+- Automatically scroll to that Turn and highlight it for two seconds.
+- Use a yellow background that fades away.
 
-**后端**（`packages/host`）：
-5. Host 收到配对请求
-6. 验证配对码
-7. 写入信任记录到 SQLite
-8. 写入端点记录到 SQLite
-9. 发起 TLS 握手
-10. TLS 握手完成
-11. 返回配对成功响应
-
-**目标耗时**：
-- 总耗时：≤ 3 秒
-- 各环节：
-  - 前端 → 后端：< 100ms
-  - 验证配对码：< 50ms
-  - 数据库写入：< 200ms
-  - TLS 握手：< 1s
-  - 后端 → 前端：< 100ms
-  - SSE 推送：< 500ms
-
-#### 可能的优化
-
-**如果 TLS 握手慢**：
-- 使用 TLS session resumption
-- 预连接（在输入配对码时就建立连接）
-
-**如果数据库写入慢**：
-- 改为异步写入（先返回成功，后台持久化）
-- 使用事务批量写入
-
-**如果轮询慢**：
-- 前端改为 SSE 推送
-- 后端主动推送"设备上线"事件
-
-**如果验证慢**：
-- 配对码验证逻辑简化
-- 去掉不必要的加密/解密
+**Sticky title bar**
+- Keep the conversation title bar at the top while scrolling.
+- Show conversation title, Provider, and project.
+- Use a translucent frosted-glass background.
 
 ---
 
-## 4. 实现计划
+### 3.5 Pairing Speed Optimization (I4)
 
-### D2.1 — 扁平化 + Composer 基础
+#### Measurement Plan
 
-**文件改动**（预估）：
-- `apps/web/app/(main)/devices/page.tsx`：设备页重构
-- `apps/web/app/(main)/devices/[id]/page.tsx`：设备详情页重构
-- `apps/web/app/(main)/conversations/new/page.tsx`：新建会话的项目选择器
-- `apps/web/components/composer/composer.tsx`：Composer 组件重写
-- `apps/web/components/composer/provider-info-bar.tsx`：新增 Provider 信息栏
-- `packages/client`：新增聚合 Machine 的工具函数
+Add timestamp logs at the following points.
 
-**工作量**：约 2-3 天
+**Frontend (`apps/web`)**
+1. User clicks Connect Computer.
+2. Frontend sends the pairing request.
+3. Frontend receives success.
+4. SSE receives the device-online event.
 
-**测试**：
-- 设备页显示正确的电脑数量和名称
-- 新建会话时项目按电脑分组
-- Composer 多行输入和自动扩展
-- 草稿保存和恢复
+**Backend (`packages/host`)**
+5. Host receives the pairing request.
+6. Validate the code.
+7. Write the trust record to SQLite.
+8. Write the endpoint record to SQLite.
+9. Start the TLS handshake.
+10. Complete the TLS handshake.
+11. Return success.
 
----
+**Timing targets**
+- Total duration is ≤ 3 seconds.
+- Stage targets follow.
+  - Frontend → Backend under 100ms.
+  - Code validation under 50ms.
+  - Database writes under 200ms.
+  - TLS handshake under 1s.
+  - Backend → Frontend under 100ms.
+  - SSE delivery under 500ms.
 
-### D2.2 — Provider 差异化
+#### Possible Optimizations
 
-**文件改动**（预估）：
-- `apps/web/app/(main)/conversations/new/page.tsx`：工具选择卡片
-- `apps/web/app/(main)/conversations/[id]/page.tsx`：会话页标题栏和说明
-- `apps/web/components/timeline/timeline.tsx`：Tool 卡片样式
-- `apps/web/components/timeline/approval-card.tsx`：只在 Codex 会话显示
-- `apps/web/components/changes-panel/changes-panel.tsx`：标题区分
+**If TLS handshakes are slow**
+- Use TLS session resumption.
+- Connect in advance while the code is being entered.
 
-**工作量**：约 1-2 天
+**If database writes are slow**
+- Write asynchronously, returning success before background persistence.
+- Batch writes in a transaction.
 
-**测试**：
-- 新建会话时能看到两个 Provider 的能力差异
-- Codex 会话有审批和停止，Claude 会话没有
-- 变更面板标题正确
+**If polling is slow**
+- Replace frontend polling with SSE.
+- Push device-online events from the backend.
 
----
-
-### D2.5 — Timeline 样式重做
-
-**文件改动**（预估）：
-- `apps/web/components/timeline/timeline.tsx`：整体布局和间距
-- `apps/web/components/timeline/message-card.tsx`：消息卡片样式
-- `apps/web/components/timeline/code-block.tsx`：代码块重写
-- `apps/web/components/timeline/tool-card.tsx`：Tool 卡片重写
-- `apps/web/components/timeline/scroll-to-bottom.tsx`：新增滚动按钮
-- `apps/web/app/(main)/conversations/[id]/page.tsx`：Sticky 标题栏
-- `packages/ui/src/components/code-block.tsx`：共享的代码块组件
-
-**依赖**：
-- Prism.js 或 highlight.js（语法高亮库）
-
-**工作量**：约 3-4 天
-
-**测试**：
-- 代码块有行号和复制按钮
-- 长代码块默认折叠
-- 滚动时标题栏固定
-- "回到最新"按钮正确显示和隐藏
+**If validation is slow**
+- Simplify pairing-code validation.
+- Remove unnecessary encryption and decryption.
 
 ---
 
-### D2.4 — 配对速度优化
+## 4. Implementation Plan
 
-**工作量**：待定（先测量瓶颈）
+### D2.1 — Flattening and Basic Composer
 
-**预估**：1-2 天（如果瓶颈明确）
+**Estimated file changes**
+- `apps/web/app/(main)/devices/page.tsx` reworks Devices.
+- `apps/web/app/(main)/devices/[id]/page.tsx` reworks device details.
+- `apps/web/app/(main)/conversations/new/page.tsx` updates project selection.
+- `apps/web/components/composer/composer.tsx` rebuilds Composer.
+- `apps/web/components/composer/provider-info-bar.tsx` adds the Provider bar.
+- `packages/client` adds Machine aggregation helpers.
 
----
+**Effort** — Approximately two to three days.
 
-## 5. 距离"最终目标"
-
-按 `docs/ROADMAP.md` v4 阶段，桌面端的完整规划：
-
-**已完成**：
-- ✅ D1：桌面 v4 基础（`v0.1.0-alpha.2`）
-- ✅ B0：远程访问上线
-- ✅ B1：跨设备验收通过
-
-**进行中**：
-- 🔄 U1：一键更新（设计完成，等审核）
-- 🔄 D2：桌面体验改进（本文档）
-
-**未开始**：
-- ⬜ B4：远程管理（设计完成，待实现）
-- ⬜ P1：多工具支持（OpenCode 等）
-- ⬜ E1：账号设备模型（登录同一账号 + 配对码）
-- ⬜ X1：输入框高级功能（语音、附件，M2 之后）
-
-**距离"可以日常使用"**：
-- D2 完成后，桌面端的核心体验问题解决
-- 再加上 U1（更新）和 B4（远程管理），可以作为日常主力工具
-
-**距离"完整的 v4 规划"**：
-- 还需要 P1（多工具）、E1（账号模型）、X1（输入框增强）
-- 平板和手机端也在并行推进（T1a 安卓已完成，I1 iPad 在验收）
+**Tests**
+- Correct computer counts and names on Devices.
+- Projects grouped by computer during conversation creation.
+- Multiline input and automatic Composer growth.
+- Draft saving and restoration.
 
 ---
 
-## 6. 决定的事项（2026-11-09 你的确认）
+### D2.2 — Provider Differentiation
 
-**Q1. I1（扁平化）— Windows + WSL 的情况**：
-- ✅ 采用方案 B：显示为两台电脑，分别命名为"Windows 台式机"和"Windows 台式机 (WSL)"
-- 项目和会话分别归属到各自的 Machine
-- 用户可以清楚地看到哪些项目在 Windows 上，哪些在 WSL 上
+**Estimated file changes**
+- `apps/web/app/(main)/conversations/new/page.tsx` adds tool cards.
+- `apps/web/app/(main)/conversations/[id]/page.tsx` updates conversation headings and explanations.
+- `apps/web/components/timeline/timeline.tsx` updates Tool styling.
+- `apps/web/components/timeline/approval-card.tsx` appears only for Codex.
+- `apps/web/components/changes-panel/changes-panel.tsx` differentiates panel titles.
 
-**Q2. I2（Provider 差异化）— Timeline 样式**：
-- ✅ 不做不同的前端页面或主题色
-- 差异化体现在：根据 Codex/Claude Code 的不同功能，动态显示/隐藏界面元素（审批、停止、编辑）
-- 保持统一的设计语言
+**Effort** — Approximately one to two days.
 
-**Q3. I3（Composer）— 会话内切换模型**：
-- ✅ 必须做，对齐原生 app 体验
-- Codex 可以切换 OpenAI 模型（GPT-4、o1 等）
-- Claude 可以切换 Claude 模型（Opus、Sonnet）和思考强度
-- 需要协议扩展：新增会话内切换模型的接口
-
-**Q4. I3（Composer）— 重新生成和分支对话**：
-- ✅ 暂时不做，放到后续完成
-
-**Q5. I4（配对速度）— 异步模式**：
-- ✅ 先测量瓶颈，再决定优化方案
-
-**Q6. I5（Timeline）— 编辑消息和导出对话**：
-- ✅ 编辑已发送的消息：应该有，但放到后续完成
-- ✅ 导出对话：放到后续完成
-
-**核心目标**（你的原话）：
-> 我们的目标是在这个 app 上使用 codex 或者 claude 应该分别与原生的 app 的体验感一致。
+**Tests**
+- Capability differences are visible when choosing a Provider.
+- Codex shows approval and stop, while Claude does not.
+- Changes-panel titles are correct.
 
 ---
 
-## 7. 附录：参考截图
+### D2.5 — Timeline Restyling
 
-- 图 5：当前平板的紧凑 Timeline（你提供的截图）
-- 图 6：Codex/Kiro 的桌面 Timeline（你提供的截图）
+**Estimated file changes**
+- `apps/web/components/timeline/timeline.tsx` updates overall layout and spacing.
+- `apps/web/components/timeline/message-card.tsx` updates message cards.
+- `apps/web/components/timeline/code-block.tsx` rebuilds code blocks.
+- `apps/web/components/timeline/tool-card.tsx` rebuilds Tool cards.
+- `apps/web/components/timeline/scroll-to-bottom.tsx` adds the scroll button.
+- `apps/web/app/(main)/conversations/[id]/page.tsx` adds a sticky title bar.
+- `packages/ui/src/components/code-block.tsx` provides the shared code-block component.
 
-（截图已保存在 `C:\Users\Administrator\AppData\Local\Temp\claude\...`，需要复制到 `docs/ux-redesign/screenshots/` 目录）
+**Dependency**
+- Prism.js or highlight.js for syntax highlighting.
+
+**Effort** — Approximately three to four days.
+
+**Tests**
+- Code blocks have line numbers and Copy.
+- Long blocks collapse by default.
+- The title bar remains fixed while scrolling.
+- Jump to Latest appears and hides correctly.
+
+---
+
+### D2.4 — Pairing Speed Optimization
+
+**Effort** — Undecided, pending bottleneck measurement.
+
+**Estimate** — One to two days if the bottleneck is clear.
+
+---
+
+## 5. Distance from the Final Goal
+
+The complete desktop plan follows the v4 stages in `docs/ROADMAP.md`.
+
+**Completed**
+- ✅ D1, desktop v4 foundation (`v0.1.0-alpha.2`).
+- ✅ B0, remote access launched.
+- ✅ B1, cross-device acceptance passed.
+
+**In progress**
+- 🔄 U1, one-click updates, design complete and awaiting review.
+- 🔄 D2, desktop experience improvements in this document.
+
+**Not started**
+- ⬜ B4, remote management, design complete and awaiting implementation.
+- ⬜ P1, multi-tool support, including OpenCode.
+- ⬜ E1, account-device model using shared account sign-in and pairing codes.
+- ⬜ X1, advanced input with voice and attachments, after M2.
+
+**Distance from everyday usability**
+- D2 resolves the core desktop experience problems.
+- With U1 updates and B4 remote management, desktop can serve as a primary everyday tool.
+
+**Distance from the complete v4 plan**
+- P1 multi-tool support, E1 account model, and X1 input enhancements remain.
+- Tablet and phone work also proceeds in parallel. Android T1a is complete, and iPad I1 is in acceptance.
+
+---
+
+## 6. Decisions Confirmed by You (2026-11-09)
+
+**Q1. I1, flattening Windows and WSL**
+- ✅ Adopt option B, showing two computers named “Windows desktop” and “Windows desktop (WSL).”
+- Projects and conversations belong to their respective Machines.
+- Users can clearly distinguish projects on Windows from those on WSL.
+
+**Q2. I2, Provider differentiation and Timeline style**
+- ✅ Use a common frontend and theme colors.
+- Dynamically show or hide approval, stop, editing, and other elements according to Codex and Claude Code capabilities.
+- Preserve a unified design language.
+
+**Q3. I3, model switching within a conversation**
+- ✅ Required to align with the native app experience.
+- Codex can switch OpenAI models such as GPT-4 and o1.
+- Claude can switch Claude models such as Opus and Sonnet, plus effort.
+- Extend the protocol with an interface for switching models inside a conversation.
+
+**Q4. I3, regeneration and conversation branching**
+- ✅ Defer both to later work.
+
+**Q5. I4, asynchronous pairing**
+- ✅ Measure bottlenecks before choosing optimizations.
+
+**Q6. I5, message editing and conversation export**
+- ✅ Sent-message editing should be supported, but later.
+- ✅ Defer conversation export.
+
+**Core goal**, translated from your words
+> Our goal is that using Codex or Claude in this app should feel consistent with their respective native apps.
+
+---
+
+## 7. Appendix — Reference Screenshots
+
+- Image 5 is the current tablet's compact Timeline, from your screenshot.
+- Image 6 is the Codex/Kiro desktop Timeline, from your screenshot.
+
+The screenshots are saved under `C:\Users\Administrator\AppData\Local\Temp\claude\...` and need copying into `docs/ux-redesign/screenshots/`.

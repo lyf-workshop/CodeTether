@@ -1,24 +1,24 @@
-# CodeTether 图标（定稿：双卡片）
+# CodeTether Icon (Final Design, Double Cards)
 
-之前的两版已放弃：方向 A（蓝底白色连线）太普通；风筝配色不好看。这一版按 Apple 应用图标的做法来：一个形状，从上往下的柔和渐变，白色主体，轻微的层次和阴影，不加文字和细节。
+The previous two versions were abandoned. Direction A, white connecting lines on blue, was too generic, and the kite's colors did not work well. This version follows Apple's application-icon approach, using one shape, a soft top-to-bottom gradient, a white main element, and subtle depth and shadow, without text or extra details.
 
-图形是前后叠着的两张圆角卡片：
-- 前面的白卡片是你手边这台设备，上面是命令提示符 `>` 和光标 `_`，表示 AI 工具在这里干活。
-- 后面半透明的卡片是你的另一台设备。
+The mark consists of two overlapping rounded cards.
+- The white front card represents the device at hand. Its command prompt `>` and cursor `_` indicate that the AI tool works here.
+- The translucent rear card represents another device you own.
 
-配色：
-- 主题色是紫色。底色从上到下 `#b28cff` 渐变到 `#7146f0`（淡紫到蓝紫），上半部分有一层很淡的白色高光。
-- 前卡片白色，底部微微发灰 `#eef1f8`，下面有一层深紫色的柔和投影。
-- 后卡片白色，透明度 32%。
-- 提示符和光标是 `#9a6bff` 到 `#6a3ce8` 的渐变，和底色同一色系。
-- 选紫色是为了和常见的蓝色开发工具图标拉开，同时放在界面蓝色 `--ct-accent` 旁边也不冲突。橙、绿、石墨和上一版蓝色的对比见 `../v3/compare.html`，换色只改颜色，图形不变。
+Colors follow these specifications.
+- Purple is the primary color. The background gradients from `#b28cff` at the top to `#7146f0` at the bottom, from lavender to blue-violet, with a faint white highlight over the upper half.
+- The front card is white, shading slightly to `#eef1f8` at its bottom, with a soft deep-purple shadow beneath it.
+- The rear card is white at 32% opacity.
+- The prompt and cursor gradient from `#9a6bff` to `#6a3ce8`, in the same color family as the background.
+- Purple distinguishes the app from common blue developer-tool icons while remaining compatible with the UI's blue `--ct-accent`. Compare orange, green, graphite, and the previous blue version in `../v3/compare.html`. Color variants change only the colors, preserving the geometry.
 
-| 文件 | 用途 |
+| File | Purpose |
 |---|---|
-| `codetether-app.svg` | 主图，铺满。Windows 的 48、64、128、256 像素和其他 PNG |
-| `codetether-app-small.svg` | 16、24、32 像素专用：卡片放大，去掉投影和高光，提示符加粗，用纯色 `#7a4cf2` |
-| `codetether-app-macos.svg` | macOS：图形 824 像素居中，四周透明留边 100 像素，带 Apple 模板那样的底部投影 |
+| `codetether-app.svg` | Main artwork, full bleed. Used for Windows at 48, 64, 128, and 256 pixels and other PNG exports. |
+| `codetether-app-small.svg` | Dedicated 16, 24, and 32-pixel artwork. Larger cards, no shadow or highlight, heavier prompt, and solid `#7a4cf2`. |
+| `codetether-app-macos.svg` | macOS artwork, centered at 824 pixels with a 100-pixel transparent margin and a bottom shadow like Apple's template. |
 
-按 Chromium 渲染后逐像素取色，16 像素时还能看出后卡片、白色前卡片和上面的 `>_`。真实任务栏和托盘的样子要在安装后截图确认。
+Pixel-by-pixel color sampling after Chromium rendering confirms that the rear card, white front card, and `>_` remain recognizable at 16 pixels. Confirm the actual taskbar and tray appearance with screenshots after installation.
 
-Windows 托盘用的是应用图标里的 16 像素那一层，所以小尺寸版本也决定托盘的样子。macOS 菜单栏的单色模板图标以后再做（要改原生代码并在 Mac 上验证）。
+The Windows tray uses the 16-pixel layer of the application icon, so the small-size artwork also determines tray appearance. A monochrome macOS menu-bar template icon is deferred, requiring native code changes and validation on a Mac.

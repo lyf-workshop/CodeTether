@@ -1,373 +1,373 @@
-# 08 · 远程管理（B4）
+# 08 · Remote Management (B4)
 
-日期：2026-11-05。依据：07 §6、03 §4 的 B4、04 的 P1 / P2 / P5 / P6 / P9 / C3 / C4、`main` `b668e53` 的代码。
+Date: 2026-11-05. Based on 07 §6, B4 in 03 §4, 04 P1/P2/P5/P6/P9/C3/C4, and code at `main` `b668e53`.
 
-B4 让平板和 iPad 能做电脑上剩下的那些管理操作：浏览文件夹、添加和移除项目、找出并导入以前的会话、项目内搜索、置顶、重命名、恢复。界面在 T1b 和 I1 里做，B4 只做后端和电脑上的浏览入口。
+B4 enables remaining desktop management operations from tablets/iPad: folder browsing, project add/remove, prior-session discovery/import, project search, pinning, renaming, and restoration. T1b/I1 implement UI. B4 implements backend and desktop browsing only.
 
-## 1. 用的人看到什么
+## 1. User Experience
 
-界面按 07 的原型。B4 定的是每个操作的行为和提示，不是新的布局。
+Follow the 07 prototype. B4 defines operation behavior/messages without a new layout.
 
-### 平板和 iPad
+### Tablet and iPad
 
-- **添加项目**（07 的 03-07 至 03-09）：选设备 → 浏览文件夹 → 名称 → 找到以前的会话，勾选导入。
-  - 打开时停在这台电脑的用户目录，只显示文件夹，不显示文件。点一个文件夹进去，点“上一级”回到上一层；往上可以一直到磁盘根目录，Windows 上再往上是各个盘。
-  - 打不开的文件夹，点进去只说原因（没有权限，或者读取超时），不报错弹窗。列表里不提前标“无法打开”：Mac 实测里授权前的属性检查都成功，看不出来（§3.3）。隐藏文件夹默认不显示，有一个“显示隐藏文件夹”的开关。
-  - 名称默认用文件夹名，可以改。
-- **以前的会话**：添加项目的最后一步和项目页里都能用。扫描时显示“正在查找以前的会话”，可以取消。结果按 AI 工具分组，每条显示标题、上次使用、能不能继续、是不是已经导入过。勾选后导入，已经导入过的不能再勾。
-- **项目页**（07 的 03-04 至 03-06）：
-  - “会话 / 已归档”两个分段。置顶的排在最上面，其余按最近活动排序。
-  - 项目内搜索按标题和你发过的内容找，结果带一段匹配的文字。
-  - 移除项目要确认。有会话的项目不能移除，提示“这个项目还有会话，先归档或在电脑上处理后再移除”，不提供强制删除。
-- **会话的更多菜单**：置顶、取消置顶、重命名、归档、恢复。归档 B1 已经做了，B4 补另外几项。
-- 这些操作对经由电脑访问的设备同样可用，浏览和扫描都发生在那台设备上。
+- **Add Project** (07 03-07–03-09): device → browse folder → name → select/import previous conversations.
+  - Start in the computer's user directory, showing folders only. Tap to descend, Up to ascend, through disk root. On Windows, ascending further lists drives.
+  - Opening an inaccessible folder shows an inline permission/timeout reason, without alert dialogs. Do not prelabel inaccessible children. Mac attribute checks succeed before permission, so cannot predict this (§3.3). Hide hidden folders by default, with a Show Hidden Folders switch.
+  - Default the editable name to the folder name.
+- **Previous Conversations**: available at the final add step and project page. Show searching status with cancellation. Group by tool, showing title, last use, resumability, and imported state. Already imported items cannot be selected again.
+- **Project** (07 03-04–03-06):
+  - Conversations / Archived segments. Pinned first, then recent activity.
+  - Search titles/user input with a matching-text preview.
+  - Confirm removal. Projects containing conversations cannot be removed. Explain that conversations remain and require archiving or desktop handling first. Offer no forced deletion.
+- **Conversation More**: pin, unpin, rename, archive, restore. B1 already supports archive. B4 adds the rest.
+- Indirect devices support these operations too, with browsing/scanning executed on the target device.
 
-### 电脑上（04 P9）
+### Desktop (04 P9)
 
-- 给配对设备添加项目时，现在只能输入完整路径（`apps/web/src/components/projects/add-project-fields.tsx:193`）。B4 改成和本机一样可以浏览，手动输入完整路径保留，作为浏览的补充。
-- 本机添加项目继续用系统的文件夹选择窗口，不改。
+- Adding projects on paired devices currently requires full paths (`apps/web/src/components/projects/add-project-fields.tsx:193`). Add browsing like local projects, retaining manual path entry as a supplement.
+- Local projects retain the native folder picker.
 
-### 文案
+### Wording
 
-沿用 06 §1：界面上不出现 Host、Node（E1 之后）、Machine、ProductDevice、Supervisor、Relay、授权、grant、指纹。错误只说发生了什么、怎么办：
+Follow 06 §1. UI excludes Host, Node (after E1), Machine, ProductDevice, Supervisor, Relay, authorization, grant, and fingerprint. Errors explain events and recovery:
 
-- “没有权限打开这个文件夹。请在 Mac 的“系统设置 › 隐私与安全性 › 文件和文件夹”里，允许 CodeTether 访问，然后重试。”（macOS 上被系统拒绝，`systemPrivacy` 为真。经由电脑访问的设备，名字写 codetether-node）
-- “Mac 上可能弹出了授权窗口。请在 Mac 上点“允许”，然后重试。”（macOS 上读取超时）
-- “没有权限打开这个文件夹。”（`systemPrivacy` 不为真时，包括其他系统，和 macOS 上普通的文件夹权限不足）
-- “这个文件夹读取超时，可能是网络盘。可以重试。”（其他系统上读取超时）
-- “这台电脑正在等其他文件夹的授权或读取，请稍后再试。”（浏览名额占满，见 §3.3。macOS 设备上后面加一句“如果 Mac 上弹出了授权窗口，请先在 Mac 上处理。”）
-- Mac 上授权窗口和系统设置里的名字：Host 是 CodeTether（实测里桌面那一轮显示成 codetether，没查原因），Node 是 codetether-node。B4 验收时在 Mac 上核对 Host 的名字，再改上面的文案。
-- “这个文件夹已经添加过了，请打开已有项目。”
-- “这个项目还有会话，不能移除。”
-- “查找结果过期了，请重新查找。”
-- “这台电脑现在连不上，请确认它开着并且联网。”
-- “这台设备没有使用这台电脑的权限。”（只有查看权限的设备）
+- "You do not have permission to open this folder. In Mac System Settings › Privacy & Security › Files and Folders, allow CodeTether access, then retry." For macOS system denial with `systemPrivacy: true`. For indirect devices, name codetether-node.
+- "A permission dialog may be open on the Mac. Click Allow there, then retry." For macOS read timeout.
+- "You do not have permission to open this folder." When `systemPrivacy` is not true, including other OSes and ordinary macOS permissions.
+- "Reading this folder timed out. It may be a network drive. You can retry." For other OS timeouts.
+- "This computer is waiting for other folder permissions or reads. Try again shortly." When browsing slots are full (§3.3). On Mac append guidance to handle any permission dialog there first.
+- macOS dialog/settings names: Host is CodeTether (one desktop run showed lowercase codetether, unexplained), Node is codetether-node. Verify Host naming during B4 acceptance and adjust wording.
+- "This folder has already been added. Open the existing project."
+- "This project still has conversations and cannot be removed."
+- "The discovery results expired. Search again."
+- "This computer is unreachable. Make sure it is on and connected to the internet."
+- "This device does not have permission to use this computer." For view-only devices.
 
-## 2. 现在的代码（`main` `b668e53` 上核实）
+## 2. Current Code (Verified at `main` `b668e53`)
 
-- **远程操作走 Supervisor**。请求是 `supervisor.request`，按 `operation` 区分，协议版本 1（`packages/supervisor-transport/src/protocol.ts:417`）。B1 的操作在 `supervisorB1OperationSchema`（同文件 :372），本机对应的执行在 `apps/host/src/api/supervisor-operations.ts:71` 的 `executeSupervisorB1Operation`。
-- **权限只有一种**。连接时的授权范围是 `supervisor_read` 或 `supervisor_control`（`packages/supervisor-transport/src/server.ts:54`）。控制操作在 `isSupervisorControlOperation`（同文件 :710）里列出，没有控制权限就抛 `operation_not_allowed`（:539）。
-- **变更都带 `actionId`**，格式 `act_` 加 6 到 96 个字符（`packages/protocol/src/ids.ts:63`）。Host 的 `#executeAction` 按 actionId 去重：同一个 actionId 配同样的内容直接返回上次的结果，配不同的内容报冲突。作用域是每个操作自己的，见 §3.1。
-- **响应帧**（`protocol.ts:517`）只有 `ok`、`data`、`code`、`httpStatus`。`code` 只有 8 个值：`invalid_request`、`operation_not_allowed`、`not_found`、`conflict`、`unsupported`、`unavailable`、`session_expired`、`internal`。`httpStatus` 只允许 409 或 422，而且只在 `code` 是 `unsupported` 时出现（:542）。
-- **错误被压扁了**。失败响应在 `server.ts:646` 构造，只带 `code` 和（仅 `unsupported` 时的）`httpStatus`。`supervisorReadErrorCode`（`server.ts:803`）按码名认 6 个值，外加 `runtime_unavailable` 和 `provider_unavailable` 映射成 `unavailable`，其余全部变成 `internal`。它不看 HTTP 状态。所以 `project_has_conversations`、`conversation_archived`、`machine_unreachable` 这些本机已经有的原因，远程都看不到。B3 要把发送失败的原因透出来（03 §4 的 B3），B4 用同一套办法，见 §3.2。
-- **大小限制**：
-  - 手机和平板的 Rust 核心每个请求不超过 16 KiB，单次等待 8 秒（`packages/supervisor-mobile/src/wire.rs:13-14`）。响应结构 `Response`（:571）用了 `deny_unknown_fields`，但 `data` 是不检查内容的 `Value`，所以返回里加字段不会让旧版本的核心解析失败；请求侧的 `Operation`（:652）由 Kotlin 传来的 JSON 解析（`lib.rs:140`），枚举带 `deny_unknown_fields`（:650），未知操作和未知字段都会被拒绝。核心和 Kotlin 打在同一个安装包里，旧版本发不出新操作和新字段，这是预期的。
-  - Supervisor 的实际帧上限是 16 KiB，不是 256 KiB：服务端（`packages/supervisor-transport/src/server.ts:9`）用的是 machine-transport 的 `FramedMachineConnection`，按 `machineTransportLimits.maximumFrameBytes` 16 KiB 限制；`supervisorTransportLimits.maximumFrameBytes` 写的 256 KiB（`constants.ts:12`）线上不生效。Rust 核心读响应帧也按 16 KiB（`wire.rs:373`）。列表的行数据被压到 12 KiB 以内（`supervisor-operations.ts:20` 的 `maximumRowsBytes`），但 `machine.get` 这类详情没有限制，真实数据下会超限，被报成 `internal`（2026-11-07 安卓和 iPad 真机验收发现，修复见 `docs/reviews/b1-supervisor-internal-fix-prompt.md`）。B4 新增的每个操作，包括详情，都要放得进 16 KiB 的帧。
-  - 电脑和 Node 之间的帧上限是 16 KiB（`packages/machine-transport/src/constants.ts:26`）。
-- **会话目录缺置顶**。`SupervisorConversationDirectoryItem`（`apps/host/src/persistence/conversation-store.ts:265`）没有 `pinnedAt`，`listSupervisorConversations`（:3403）的查询也不取 `pinned_at`，排序只按 `last_activity_at`。本机侧栏是置顶优先的（`apps/web/src/components/app-shell/workspace-sidebar-model.ts:128`）。
-- **本机已有、远程还没有的**：
-  - 添加项目：`createProject`（`host-service.ts:3266`）和 `createRemoteProject`（:2393），请求都是 `actionId`、可选 `name`（1 到 240）、`path`（1 到 4096）（`packages/protocol/src/commands.ts:79`、:93）。
-  - 移除项目：`deleteProject`（`host-service.ts:3290`）。有会话（含已归档）或有进行中的操作时拒绝，原因 `project_has_conversations`（`host-service.ts:10009`）。
-  - 扫描以前的会话：`discoverProviderSessions`（`host-service.ts:2569`）。一次最多扫 60 秒、100 页（`host-service.ts:299-300`）；同一个项目、设备、AI 工具、路径的扫描会合并成一次（:6269 的 key）；结果快照保留 5 分钟、最多 4000 条（`provider-session-discovery-registry.ts:24-26`）；过期的游标报 `provider_session_candidate_expired`（`host-service.ts:2596`）。
-  - 导入：`adoptProviderSession`（`host-service.ts:2707`），用 `candidate_` 开头的短期引用，不暴露 AI 工具自己的会话编号。
-  - 搜索：`searchProjectConversations`（`host-service.ts:2524`）。查询最多 256 个码元、160 个字素；每页默认 25、最多 100；匹配文字最多 1024 个码元、160 个字素；游标以 `csc_` 开头、最多 2048（`packages/protocol/src/conversation-search.ts:10`）。
-  - 置顶、取消置顶、重命名、恢复：`pinConversation`（:3108）、`unpinConversation`（:3127）、`renameConversation`（:3088）、`unarchiveConversation`（:3176）。标题 1 到 240 个码元、最多 160 个字素，会先做 NFC 规范化（`packages/protocol/src/records.ts:49`）。
-- **项目没有重命名**。本机只有会话重命名（`local-http-server.ts:1808` 的 PATCH 只改会话标题），没有项目重命名的接口。07 §4 的项目页写了“重命名和移除”，其中的重命名指会话，不指项目。B4 不做项目重命名。
-- **文件夹浏览是新的**。本机用系统选择窗口（`apps/desktop/src-tauri/src/project_directory_picker.rs:4`），Node 侧只有单个路径的校验 `project_location.validate`（`packages/machine-transport/src/messages.ts:439`，处理在 `apps/node/src/node-service.ts:740`），没有列目录的能力。
-- **电脑操作另一台电脑**走 `POST /api/v1/remote-supervisor/sessions/:id/operations`（`local-http-server.ts:676`），请求体用 `supervisorB1OperationSchema` 校验。桌面端的远程客户端在 `apps/web/src/runtime/account/remote-supervisor.ts`。
+- **Remote operations use Supervisor**. `supervisor.request` distinguishes `operation`, protocol 1 (`packages/supervisor-transport/src/protocol.ts:417`). B1 schema is `supervisorB1OperationSchema` (:372). Local executor is `executeSupervisorB1Operation` at `apps/host/src/api/supervisor-operations.ts:71`.
+- **One permission scope** per connection: `supervisor_read` or `supervisor_control` (`packages/supervisor-transport/src/server.ts:54`). `isSupervisorControlOperation` (:710) lists controls. Missing control permission throws `operation_not_allowed` (:539).
+- **Mutations carry `actionId`**, `act_` plus 6–96 characters (`packages/protocol/src/ids.ts:63`). Host `#executeAction` returns the previous result for identical actionId/content and conflict for different content. Each operation has its own scope (§3.1).
+- **Response frames** (`protocol.ts:517`) contain only `ok`, `data`, `code`, `httpStatus`. Codes: `invalid_request`, `operation_not_allowed`, `not_found`, `conflict`, `unsupported`, `unavailable`, `session_expired`, `internal`. `httpStatus` is only 409/422 and appears only with `unsupported` (:542).
+- **Errors are flattened**. `server.ts:646` builds failures using code and unsupported-only status. `supervisorReadErrorCode` (`server.ts:803`) recognizes 6 names, maps `runtime_unavailable`/`provider_unavailable` to `unavailable`, and everything else to `internal`, ignoring HTTP status. Existing local reasons such as `project_has_conversations`, `conversation_archived`, `machine_unreachable` disappear remotely. B3 exposes send reasons (03 §4), and B4 shares that mechanism (§3.2).
+- **Size limits**:
+  - Mobile Rust requests are at most 16 KiB with an 8-second wait (`packages/supervisor-mobile/src/wire.rs:13-14`). `Response` (:571) denies unknown fields, but its unvalidated `data: Value` tolerates extra data fields. `Operation` (:652) parses Kotlin JSON (`lib.rs:140`) with `deny_unknown_fields` (:650), rejecting unknown operations/fields. Kotlin/core ship together, so old versions cannot send extensions, as expected.
+  - Actual Supervisor frames are 16 KiB, not 256 KiB. Server (`packages/supervisor-transport/src/server.ts:9`) uses machine transport `FramedMachineConnection` and `machineTransportLimits.maximumFrameBytes`. `supervisorTransportLimits.maximumFrameBytes` declares 256 KiB (`constants.ts:12`) but is ineffective. Rust also reads 16 KiB (`wire.rs:373`). List rows fit 12 KiB (`maximumRowsBytes`, `supervisor-operations.ts:20`), but unbounded details such as `machine.get` can exceed the frame and become `internal`, observed on Android/iPad devices on 2026-11-07. See `docs/reviews/b1-supervisor-internal-fix-prompt.md`. Every B4 operation, including detail, must fit 16 KiB.
+  - Computer/Node frames are 16 KiB (`packages/machine-transport/src/constants.ts:26`).
+- **Directory lacks pinning**. `SupervisorConversationDirectoryItem` (`apps/host/src/persistence/conversation-store.ts:265`) has no `pinnedAt`. `listSupervisorConversations` (:3403) omits `pinned_at`, sorting only by `last_activity_at`. Local sidebar uses pinned first (`apps/web/src/components/app-shell/workspace-sidebar-model.ts:128`).
+- **Local operations missing remotely**:
+  - Add: `createProject` (`host-service.ts:3266`) / `createRemoteProject` (:2393), taking `actionId`, optional `name` (1–240), and `path` (1–4096), per `packages/protocol/src/commands.ts:79`, :93.
+  - Remove: `deleteProject` (`host-service.ts:3290`), rejecting any conversations, including archives, or active operations with `project_has_conversations` (`host-service.ts:10009`).
+  - Discover: `discoverProviderSessions` (`host-service.ts:2569`), at most 60 seconds/100 pages (`host-service.ts:299-300`), coalesced by project/machine/tool/path (:6269 key). Snapshots last 5 minutes and hold at most 4000 items (`provider-session-discovery-registry.ts:24-26`). Expired cursors yield `provider_session_candidate_expired` (`host-service.ts:2596`).
+  - Import: `adoptProviderSession` (`host-service.ts:2707`), using short-lived `candidate_` references without native session IDs.
+  - Search: `searchProjectConversations` (`host-service.ts:2524`). Query ≤256 code units/160 graphemes, default page size 25/maximum 100, preview ≤1024 code units/160 graphemes, `csc_` cursor ≤2048 (`packages/protocol/src/conversation-search.ts:10`).
+  - Pin/unpin/rename/restore: `pinConversation` (:3108), `unpinConversation` (:3127), `renameConversation` (:3088), `unarchiveConversation` (:3176). Titles 1–240 code units/≤160 graphemes, NFC-normalized (`packages/protocol/src/records.ts:49`).
+- **No project rename**. Local PATCH at `local-http-server.ts:1808` changes conversation titles only. The Rename in 07 §4 refers to conversations. B4 excludes project rename.
+- **Folder browsing is new**. Local native picker is `apps/desktop/src-tauri/src/project_directory_picker.rs:4`. Node only validates one path with `project_location.validate` (`packages/machine-transport/src/messages.ts:439`, handler `apps/node/src/node-service.ts:740`), without directory listing.
+- **Desktop-to-desktop operations** use `POST /api/v1/remote-supervisor/sessions/:id/operations` (`local-http-server.ts:676`), validating `supervisorB1OperationSchema`. Client: `apps/web/src/runtime/account/remote-supervisor.ts`.
 
-## 3. 怎么实现
+## 3. Implementation
 
-门控、`actionId` 幂等、忙碌时的冲突、运行中不能归档，全部和本机一致，和 06 §3.6 同一条规则。
+Match local permission gates, actionId idempotency, busy conflicts, and active-archive denial, following 06 §3.6.
 
-### 3.1 新增远程操作
+### 3.1 New Remote Operations
 
-除了 `conversation.search`，全部要求控制权限，加进 `isSupervisorControlOperation`。只读的 `folder.list` 也算控制操作：能看文件夹本身就是新开放的能力，不能让只有查看权限的设备用。`conversation.search` 只要查看权限（§6 第 3 项）。
+All except `conversation.search` require control and join `isSupervisorControlOperation`. Read-only `folder.list` is control because external-folder visibility is a new capability, unavailable to view-only devices. Search needs viewing only (§6 item 3).
 
-| 操作                         | 作用                             | 复用                                                                |
+| Operation | Purpose | Reuse |
 | ---------------------------- | -------------------------------- | ------------------------------------------------------------------- |
-| `folder.list`                | 列一台设备上一个文件夹的子文件夹 | 新的。本机直接读，经由电脑访问的设备走 §3.5 的新消息                |
-| `project.create`             | 添加项目                         | 本机设备用 `createProject`，其他设备用 `createRemoteProject`        |
-| `project.remove`             | 移除项目                         | `deleteProject`                                                     |
-| `provider-sessions.discover` | 查找以前的会话                   | `discoverProviderSessions`，但改成 §3.4 的短等待加轮询              |
-| `provider-sessions.adopt`    | 导入一条以前的会话               | `adoptProviderSession`                                              |
-| `conversation.search`        | 项目内搜索                       | `searchProjectConversations`，返回按 12 KiB 截断                    |
-| `conversation.pin`           | 置顶或取消置顶                   | `pinConversation` / `unpinConversation`，请求里带 `pinned: boolean` |
-| `conversation.rename`        | 重命名会话                       | `renameConversation`，标题用 `ManualConversationTitleSchema`        |
-| `conversation.restore`       | 恢复已归档的会话                 | `unarchiveConversation`                                             |
+| `folder.list` | List a folder's child folders | New local reads and §3.5 messages for indirect devices |
+| `project.create` | Add project | Local `createProject`, other devices `createRemoteProject` |
+| `project.remove` | Remove project | `deleteProject` |
+| `provider-sessions.discover` | Find previous conversations | `discoverProviderSessions`, adapted to short wait/polling in §3.4 |
+| `provider-sessions.adopt` | Import one prior conversation | `adoptProviderSession` |
+| `conversation.search` | Project search | `searchProjectConversations`, bounded to 12 KiB |
+| `conversation.pin` | Pin/unpin | `pinConversation` / `unpinConversation`, target `pinned: boolean` |
+| `conversation.rename` | Rename conversation | `renameConversation`, `ManualConversationTitleSchema` |
+| `conversation.restore` | Restore archive | `unarchiveConversation` |
 
-另外改一个已有的读取：`conversation.list` 的每一项加上 `pinnedAt`（没有置顶就不带这个字段），并新增可选的 `archived` 过滤（`active`、`archived`、`all`，**默认 `all`**）。默认必须是 `all`：现在的 `conversation.list` 不区分归档，T1a 的项目页拿到全部会话后在客户端自己过滤（`apps/android/app/src/main/java/org/codetether/app/remote/RemoteSupervisor.kt:116`），默认改成 `active` 会让已经装上的版本漏掉已归档的会话。排序改成和本机侧栏一样：置顶的在前，按置顶时间倒序，其余按最近活动倒序。
+Extend existing `conversation.list` items with optional `pinnedAt`, omitted when unpinned, and optional `archived` filter (`active`, `archived`, `all`), **default `all`**. Existing lists do not filter archives. Installed T1a projects filter after fetching everything (`apps/android/app/src/main/java/org/codetether/app/remote/RemoteSupervisor.kt:116`), so default active would hide archived items. Sort like local sidebar: descending pin time first, then descending activity.
 
-旧版本不受影响，但原因要说准确：
+Compatibility reasons must be accurate:
 
-- 返回侧：Rust 核心的 `Response`（`wire.rs:571`）用了 `deny_unknown_fields`，帧上多一个字段会让它解析失败；它能容忍的是 `data` 里面多字段，因为 `data` 是不检查内容的 `Value`，Kotlin 侧用 `org.json`，多一个 `pinnedAt` 会被忽略。
-- 请求侧：旧版本的 `conversation.list` 本来就没有 `archived` 这个字段，发出的请求不带它，靠服务端的默认值 `all`。`Operation` 从 Kotlin 传来的 JSON 解析（`lib.rs:140`），未知操作和未知字段都拒绝（`wire.rs:647-651`），所以 Kotlin 要传 `archived`，核心必须同时加上这个字段；两者在同一个安装包里，一起升级。
+- Response: Rust `Response` (`wire.rs:571`) rejects extra envelope fields. Only `data: Value` tolerates additions, and Kotlin `org.json` ignores additional `pinnedAt`.
+- Request: old clients omit `archived`, relying on server default all. `Operation` parsing (`lib.rs:140`, `wire.rs:647-651`) rejects unknown fields/operations, so adding Kotlin `archived` requires the matching core update, packaged together.
 
-T1b 和 I1 之后的版本再传 `archived`，不必再整页取回来自己滤。
+Later T1b/I1 versions can send `archived` instead of retrieving and filtering complete lists.
 
-变更类操作的 `actionId` 规则和本机相同：
+Mutation actionId scopes match local operations:
 
-- `project.create` 的作用域按目标设备分。本机设备走 `createProject`，作用域是全局的 `'project.create'`（`host-service.ts:3266`）；其他设备走 `createRemoteProject`，作用域是 `project.remote.create:<machineId>`（:2393）。重复提交返回同一个项目。
-- `project.remove` 的作用域是 `project.delete:<projectId>`（`host-service.ts:3290`）。
-- `provider-sessions.adopt` 的作用域是 `provider.session.adopt:<projectId>:<machineId>`，和 `adoptProviderSession`（`host-service.ts:2719`）一致。
-- `conversation.pin`、`conversation.rename`、`conversation.restore` 的作用域是会话，和本机的 `pinConversation`、`renameConversation`、`unarchiveConversation` 一致。
+- `project.create`: global `'project.create'` through local `createProject` (`host-service.ts:3266`), or `project.remote.create:<machineId>` via remote creation (:2393). Duplicate submission returns the same project.
+- `project.remove`: `project.delete:<projectId>` (`host-service.ts:3290`).
+- `provider-sessions.adopt`: `provider.session.adopt:<projectId>:<machineId>`, matching `adoptProviderSession` (`host-service.ts:2719`).
+- Pin/rename/restore: conversation scope, matching their local functions.
 
-#### 没收到结果时怎么办
+#### When No Result Arrives
 
-B4 的写操作不能用 `action.get` 查结果。`action.get` 只查发消息的 actionId（`apps/host/src/api/supervisor-transport-manager.ts:322` 调的是 `getTurnForStartAction`），其他 actionId 一律返回 `not_found`。B4 不扩展 `action.get`：那要把每个 actionId 的结果存进数据库，需要新的迁移，换来的只是重发能做到的事。
+B4 writes cannot query `action.get`. It only calls `getTurnForStartAction` for message-send IDs (`apps/host/src/api/supervisor-transport-manager.ts:322`), returning not_found otherwise. Do not expand it. Persisting all action results would require a migration while offering only what retransmission already provides.
 
-Host 的去重记录在内存里（`apps/host/src/api/action-idempotency-cache.ts`）：最多 256 条，满了先挤掉最早结束的，Host 退出时清空，失败的结果也会记住。所以客户端按下面两条处理：
+Host's in-memory `apps/host/src/api/action-idempotency-cache.ts` holds at most 256 records, evicts earliest completed first, clears on exit, and caches failures. Clients follow:
 
-- **没收到响应**（8 秒超时、连接断了）：用同一个 actionId 重发。Host 没重启、记录没被挤掉时，返回第一次的结果，包括第一次的失败。
-- **收到了明确的失败**（`ok: false`）：同一个 actionId 重发只会拿回同一个失败。用户点重试时换一个新的 actionId。
+- **No response**, from 8-second timeout/disconnect: retransmit the same actionId. If Host has not restarted/evicted it, return the first result, including failure.
+- **Explicit `ok: false`**: repeating that actionId repeats the failure. User Retry uses a fresh actionId.
 
-Host 重启过或者记录被挤掉时，重发会再执行一次。所以每个写操作再执行一次必须安全，而且结果能看懂：
+After Host restart/eviction, retransmission executes again. Every write must remain safe and understandable:
 
-- `project.create`：同一个文件夹返回已有项目，`created: false`。
-- `project.remove`：第一次已经删掉的，第二次返回 `not_found`。客户端在“重发移除”时收到 `not_found`，按已经移除处理。
-- `provider-sessions.adopt`：返回 `already_adopted`。
-- `conversation.pin`：请求带的是目标状态 `pinned`，不是“切换”，执行几次结果都一样。`conversation.rename` 同理，标题相同。
-- `conversation.restore`：会话已经是未归档时返回成功和当前会话。执行代理要核对 `unarchiveConversation` 现在是不是这样；如果它对未归档的会话报错，在 Supervisor 这一层把这种情况当成功，不改本机接口。
+- `project.create`: same folder returns existing project with `created` set to `false` (`created: false`).
+- `project.remove`: a repeated completed removal returns `not_found`. A removal retransmission treats this as already removed.
+- `provider-sessions.adopt`: returns `already_adopted`.
+- `conversation.pin`: sends desired `pinned`, rather than toggle, so repetition is safe. Rename repeats the same title.
+- `conversation.restore`: already-active conversation returns success/current conversation. Verify current local behavior. If local unarchive rejects it, normalize at Supervisor without changing local API.
 
-#### 每个操作的请求和返回
+#### Operation Requests and Responses
 
-请求都是 `supervisor.request` 的形状，下面只列各操作自己的字段。返回都放在响应帧的 `data` 里。
+All use `supervisor.request`. Only operation-specific fields are listed below. Results live in response `data`.
 
-`folder.list`（只读，但仍要求控制权限）：
+`folder.list` (read-only, control required):
 
-- 请求：`machineId`、可选 `path`、可选 `cursor`、可选 `includeHidden`（默认 `false`）。
-- 返回：`path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`，`status` 是 `access_denied` 时可带 `systemPrivacy`。字段含义见 §3.3。
+- Request: `machineId`, optional `path`, `cursor`, `includeHidden` (default false).
+- Response: `path`, `status`, optional `parent`/`drives`. Readable includes `folders`, `skipped`, optional `nextCursor`. Access denied may include `systemPrivacy`. See §3.3.
 
-`project.create`：
+`project.create`:
 
-- 请求：`machineId`、`actionId`、`path`（1 到 4096 字节）、可选 `name`（1 到 240 个码元）。
-- 返回：本机设备用 `CreateProjectResponse` 的 `data`，即 `{project, created}`；其他设备用 `CreateRemoteProjectResponse` 的 `data`，即 `{project, location, created}`。`created` 为 `false` 表示这个文件夹已经添加过，返回已有项目，不报错。
+- Request: `machineId`, `actionId`, `path` (1–4096 bytes), optional `name` (1–240 code units).
+- Response: local `CreateProjectResponse` `data` `{project, created}`, remote `CreateRemoteProjectResponse` `data` `{project, location, created}`. Already-added folders return existing data and `created: false`, without failure.
 
-`project.remove`：
+`project.remove`:
 
-- 请求：`projectId`、`actionId`。
-- 返回：`{projectId}`。
+- Request: `projectId`, `actionId`.
+- Response: `{projectId}`.
 
-`provider-sessions.discover`：
+`provider-sessions.discover`:
 
-- 请求：`projectId`、`machineId`、可选 `provider`、可选 `cursor`、可选 `limit`（默认 50，最大 100）、可选 `rescan`（默认 `false`）。
-- 返回：`status`（`scanning` 或 `complete`）。`complete` 时再带 `candidates`、`providers`、可选 `nextCursor`，字段和本机的 `DiscoverProviderSessionsResponse` 相同。`scanning` 时不带候选项。
+- Request: `projectId`, `machineId`, optional `provider`, `cursor`, `limit` (default 50/maximum 100), `rescan` (default false).
+- Response: `status` is `scanning` or `complete`. Complete includes `candidates`, `providers`, optional `nextCursor`, matching local `DiscoverProviderSessionsResponse`. Scanning omits candidates.
 
-`provider-sessions.adopt`：
+`provider-sessions.adopt`:
 
-- 请求：`projectId`、`machineId`、`actionId`、`discoveryCandidateId`。
-- 返回：`{conversation, disposition}`，`disposition` 是 `adopted` 或 `already_adopted`。
+- Request: `projectId`, `machineId`, `actionId`, `discoveryCandidateId`.
+- Response: `{conversation, disposition}`, with `disposition` equal to `adopted` or `already_adopted`.
 
-`conversation.search`：
+`conversation.search`:
 
-- 请求：`projectId`、`query`（1 到 256 个码元、最多 160 个字素）、可选 `archive`（`active`、`archived`、`all`，默认 `active`）、可选 `provider`、可选 `status`、可选 `cursor`、可选 `limit`（默认 25，最大 100）。
-- 返回：`results`、`hasMore`、可选 `nextCursor`，和本机的 `ConversationSearchResponse` 相同。
+- Request: `projectId`, `query` (1–256 code units/≤160 graphemes), optional `archive` (active/archived/all, default active), `provider`, `status`, `cursor`, `limit` (default 25/maximum 100).
+- Response: `results`, `hasMore`, optional `nextCursor`, matching local `ConversationSearchResponse`.
 
-`conversation.pin`、`conversation.rename`、`conversation.restore`：
+`conversation.pin`, `conversation.rename`, `conversation.restore`:
 
-- 请求都带 `machineId`、`projectId`、`conversationId`、`actionId`。`conversation.pin` 另加 `pinned`（`true` 置顶，`false` 取消）。`conversation.rename` 另加 `title`。
-- 返回都是 `{conversation}`，`conversation` 用 `ConversationSummary`。
-- 这三个操作先调用 `getSupervisorConversation(machineId, projectId, conversationId)` 校验这条会话属于这台设备和这个项目，和 B1 的会话操作一样。
+- All requests contain `machineId`, `projectId`, `conversationId`, `actionId`. Pin adds desired boolean `pinned`, rename adds `title`.
+- All return `{conversation}`, with `conversation` using `ConversationSummary`.
+- First validate ownership with `getSupervisorConversation(machineId, projectId, conversationId)`, matching B1.
 
-### 3.2 错误怎么报
+### 3.2 Error Reporting
 
-响应帧不加字段。`supervisorResponseSchema`（`protocol.ts:517`）和 Rust 核心的 `Response`（`wire.rs:571`）都拒绝未知字段，帧上加 `reason` 会让所有现有客户端解析失败。原因放在失败响应的 `data` 里：`data` 在 schema 里是 `z.unknown()`，在 Rust 里是 `Value`，都不检查内容。现在的失败响应（`server.ts:646`）不带 `data`，这是给失败响应补上 `data`，不是改帧的形状。
+Do not add envelope fields. `supervisorResponseSchema` (`protocol.ts:517`) and Rust `Response` (`wire.rs:571`) reject them, so an envelope reason breaks installed clients. Put failure reason inside `data`, whose `z.unknown()` / Rust `Value` permits it. Existing failures (`server.ts:646`) omit data. Adding failure data uses the existing frame shape.
 
-- `code` 按 Host 的错误码归类，不按 HTTP 状态。现有的 `supervisorReadErrorCode`（`server.ts:803`）是按码名认的，兜底是 `internal`，不是按状态归类。B4 的映射是新规则：
+- Map `code` from Host error names, not HTTP status. Existing `supervisorReadErrorCode` (`server.ts:803`) recognizes names and falls back internal. B4 adds this mapping:
 
-  | Host 错误码                                                                                                                                                                                                  | `code`            |
+  | Host error | `code` |
   | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------- |
-  | `not_found`、`project_location_not_found`、`project_location_missing`                                                                                                                                        | `not_found`       |
-  | `conflict`、`project_has_conversations`、`project_location_conflict`、`project_location_has_conversations`、`project_location_local_required`、`conversation_archived`、`provider_session_candidate_expired` | `conflict`        |
-  | `invalid_request`、`project_location_invalid`                                                                                                                                                                | `invalid_request` |
-  | `runtime_unavailable`、`provider_unavailable`、`machine_unreachable`、`machine_connection_failed`、`provider_session_discovery_unavailable`                                                                  | `unavailable`     |
-  | 其余                                                                                                                                                                                                         | `internal`        |
+  | `not_found`, `project_location_not_found`, `project_location_missing` | `not_found` |
+  | `conflict`, `project_has_conversations`, `project_location_conflict`, `project_location_has_conversations`, `project_location_local_required`, `conversation_archived`, `provider_session_candidate_expired` | `conflict` |
+  | `invalid_request`, `project_location_invalid` | `invalid_request` |
+  | `runtime_unavailable`, `provider_unavailable`, `machine_unreachable`, `machine_connection_failed`, `provider_session_discovery_unavailable` | `unavailable` |
+  | Others | `internal` |
 
-- 失败时 `data` 带 `reason`，取值是 Host 的 `HostErrorCode`（`packages/protocol/src/errors.ts:61`）。不在 `HostErrorCode` 里的原因不传，只留 `code`。
-- 本机有三处把路径问题报成 `invalid_request`，真正的原因在 `failure.reason` 里是 `project_location_invalid`（`host-service.ts:10022`、:9899）。`data.reason` 在 `code` 是通用码（`invalid_request`、`conflict`、`unavailable`）时，回退到 `failure.reason`，这样客户端能区分“路径不合法”和“请求格式不对”。`failure.reason` 不在 `HostErrorCode` 里时不回退。
-- 不传 `message`。那是给开发者看的英文句子，界面文案由客户端按 `reason` 决定。
-- 执行还没开始就失败的才这样报。已经开始执行、结果不确定的仍报 `internal`，客户端继续按“结果不确定”处理，这条和 B3 的约定相同。
-- B3 的发送失败也用这个 `data.reason`，两边不要各做一套。谁先做谁把 `supervisorReadErrorCode` 的这层映射提出来共用。
+- Failure `data` includes `reason`, using existing `HostErrorCode` (`packages/protocol/src/errors.ts:61`). Omit unrecognized reasons, retaining code only.
+- Three local path failures use generic `invalid_request` with `project_location_invalid` in `failure.reason` (`host-service.ts:10022`, :9899). For generic invalid_request/conflict/unavailable, fall back to failure.reason only if it is a valid HostErrorCode. This distinguishes invalid paths from malformed requests.
+- Omit developer-facing English `message`. Clients choose UI wording from reason.
+- Apply to failures before execution. Started operations with uncertain results still return internal, preserving B3 uncertainty handling.
+- B3 send failures share `data.reason`. Whichever task implements first extracts shared mapping rather than duplicating it.
 
-### 3.3 浏览文件夹
+### 3.3 Folder Browsing
 
-`folder.list` 的请求：
+`folder.list` request:
 
-- `machineId`：在哪台设备上列。
-- `path`：可省略。省略时列起点：有用户目录就列用户目录，否则列根。Windows 的根是各个盘，其他系统的根是 `/`。
-- `cursor`：可省略，续上一页。
-- `includeHidden`：默认 `false`。
+- `machineId`: target device.
+- Optional `path`: default user directory if available, otherwise root. Windows root lists drives, other systems use `/`.
+- Optional `cursor`: continue a page.
+- `includeHidden`: default `false`.
 
-路径规则：
+Path rules:
 
-- 必须是绝对路径，最长 4096 字节，不能含 NUL，和 `RemoteProjectLocationPathSchema`（`packages/machine-transport/src/messages.ts:263`）同一条边界。
-- 先规范化再读。符号链接按它指向的真实位置算，返回里带规范化后的 `path`，客户端下一层用这个值，不自己拼。
-- 不限制在项目目录里。可以浏览所有文件夹是 2026-11-04 定的：有控制权限的设备本来就能让 AI 工具在这台电脑上执行命令，列目录没有放宽它已有的能力；Relay 只转发加密的流，看不到内容。
+- Absolute, ≤4096 bytes, no NUL, matching `RemoteProjectLocationPathSchema` (`packages/machine-transport/src/messages.ts:263`).
+- Normalize before reading, resolving symlinks to real locations. Return normalized `path`, which clients use for further navigation without joining paths themselves.
+- No project-root restriction. Browsing all folders was approved 2026-11-04. Control-capable devices can already execute tools/commands there, so listing does not expand their authority. Relay sees encrypted streams only.
 
-返回：
+Response:
 
-- `path`：这一层规范化后的路径。起点那一次是用户目录或空字符串（空字符串表示列的是根）。
-- `parent`：上一层的路径。已经在根上时不带。
-- `drives`：只有列根而且是 Windows 时带，每项是 `letter`（如 `C:`）和可选的 `label`。
-- `status`：这一层本身读没读到，三种分开返回：`readable`（读到了）、`access_denied`（没有权限）、`timeout`（3 秒内没读完）。只有 `readable` 带 `folders`、`skipped`、`nextCursor`。三种都是成功的响应（`ok: true`），不走 §3.2 的失败：点进一个打不开的文件夹是正常结果，界面只说原因（§1）。这样也不用为“没有权限”新造一个 `HostErrorCode`。
-- `systemPrivacy`：只在 `status` 是 `access_denied`、系统是 macOS、错误是 `EPERM`（授权被拒绝）时带，值为 `true`。普通的文件夹权限不足是 `EACCES`，不带。客户端据此决定是引导用户去系统设置，还是只说没有权限。
-- `folders`：每项是 `name`、`hidden`。列一层时不打开子文件夹（见下面“不能拖住其他读写”），所以子文件夹上不带能不能打开，点进去由那一层的 `status` 说明。不提前标：Mac 实测里授权前的属性检查都成功，看不出来（§3.3）。
-- `nextCursor`：还有下一页时带。
+- `path`: normalized current level, user directory initially or empty string for root listing.
+- `parent`: preceding level, omitted at root.
+- `drives`: Windows root only, with `letter` such as `C:` and optional `label`.
+- `status`: `readable`, `access_denied`, `timeout` (not complete in 3 seconds). Only `readable` includes `folders`, `skipped`, and `nextCursor`. All are successful `ok: true`, not §3.2 failures. Inaccessible folders are ordinary outcomes explained inline (§1), avoiding a new permission HostErrorCode.
+- `systemPrivacy`: `true` only for macOS `access_denied` with `EPERM` (privacy denial). Ordinary `EACCES` omits it. Clients use this distinction for System Settings guidance.
+- `folders`: `name`/`hidden` entries without child opens or predicted accessibility. Current-level status determines accessibility after navigation. Pre-permission Mac attributes cannot predict it (§3.3).
+- `nextCursor`: present when more results remain.
 
-数量和大小：
+Count and size:
 
-- 一层最多返回 200 个文件夹，同时按字节截断，先到哪个算哪个。单个名字最长 255 字节，超出的跳过并计数。
-- 返回里带 `skipped`：被跳过的条目数，包括名字超长的和不支持的文件名（Windows 上不是合法 Unicode 的）。客户端只在 `skipped` 大于 0 时显示“还有一些文件夹没能显示”。
-- 字节预算按返回给谁算。返回给手机和平板时，行数据沿用 12 KiB。返回给 Node 再转回电脑时，整帧不能超过电脑和 Node 之间的 16 KiB：`path` 和 `parent` 各可到 4096 字节，外壳另计，所以这一路的行数据预算要按 16 KiB 减去路径和外壳来算，不能照搬 12 KiB。
-- 游标不编码路径。路径可到 4096 字节，编码进游标会让游标本身超限。游标是服务端签发的短引用，格式 `fld_` 加一段，校验它对应的路径和 `includeHidden` 一致后继续。游标只在同一次列表里有效，服务端不长期保存列表状态，过期后重新从这一层的开头列。
+- At most 200 folders per level, also byte-bounded, whichever comes first. Skip/count names over 255 bytes.
+- `skipped` counts overlong/unsupported names, including invalid Windows Unicode. Only positive counts show that some folders could not be displayed.
+- Budget by recipient: mobile row data keeps 12 KiB. Node-to-computer whole frames must fit 16 KiB. Path/parent may each consume 4096 bytes plus envelope, so derive row budget by subtraction rather than copying 12 KiB.
+- Cursors must not encode full paths, which may reach 4096 bytes and overflow cursor limits. Use server-issued short `fld_` references bound to matching path/includeHidden. Valid within one listing only, without long-lived state. Restart that level after expiry.
 
-读取行为：
+Read behavior:
 
-- 读一层的超时是 3 秒。超时返回 `status: timeout`，没有权限返回 `status: access_denied`。起点也一样，不让请求失败。
-- 隐藏文件夹的判断：名字以 `.` 开头的，加上 Windows 上带隐藏属性的。默认不返回，`includeHidden` 为真时返回并标 `hidden: true`。Windows 上怎么判断隐藏，见 §6 第 4 项。
+- Three-second level timeout returns `status: timeout`, insufficient permission returns `status: access_denied`, including at the initial location, without request failure.
+- Hidden detection includes a leading `.` and Windows hidden attributes. Omit by default, return with `hidden: true` when enabled. See §6 item 4 for Windows implementation.
 
-不能拖住其他读写：
+Must not block other reads and writes:
 
-- Node.js 的文件操作、`dns.lookup`、部分加密和压缩共用 libuv 线程池，默认 4 个线程，整个进程共用，`worker_threads` 也共用这一个池。一次卡在授权窗口或断开的网络盘上的读取会一直占着一个线程。3 秒超时只是不再等它，线程收不回来，要等系统调用自己返回。
-- 4 个都卡住时，同一进程里的其他文件读写、查找以前的会话都会停下。连 Relay 和账号服务时的域名解析走 `dns.lookup`，也会停下，平板就连不上这台电脑，连超时的提示都看不到。
-- 所以：
-  - 列一层只对这一层做一次目录读取，不打开子文件夹。符号链接要 `stat` 一次才知道指向的是不是文件夹，这次 `stat` 也算一次读取。
-  - 浏览单独限流：Host 和 Node 各自同时最多 2 个还没返回的浏览读取。超时后还没返回的仍然占着名额，直到系统调用真正返回。留下 2 个线程给其他读写；一个文件夹在等授权时，还能浏览别的文件夹。
-  - 同一个规范化路径已经有一个没返回的读取时，不再发起第二个，直接返回 `status: timeout`。
-  - 名额占满时，新的浏览请求立刻失败，`code: unavailable`、`reason: runtime_unavailable`，不排队。客户端显示“这台电脑正在等其他文件夹的授权或读取，请稍后再试。”
-  - 不靠调大 `UV_THREADPOOL_SIZE` 解决：调大只是让卡住的读取多攒几个才出事，线程还是收不回来。
-  - 先不用单独的进程去读：Host 和 Node 都是 Node SEA，每列一层拉一个子进程要多花上百毫秒。Mac 实测里读取最长挂过约 95 分钟，子进程能被杀掉、不占本进程的线程，但子进程触发的授权弹窗算谁的、会不会和 Host、Node 共用同一条授权，都没测过。先用名额限流；实现后如果发现两个名额经常被占满，再单独测这一项。
-- 列盘符同样不能逐个去读：断开的网络盘会让读取卡住，见 §6 第 4 项。
+- Node.js filesystem operations, `dns.lookup`, some crypto/compression share libuv's default 4-thread process-wide pool, including `worker_threads`. A privacy dialog or disconnected network drive can retain a thread indefinitely. The 3-second response timeout does not cancel the OS call or release that thread.
+- Four blocked reads stop other filesystem work/discovery and DNS to Relay/account services. Tablets may lose connectivity and even timeout feedback.
+- Therefore:
+  - One directory read per level, no child opens. Symlink `stat` to determine folder type also counts as a read.
+  - Separate browsing limits per Host/Node process: at most 2 unreturned reads. Timed-out OS calls keep slots until actually returning. Two pool threads remain for other work, and another folder remains browsable during one pending permission.
+  - A second outstanding read for the same normalized path returns timeout immediately.
+  - Full slots immediately fail new browsing with `code: unavailable` / `reason: runtime_unavailable`, without queueing. Explain the pending permissions/reads.
+  - Increasing `UV_THREADPOOL_SIZE` merely postpones exhaustion without reclaiming blocked calls.
+  - Do not initially use separate reader processes. Both Host/Node are Node SEA and launching per level costs hundreds of milliseconds. Real Mac reads hung about 95 minutes. Child processes could be killed without occupying parent threads, but permission attribution/sharing among child/Host/Node is untested. Start with slots, investigating processes only if both slots often remain full.
+- Drive enumeration likewise avoids individual drive reads because disconnected network drives block (§6 item 4).
 
-macOS 的授权窗口（2026-11-05 在 Mac 上实测，macOS 27.0，Apple M4。报告在分支 `spike/b4-mac-folder-access` 的 `docs/reports/B4-MAC-FOLDER-ACCESS-REPORT.md`）：
+macOS permission dialogs, tested 2026-11-05 on macOS 27.0/Apple M4. Report: `docs/reports/B4-MAC-FOLDER-ACCESS-REPORT.md` on `spike/b4-mac-folder-access`:
 
-Mac 上读文件夹的进程有两个，授权分开记：
+Mac has two readers with separate permissions:
 
-- **Host**：桌面应用拉起的 Node SEA 子进程（`apps/desktop/src-tauri/tauri.conf.json` 的 `externalBin`，由 `host_supervisor.rs:255` 以 sidecar 拉起）。平板和 iPad 浏览这台 Mac 自己的文件夹时用它。桌面应用用 ad-hoc 签名（`tauri.macos.conf.json` 的 `signingIdentity: "-"`），`Info.plist` 里没有 `NSDesktopFolderUsageDescription`、`NSDocumentsFolderUsageDescription`、`NSDownloadsFolderUsageDescription`。
-- **CodeTether Node**：launchd 单独启动的用户服务 `com.codetether.node`（`apps/node/src/service-installation.ts:19`），程序在 `~/Library/Application Support/CodeTether/Node/bin/codetether-node`，构建时 ad-hoc 签名（`apps/node/scripts/build-node.mjs:102`）。从 Windows 浏览这台 Mac 时用它（§3.5）。它不是应用的子进程，也没有应用包。
+- **Host**: desktop-launched Node SEA sidecar (`externalBin` in `apps/desktop/src-tauri/tauri.conf.json`, launched by `host_supervisor.rs:255`). Used when tablet/iPad browses the Mac itself. Desktop is ad-hoc signed (`signingIdentity: "-"`, `tauri.macos.conf.json`), without `NSDesktopFolderUsageDescription`, `NSDocumentsFolderUsageDescription`, or `NSDownloadsFolderUsageDescription` in `Info.plist`.
+- **CodeTether Node**: independent launchd user service `com.codetether.node` (`apps/node/src/service-installation.ts:19`), executable `~/Library/Application Support/CodeTether/Node/bin/codetether-node`, ad-hoc signed at build (`apps/node/scripts/build-node.mjs:102`). Used from Windows (§3.5). Neither desktop child nor app bundle.
 
-实测结果（第一次读“桌面”“文稿”“下载”里的内容时，系统在 Mac 上弹授权窗口）：
+Real first reads of Desktop/Documents/Downloads produced Mac permission dialogs:
 
-1. **授权前，属性检查看不出来。** 对这三个文件夹本身和里面的子文件夹做 `stat` 和 `access(R_OK | X_OK)`，都成功、不弹窗（`stat` 不到 2 毫秒，`access` 6 到 27 毫秒）。所以不能用属性判断读不读得进去，列一层时也没法给子文件夹提前标“无法打开”，点进去才知道。拒绝之后 `access` 会返回 `EPERM`，但这时直接 `readdir` 也是立刻 `EPERM`，用不着先查属性。
-2. **`readdir` 在有人处理弹窗前一直不返回，没有上限。** 有人处理的几轮里，最长一次等了 84,969 毫秒，那是用户的反应时间，不是系统的上限。早先没人盯着的几轮，读取分别挂了约 5.8 分钟（最后 `EPERM`）、约 15 分钟（最后 `EPERM`）、约 95 分钟（最后成功）。这几轮没有连续画面，不知道期间弹窗是否一直在，也不知道最后的结果是不是用户操作造成的。设计按“等多久都有可能”处理。远程浏览一台没人在旁边的 Mac 时，平板第一次点“桌面”就会遇到这种情况。
-3. **允许后读取成功；不允许后返回 `EPERM`，再读立刻 `EPERM`（约 0.5 毫秒），没有再弹窗。** 重读是在上一次返回后 12 到 29 秒做的，不是紧接着点击。想改主意只能去 Mac 的“系统设置 › 隐私与安全性 › 文件和文件夹”，每个程序下有桌面、文稿、下载三个开关。“完全磁盘访问权限”里没有出现 Node。
-4. **授权被拒绝是 `EPERM`，普通文件夹权限不足（对照 `chmod 000`）是 `EACCES`，可以区分。**
-5. **授权按程序路径加代码签名记。** 同一个程序重启后，允许保留。Node 的程序内容变了（CDHash 变）后，同一路径再读会再弹；原样复制到另一个路径，也会再弹。Host 重新构建（桌面应用和 sidecar 的 CDHash 都变）后同样再弹。ad-hoc 签名每次构建的 CDHash 都不同，所以每次更新桌面应用或 Node 之后，第一次读这三个文件夹，都要有人在 Mac 上再点一次。
-6. **Host 和 Node 的授权互相独立**，一个允许了不影响另一个。Node 的窗口和设置里的名字是 `codetether-node`。Host 的窗口名字这次看到两种：桌面那一轮是 `codetether`，文稿、下载和重建后是 `CodeTether`，原因没有查。Host 的授权在设置页里记在哪个条目下，这次没有核对。
-7. **卡住的读取会占住线程池。** 同一个进程里有 1 个读取在等授权时，`stat('/tmp')` 和 `dns.lookup('localhost')` 还是毫秒级；4 个同时在等时，两者都被拖住，直到读取返回才完成（Host 拖了 23.5 秒，Node 拖了 30 秒，都是用户点完弹窗才恢复）。所以“同时最多 2 个”是必须的，不是可选的优化。
+1. **Attributes cannot predict permission.** `stat` and `access(R_OK | X_OK)` succeed for protected directories/children before permission, without prompting. Stat took under 2 ms, access 6–27 ms. Therefore child accessibility cannot be premarked. After denial, `access` returns `EPERM`, but `readdir` already does so immediately, making prechecks unnecessary.
+2. **`readdir` waits indefinitely for dialog handling.** The longest attended run was 84,969 ms of user response time, not a system ceiling. Unattended runs hung about 5.8 minutes (EPERM), 15 minutes (EPERM), and 95 minutes (success). No continuous recording establishes dialog persistence or user influence. Treat waiting as potentially unbounded, including a remote tablet's first Desktop tap on an unattended Mac.
+3. **Allow succeeds, denial gives EPERM, subsequent reads immediately EPERM (~0.5 ms), without another prompt.** Retests occurred 12–29 seconds after completion. To reverse denial, use System Settings › Privacy & Security › Files and Folders, with per-program Desktop/Documents/Downloads switches. Node did not appear under Full Disk Access.
+4. **Privacy denial is EPERM, ordinary `chmod 000` denial is `EACCES`**, allowing distinction.
+5. **Permission binds executable path and signing identity.** Restart preserves approval. Changed Node contents/CDHash or identical copy at another path prompts again. Rebuilt Host/Desktop also prompts. Ad-hoc CDHash changes every build, so updates require someone at the Mac to approve first protected-folder access again.
+6. **Host and Node permissions are independent.** Node appears as `codetether-node`. Host dialogs appeared as lowercase `codetether` for Desktop, `CodeTether` for Documents/Downloads and rebuild, cause unexplained. Its exact System Settings entry was not checked.
+7. **Blocked reads occupy the pool.** With one pending read, `stat('/tmp')`/`dns.lookup('localhost')` remain millisecond-scale. Four pending reads block both until dialogs resolve, for 23.5 seconds on Host and 30 seconds on Node. The 2-slot limit is required, not optional optimization.
 
-没测到的：授权窗口的截图；用户一直不处理时的真实上限；外接盘（`/Volumes`）、iCloud Drive、网络盘这类同样会被保护的位置。设计不按路径名单处理，统一按行为处理（3 秒超时加限流）。
+Untested: dialog screenshots, true indefinite unattended ceiling, protected external volumes (`/Volumes`), iCloud Drive, and network drives. Use behavior-based 3-second timeout/limits rather than path allowlists.
 
-由此定下的做法：
+Decisions from these results:
 
-- 3 秒超时和 2 个名额的数字不变。名额按进程算，Host 一份，Node 一份；§3.7 电脑上的浏览入口和 Supervisor 的 `folder.list` 共用 Host 那一份。
-- `status` 保持三种。`access_denied` 在 macOS 上 `errno` 是 `EPERM` 时，再带 `systemPrivacy: true`，让客户端知道要去系统设置里改，不是对所有“没有权限”都这么说。
-- 超时后那次读取不会被取消，继续占着名额，直到系统返回，可能是几分钟。有人在 Mac 上点完后，读取返回，名额释放；用户重试得到的是一次新的读取，这时已经有权限，很快返回。
-- 一台没人在的 Mac 上，两个名额被两个等授权的读取占满后，这台 Mac 上所有浏览都会失败，直到有人在 Mac 上处理弹窗。这是已知的后果，靠提示语说明，不再加办法。
-- 更新桌面应用或 Node 后授权失效，B4 不解决（见 §5）。提示语已经覆盖：第一次读会超时，用户按提示去 Mac 上点“允许”。不加“更新后请重新允许”的主动提示。
-- 这个弹窗只出现在被访问的那台 Mac 上，经由电脑访问时出现在那台设备上，不出现在发起浏览的设备上。
-- 起点（用户目录）和根目录不在受保护的位置里，列出来不应该弹窗。这次实测没有单独测，B4 验收时在 Mac 上确认。
+- Keep 3 seconds/2 slots, separately per Host and Node. Desktop browsing (§3.7) shares Host slots with Supervisor folder.list.
+- Preserve three statuses, adding `systemPrivacy: true` only when macOS `errno` is `EPERM`. Do not send every permission failure to System Settings.
+- Timed-out OS calls remain active and retain slots until returning, potentially minutes later. User approval releases slots. Retrying then starts a fresh fast permitted read.
+- Two unattended protected reads can occupy both slots and reject all browsing until someone handles Mac dialogs. Explain this known outcome without another mechanism.
+- B4 does not preserve permissions across updates (§5). Existing timeout guidance instructs approval. Add no proactive post-update permission message.
+- Dialogs appear on the accessed Mac/device, never the browsing tablet/computer.
+- User-directory/root listing should not prompt because they are unprotected. This was not separately tested. Confirm during B4 Mac acceptance.
 
-### 3.4 查找以前的会话
+### 3.4 Discover Previous Conversations
 
-扫描一次要到 60 秒（`host-service.ts:299`），而客户端 8 秒就超时。`provider-sessions.discover` 不等扫描结束：
+Discovery may take 60 seconds (`host-service.ts:299`) while clients wait 8. Do not wait for completion in `provider-sessions.discover`:
 
-- 请求带 `machineId`、`projectId`、可选的 `provider`、可选的 `cursor`、`limit`（默认 50，最大 100，和本机一致）、可选的 `rescan`（默认 `false`）。
-- 扫描要在 Host 侧保活，不能挂在请求的 signal 上。现在的 `waitForProviderSessionScan`（`host-service.ts:8853`）里，最后一个等待者中止时会把扫描本身也中止；扫描结果只在 `discoverProviderSessions` 完成时才变成快照。所以“等 4 秒后提前返回”如果顺手中止了请求，扫描会被取消，下一轮轮询什么都拿不到。保活的扫描不受单次请求的 signal 影响，完成后自己保存快照。
-- 没有在进行的扫描时发起一次，然后最多等 4 秒。4 秒内完成就直接返回 `status: complete` 和结果。
-- 没完成就返回 `status: scanning`，不带候选项。扫描在服务端继续跑，和本机一样按 `项目\0设备\0AI工具\0路径` 合并，重复请求不会再开一次。
-- 客户端每 3 秒重试同一个请求。扫描完成后，下一次请求返回 `status: complete`、这一页候选项、`providers` 和 `nextCursor`。
-- `rescan` 为真时，丢弃这个项目、设备、AI 工具、路径上已有的快照，重新发起一次扫描。默认 `false`：有未过期的快照就直接用，不重新扫。
-- 带 `cursor` 的请求只读已有的快照，不发起扫描。快照过期（5 分钟）报 `conflict`，`reason` 是 `provider_session_candidate_expired`。
-- 并发扫描数达到上限时，本机现在返回一个 `unavailable` 的页面（`host-service.ts:6287`）。远程改成返回 `status: scanning`，让客户端过几秒再试，不把“忙”说成“找不到”。
-- 候选项的字段和本机的 `ProviderSessionDiscoveryCandidateSchema`（`packages/protocol/src/provider-sessions.ts:74`）相同：标题、AI 工具、创建和上次使用时间、能不能继续、有没有历史记录、是否已导入。已导入的带 `conversationId`。不返回 AI 工具自己的会话编号。
-- 每次扫描都会给候选项生成新的编号（`provider-session-discovery-registry.ts` 的 `createSnapshot`）。重新扫描后，客户端按编号记的勾选会失效。勾选要保持的话，需要一个在同一次快照里稳定、重新扫描后也能对上的引用，而且这个引用不能是 AI 工具自己的会话编号。这一项在写提示词之前要定下来。
-- 返回按字节截断，不能照搬 `boundedRows`。`boundedRows`（`supervisor-operations.ts:26`）只丢行，不给游标；注册表现在的游标按“偏移加本页长度”算（`provider-session-discovery-registry.ts` 的 `#page`），按字节截断后这个偏移会跳过没返回的行。截断时游标要指向第一条没返回的候选项，这需要注册表能在截断处签发游标。
-- 标题按码元计，不按字节。`ProviderSessionDiscoveryCandidateSchema` 的标题上限是 240 个码元（`packages/protocol/src/provider-sessions.ts`），一个中文标题在 UTF-8 里约 720 字节。按字节估算一页能放多少条会偏多。
-- 取消：客户端停止轮询即可。保活的扫描有自己的 60 秒超时，不新增取消操作。
+- Request machineId/projectId, optional provider/cursor, limit default 50/maximum 100 matching local, and rescan default false.
+- Keep the Host scan alive independently of individual request signals. Existing `waitForProviderSessionScan` (`host-service.ts:8853`) cancels when its final waiter aborts, and snapshots appear only after discoverProviderSessions completes. Returning after 4 seconds must not cancel the scan, or subsequent polls have nothing. Retained scans save snapshots on completion themselves.
+- Start if absent and wait at most 4 seconds. Return `status: complete` and results immediately if finished.
+- Otherwise return `status: scanning` without candidates. Continue server-side and coalesce by project\0machine\0tool\0path as locally, without duplicate scans.
+- Poll every 3 seconds using the same request. The first poll after completion returns complete, candidates, providers, nextCursor.
+- Rescan true discards existing matching snapshots and restarts. Default false reuses valid snapshots.
+- Cursor requests read snapshots only. Expiry at 5 minutes returns conflict / provider_session_candidate_expired.
+- Local scan-capacity exhaustion returns an unavailable page (`host-service.ts:6287`). Remotely return scanning for later polling rather than implying no results.
+- Candidate fields match `ProviderSessionDiscoveryCandidateSchema` (`packages/protocol/src/provider-sessions.ts:74`): title, tool, created/last-used time, resumability, history presence, adoption status and conversationId when adopted. No native session IDs.
+- `createSnapshot` in `provider-session-discovery-registry.ts` currently generates new candidate IDs on each scan, invalidating selections. Preserving selection requires stable cross-rescan references without exposing native session IDs. Decide before writing implementation prompts.
+- Bound bytes with resumable cursors, not unmodified `boundedRows`, which drops rows without cursors (`supervisor-operations.ts:26`). `provider-session-discovery-registry.ts` `#page` advances by offset plus page length and would skip byte-truncated rows. It must issue a cursor at the first omitted candidate.
+- Title bounds are code units, not bytes. A 240-code-unit Chinese title can occupy about 720 UTF-8 bytes (`packages/protocol/src/provider-sessions.ts`), reducing estimated page capacity.
+- Cancel by stopping client polling. Retained scans keep their own 60-second deadline. Add no cancellation operation.
 
-导入用 `provider-sessions.adopt`，一次一条，每条一个 `actionId`。批量勾选由客户端逐条发送，这样某一条失败不影响其他条，失败的那条可以单独重试。
+Adopt through `provider-sessions.adopt`, one actionId/item. Clients submit bulk selections individually so failures do not affect other imports and can retry independently.
 
-### 3.5 经由电脑访问的设备
+### 3.5 Devices Accessed Through a Computer
 
-`folder.list` 的目标设备是经由电脑访问的设备时，电脑把请求转给那台设备上的 Node。照 `project_location.validate` 的样子加一对消息：
+For indirect folder.list, forward to that device's Node, adding messages patterned on project_location.validate:
 
-- 请求 `folder.list`：`protocolVersion`、`requestId`、`expectedMachineId`、`expectedNodeId`、可选的 `path`、可选的 `cursor`、`includeHidden`。加进 `apps/node/src/node-service.ts:87` 的 `AuthenticatedRequestSchema`。
-- 返回 `folder.listed`：规范化后的 `path`、`status`、可选 `parent`、可选 `drives`，`status` 是 `readable` 时再带 `folders`、`skipped`、可选 `nextCursor`，`status` 是 `access_denied` 时可带 `systemPrivacy`。
-- 没有权限和超时放在 `folder.listed` 的 `status` 里，不走 `machine.error`，所以不需要新的错误码。其余校验失败走已有的 `machine.error`，复用 `project_location_path_invalid`、`project_location_missing`、`project_location_not_directory`、`project_location_inaccessible`。
-- Node 自己也按 §3.3 限流，同时最多 2 个没返回的浏览读取，名额满时回 `machine.error`，电脑把它报成 `unavailable`、`reason: runtime_unavailable`。错误码用哪个现有值还是新加一个，由执行代理核对 `MachineWireErrorCodeSchema`（`packages/machine-transport/src/messages.ts:1730`）后在报告里说明。
-- 电脑等 Node 回复的时间要比 Node 的 3 秒长，让 Node 先回 `status: timeout`，电脑不自己判超时。
-- 列出的逻辑只写一份，本机和 Node 共用，放在 Node 能依赖的位置。`apps/node/src/project-location-validation.ts` 是同样的拆法：校验逻辑和传输分开，测试可以换掉文件系统。
-- 设备不在线时报 `unavailable`，`reason` 用 `machine_unreachable` 或 `machine_connection_failed`，和 `machineUnavailableError`（`host-service.ts:9788`）的归类一致。
-- 电脑和 Node 之间的帧是 16 KiB。`path` 和 `parent` 各可到 4096 字节，所以这一路的行数据预算按 §3.3 的算法算，不能直接说 12 KiB 留得下。
+- `folder.list` request: `protocolVersion`, `requestId`, `expectedMachineId`, `expectedNodeId`, optional `path`/`cursor`, `includeHidden`. Add to `AuthenticatedRequestSchema` at `apps/node/src/node-service.ts:87`.
+- `folder.listed` response: normalized path/status, optional parent/drives, readable-only folders/skipped/nextCursor, and access_denied optional systemPrivacy.
+- Permission/timeout belong in listed status, not `machine.error`, requiring no new error codes. Other validation reuses `machine.error` codes `project_location_path_invalid`, `project_location_missing`, `project_location_not_directory`, `project_location_inaccessible`.
+- Node enforces 2 outstanding browsing slots (§3.3). Full slots return `machine.error`, mapped by computer to unavailable / runtime_unavailable. The implementing agent chooses an existing/new wire code after checking `MachineWireErrorCodeSchema` (`packages/machine-transport/src/messages.ts:1730`) and reports it.
+- Computer waits longer than Node's 3 seconds so Node can report timeout first.
+- Share one listing implementation at a Node-accessible dependency location, separating transport from filesystem-testable logic like `apps/node/src/project-location-validation.ts`.
+- Offline device returns unavailable with machine_unreachable or machine_connection_failed, matching `machineUnavailableError` (`host-service.ts:9788`).
+- Whole computer/Node frames fit 16 KiB. With path/parent up to 4096 bytes each, derive row budget as §3.3 instead of assuming 12 KiB fits.
 
-### 3.6 大小和超时
+### 3.6 Size and Timeouts
 
-- 每个操作的请求都要能放进 16 KiB。上面这些请求最大的是带 4096 字节路径的 `folder.list`，留有余量。
-- 返回给手机和平板的行数据按 12 KiB 截断。截断处必须给得出继续的位置：`folder.list` 和 `provider-sessions.discover` 给 `nextCursor`，`conversation.search` 给 `nextCursor` 和 `hasMore`。`boundedRows` 只丢行、不给游标，不能直接拿来用；用它的逐条累加算法，但要在截断处签发游标。
-- 搜索的 `matchPreview` 在本机可以到 1024 个码元，远程按页截断后一页可能少于请求的 `limit`，这是正常的，用 `hasMore` 说明。搜索的游标按最后一条已返回结果的排序键编码，不能按请求的 `limit` 编码，否则按字节截断后会跳过没返回的结果。
-- 单次请求的服务端处理不超过 6 秒，给 8 秒的客户端超时留余量。`folder.list` 一层 3 秒是读文件夹的内部等待，不是整次请求的等待。卡住的读取怎么不拖住其他读写，见 §3.3 的“不能拖住其他读写”；数字已经由 Mac 实测确认，见 §3.3。
-- `provider-sessions.discover` 的 4 秒等待是这里唯一一处接近上限的，不再加长。
+- Every request must fit 16 KiB. The largest above, folder.list with 4096-byte path, leaves room.
+- Mobile row data fits 12 KiB with continuation at truncation: nextCursor for folder/discovery and nextCursor/hasMore for search. Reuse boundedRows accumulation, not its cursorless row-dropping behavior.
+- Search `matchPreview` can be 1024 code units locally. Remote byte-bounded pages may be shorter than requested limit, indicated by hasMore. Encode cursors from the last returned result's ordering key, not requested limit, to avoid skipping omissions.
+- Server processing ≤6 seconds leaves room within client 8 seconds. The folder's 3 seconds is an internal wait, not total request duration. Pool protection is in §3.3 and confirmed by Mac tests.
+- Discovery's 4-second wait is the only near-limit operation. Do not extend it.
 
-### 3.7 电脑上的浏览入口
+### 3.7 Desktop Browsing Entry
 
-- 桌面端给配对设备添加项目时，浏览按钮走一个新的本机接口，不绕 Supervisor。Supervisor 是给手机和平板的，电脑操作自己的 Host 不需要再过一遍授权。
-- 新接口复用 §3.5 的同一份列出逻辑，返回格式和 `folder.list` 相同。
-- `add-project-fields.tsx:193` 那句“配对设备暂不支持浏览文件夹”去掉，改成浏览按钮加手动输入。手动输入的路径仍由 Node 按 `project_location.validate` 校验，规则不变。
+- Adding paired-device projects uses a new local browsing endpoint directly, without Supervisor. Desktop-to-own-Host access does not need another mobile authorization layer.
+- Reuse §3.5 listing logic and folder.list response shape.
+- Replace the paired-device browsing-unavailable text at `add-project-fields.tsx:193` with browse/manual entry. Manual paths retain Node project_location.validate checks.
 
-### 3.8 Rust 核心
+### 3.8 Rust Core
 
-`packages/supervisor-mobile/src/wire.rs` 的 `Operation` 枚举加上 §3.1 的 9 个操作，并在 UniFFI 导出的接口上暴露对应的方法。这一层只做请求和返回的传递，不做界面。
+Add all 9 operations from §3.1 to `Operation` in `packages/supervisor-mobile/src/wire.rs`, exposing matching UniFFI methods. This layer forwards requests/results without UI.
 
-- 返回的解析保持 `data` 为 `Value`，不在 Rust 侧解释每个操作的返回。解释放在 Kotlin 和 Swift 侧，和现有操作一致。
-- 失败响应里的 `data.reason` 要透传出去。现在 `MobileError::Failure`（`wire.rs:628`）只有 `code` 和 `httpStatus`，需要能带上 `reason`，否则 T1b 和 I1 拿不到 §1 的那些提示。
-- `conversation.list` 的请求加上可选的 `archived`，默认 `all`，和现在的行为一致，见 §3.1。T1a 的项目页依赖这个默认值，不能改成只返回未归档的。
+- Retain data as Value, with interpretation in Kotlin/Swift, matching existing operations.
+- Forward failure data.reason. `MobileError::Failure` (`wire.rs:628`) currently carries code/httpStatus only and needs reason for T1b/I1 messages.
+- Add optional archived defaultall to conversation.list, preserving T1a's all-record filtering (§3.1), not defaultactive.
 
-## 4. 验收
+## 4. Acceptance
 
-用开发诊断页或一个最小的测试客户端发这些操作，不依赖 T1b 的界面。
+Use development diagnostics or a minimal client, independent of T1b UI.
 
-- **权限**：只有查看权限的连接，§3.1 的每个操作都返回 `operation_not_allowed`；有控制权限的能执行。
-- **浏览**：从用户目录开始，逐层到根，Windows 上能列出各个盘。一层超过 200 个文件夹或放不下时有 `nextCursor`，续页不重复不遗漏。隐藏文件夹默认不出现，打开开关后出现。点进没有权限的文件夹返回 `ok: true`、`status: access_denied`，不报失败。列一层时不打开子文件夹：用测试里换掉的文件系统记下调用，确认只有这一层的一次目录读取和符号链接的 `stat`。
-- **超时和限流**：用测试里换掉的、永远不返回的文件系统。3 秒后返回 `status: timeout`。同一路径再请求立刻返回 `timeout`，不发起第二次读取。两个读取卡住后，第三个浏览请求立刻返回 `unavailable`、`reason: runtime_unavailable`，这时 `project.list`、`conversation.history` 照常返回。卡住的读取返回后名额释放。Node 上同样测一遍。
-- **macOS（在 Mac 上）**：Host 和 Node 各测一遍，桌面、文稿、下载至少各测一次。Host 用 `tccutil reset` 按应用标识清授权，Node 把程序复制到没用过的新路径再启动（不清系统的整类授权）。
-  - 列用户目录和根目录，Mac 上不弹窗。
-  - 第一次点受保护的文件夹：3 秒返回 `timeout`，Mac 上有授权窗口；点“允许”后重试，返回 `readable`。
-  - 点“不允许”后重试：立刻返回 `access_denied`，带 `systemPrivacy: true`。`/tmp` 下 `chmod 000` 的文件夹返回 `access_denied`，不带 `systemPrivacy`。
-  - 两个浏览读取同时在等授权时，`dns.lookup` 和 `project.list` 仍然毫秒级返回。
-  - 记下弹窗和系统设置里的名字，核对 §1 的文案。
-- **重发**：每个 B4 写操作用同一个 actionId 重发，返回第一次的结果；第一次失败时，重发拿回同一个失败。Host 重启后用同一个 actionId 重发：`project.create` 返回 `created: false`，`project.remove` 返回 `not_found`，`provider-sessions.adopt` 返回 `already_adopted`，置顶、重命名、恢复返回成功。
-- **添加和移除**：添加后项目出现在 `project.list` 里。同一个文件夹再添加返回已有项目、`created: false`，不报错；用同一个 `actionId` 重试也返回同一个项目。有会话的项目移除返回 `conflict`、`reason: project_has_conversations`；没有会话的能移除。
-- **以前的会话**：扫描超过 4 秒时先拿到 `status: scanning`，轮询到 `complete`。提前返回不会取消扫描：4 秒时断开等待的那个请求，扫描仍继续，下一轮能拿到结果。同一个扫描不重复发起。`rescan` 为真时丢弃旧快照重新扫。快照过期后带旧游标返回 `conflict`、`reason: provider_session_candidate_expired`。导入一条后，再查到的同一条标已导入；用同一个 `actionId` 重试不导入两次。
-- **截断**：一页候选项或一层文件夹按字节放不下时，`nextCursor` 指向第一条没返回的，续页不跳过。
-- **搜索**：按标题和按内容各查一次，结果带 `matchedField`；一页放不下时 `hasMore` 为真且续页不重复。
-- **置顶、重命名、恢复**：置顶后 `conversation.list` 里该项带 `pinnedAt` 且排在前面；取消后字段消失。重命名超过 240 个码元返回 `invalid_request`。归档的会话恢复后回到“会话”分段。
-- **经由电脑访问的设备**：对一台在线的 Node 做上面的浏览和添加；Node 不在线时返回 `unavailable` 并带 `machine_unreachable` 一类的 `reason`。
-- **错误映射**：上面每个 `reason` 都是 `HostErrorCode` 里已有的值，没有新造的字符串。路径不合法时 `code` 是 `invalid_request`，`reason` 回退到 `project_location_invalid`。
-- **帧大小**：返回给手机和平板的行数据不超过 12 KiB，请求不超过 16 KiB。经由电脑访问的设备那一路，整帧不超过 16 KiB。用一页满的搜索结果和一层满的文件夹核对。
-- 电脑上给配对设备添加项目时能浏览，手动输入完整路径仍然可用。
+- **Permission**: view-only connections return operation_not_allowed for each §3.1 operation. Control connections execute them.
+- **Browse**: user directory through root/drives, >200 or byte-bounded folders give nextCursor without duplicates/omissions. Hidden default off/on works. Permission denial returns ok true/access_denied. Fake-filesystem traces verify only current-level readdir plus symlink stat, with no child opens.
+- **Timeout/limits**: a never-returning fake filesystem yields timeout after 3 seconds. Same-path retry is immediate with no duplicate read. Two blocked reads cause immediate third unavailable/runtime_unavailable, while `project.list`/`conversation.history` keep working. Returning OS calls free slots. Repeat on Node.
+- **macOS**, Host and Node separately, Desktop/Documents/Downloads at least once each. Reset Host permissions by app ID with `tccutil reset`, and copy Node to a fresh path without resetting whole system categories.
+  - User/root listings do not prompt.
+  - First protected navigation returns timeout after 3 seconds and prompts Mac. Allow then retry gives readable.
+  - Deny then retry immediately gives access_denied/systemPrivacy true. `chmod 000` under `/tmp` gives access_denied without systemPrivacy.
+  - With two permission reads pending, dns.lookup/project.list remain millisecond-scale.
+  - Record dialog/settings names and verify §1 messages.
+- **Retransmit**: same B4 actionId returns first result, including failure. After Host restart, same-ID create gives created false, remove not_found, adopt already_adopted, and pin/rename/restore success.
+- **Add/remove**: added projects appear in project.list. Adding an existing folder returns the same project with `created: false`, without error. Retrying with the same actionId returns the original project/result. Conversations block removal with `conflict` / `reason: project_has_conversations`. Empty projects remove.
+- **Discovery**: >4 seconds returns scanning then complete through polling. Disconnect the waiter at 4 seconds and ensure the scan survives. No duplicate scans. Rescan discards snapshot. Expired cursor gives `conflict` / `reason: provider_session_candidate_expired`. Imported candidates are marked, same-ID adopt does not duplicate.
+- **Truncation**: folder/discovery nextCursor points at the first omitted row, preventing skips.
+- **Search**: title/content queries include `matchedField`. Byte-full pages return hasMore and duplicate-free continuation.
+- **Pin/rename/restore**: pin supplies pinnedAt and first ordering, unpin removes the field, titles over 240 code units return invalid_request, restored archives return to Conversations.
+- **Indirect devices**: browse/add on an online Node, with unavailable and machine-unreachable-like reason when offline.
+- **Mapping**: all reasons already exist in HostErrorCode. Invalid path maps to invalid_request with fallback project_location_invalid.
+- **Frame size**: mobile rows ≤12 KiB, requests ≤16 KiB, whole indirect-device frames ≤16 KiB. Verify full search/folder pages.
+- Desktop paired-device Add Project supports browse and manual paths.
 
-## 5. 不在 B4
+## 5. Outside B4
 
-- 平板和 iPad 的界面（T1b、I1）。B4 只保证接口和 Rust 核心的方法。
-- 项目重命名。本机没有这个功能，见 §2。
-- 发送速度和发送失败的提示（B3）。B4 只和 B3 共用 §3.2 的错误映射。
-- 通知和后台保持连接（B2）。
-- `conversation.create` 第二步失败留下空会话、`action.get` 查不到新建会话的 actionId（B3 里顺带处理的两项）。
-- 一台电脑就是一个设备（E1）。B4 仍按现在的方式区分本机设备和经由电脑访问的设备。
-- 桌面应用或 Node 更新后 macOS 授权失效。ad-hoc 签名每次构建的 CDHash 都变，更新后第一次读受保护的文件夹要有人在 Mac 上再点一次（实测见 §3.3）。要不要换成稳定的签名身份来保留授权，由 U1、E1 和分发决定，B4 只靠超时提示说明。
-- 手机上显示哪些管理功能（M 系列）。接口通用，显示由 M 系列决定。
+- Tablet/iPad UI (T1b/I1). B4 provides interfaces/core methods only.
+- Project rename, absent locally (§2).
+- Send speed/errors (B3), sharing §3.2 mapping only.
+- Notifications/background connectivity (B2).
+- Empty conversation after `conversation.create` second-step failure and action.get creation-ID lookup, handled alongside B3.
+- One-computer/one-device flattening (E1). Retain local/indirect distinction.
+- macOS permission retention after desktop/Node updates. Ad-hoc CDHash changes prompt again (§3.3). Stable signing belongs to U1/E1/distribution decisions. B4 explains through timeout guidance.
+- Mobile management presentation (M series). APIs are shared, visible scope decided there.
 
-## 6. 写提示词之前还要定的
+## 6. Decisions Needed Before Prompts
 
-1. macOS 受保护文件夹的行为：已实测（2026-11-05），结论和由此定下的做法写在 §3.3，不再阻塞写提示词。还有三项没查清，都不影响实现：Host 的授权在系统设置里叫什么（B4 验收时在 Mac 上核对）；用户一直不处理时读取的真实上限（设计按没有上限处理）；授权窗口截图没有取得。另外，实测收尾时发现安装版 `/Applications/CodeTether.app` 启动后约 0.45 秒就退出：它是 B1 之前的构建，数据目录已被更新的版本升级到 schema 24。2026-11-06 已换成 `main` 的构建（`docs/reviews/mac-install-b1-prompt.md`），和 B4 的设计无关。
-2. 重新扫描后勾选怎么保持。候选项编号每次扫描都变，需要一个不暴露 AI 工具会话编号的稳定引用，见 §3.4。
-   - 建议：不加字段，把候选项编号本身改成在同一次 Host 运行内稳定。Host 启动时生成一个只在内存里的随机密钥，对“项目、设备、AI 工具、AI 工具的会话编号”算 HMAC，截一段做 `candidate_` 后面的部分（`packages/protocol/src/provider-sessions.ts:24` 要求 16 到 96 个字符）。同一条会话重新扫描后编号不变，勾选自然保留；外面拿不到密钥，从编号反推不出会话编号。Host 重启后编号会变，这时清空勾选，客户端提示重新勾选。
-3. `conversation.search` 现在按控制权限要求。搜索只读已有会话，是否放宽到查看权限，由你定。
-   - 建议：放宽到查看权限。搜索查的是标题和你发过的内容，只有查看权限的设备用 `conversation.list` 和 `conversation.history` 本来就能读到这些，放宽不多给任何东西。`folder.list` 不一样，它看的是项目以外的文件夹，仍要求控制权限。
-   - 2026-11-07：按建议，§3.1 已改。B4a 的提示词照这条写，你发出 B4a 提示词就算确认；不同意的话告诉我再改。
-4. Windows 上列盘符和判断隐藏文件夹，Node.js 都没有现成接口：`fs.Stats` 不带 Windows 的文件属性，也没有列盘符的函数，仓库里也没有这样的代码。对 A 到 Z 逐个 `stat` 不行，断开的网络盘会卡住线程（§3.3）。
-   - 建议：隐藏只按名字判断：以 `.` 开头，或在一个固定名单里（`$Recycle.Bin`、`System Volume Information`、`$WinREAgent`、`Config.Msi`、`Recovery`，以及用户目录下的 `AppData`）。少数用户自己设成隐藏的文件夹会显示出来，可以接受。
-   - 建议：盘符用一次有时限的系统命令取，不经过线程池，命令由执行代理选并在报告里说明。`label` 能顺带拿到就带，拿不到就不带。
+1. macOS protected-folder behavior was tested 2026-11-05 (§3.3), no longer blocking. Unresolved non-blockers: Host System Settings entry (check in acceptance), unattended upper bound (assume unbounded), dialog screenshots. The installed `/Applications/CodeTether.app` also exited about 0.45 seconds after startup because pre-B1 code met schema 24 data. It was replaced with main on 2026-11-06 (`docs/reviews/mac-install-b1-prompt.md`), unrelated to B4 design.
+2. Preserve selections across rescans despite changing candidate IDs, using a non-native stable reference (§3.4).
+   - Proposal: no new field. Make candidate IDs stable per Host lifetime using a random in-memory HMAC key over project/machine/tool/native session ID. Truncate to a candidate_ suffix of 16–96 characters (`packages/protocol/src/provider-sessions.ts:24`). Rescans retain IDs/selections, outsiders cannot reverse them, and Host restart changes IDs. The client clears selections and explains that the user must select again.
+3. Search currently requires control. Decide whether read-only search can use viewing permission.
+   - Proposal: yes, because titles/user content are already readable through `conversation.list` / `conversation.history`. Folder browsing differs by exposing outside-project folders and still requires control.
+   - 2026-11-07: §3.1 adopts this proposal. Issuing the B4a prompt confirms it, otherwise request revision.
+4. Node.js lacks Windows file-attribute/drive enumeration interfaces in `fs.Stats` and repository code. Stat A–Z can block on disconnected drives (§3.3).
+   - Proposal: detect hidden by leading dot or fixed names `$Recycle.Bin`, `System Volume Information`, `$WinREAgent`, `Config.Msi`, `Recovery`, and user `AppData`. Manually hidden exceptions may remain visible, acceptably.
+   - Proposal: use one time-bounded system command for drives outside the thread pool, chosen/reported by implementer. Include labels if available without extra work.
 
-## 7. 实现分轮
+## 7. Implementation Rounds
 
-B4 超过一次审核能看完的大小（`docs/DEVELOPMENT-PROCESS.md` §4），分三轮，每轮一个分支，按顺序做：
+B4 exceeds a single review's size (`docs/DEVELOPMENT-PROCESS.md` §4). Use three sequential branches:
 
-| 轮次    | 内容                                                                                                                                                                                                                                        | 依赖的决定 | 提示词                                           |
+| Round | Contents | Required decision | Prompt |
 | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------------------------------------------------ |
-| **B4a** | 失败响应带原因（§3.2）；`conversation.list` 的 `pinnedAt` 和 `archived`；`project.create`、`project.remove`、`conversation.pin`、`conversation.rename`、`conversation.restore`、`conversation.search`；写操作的帧检查；对应的 Rust 核心方法 | §6 第 3 项 | `docs/reviews/b4a-remote-organization-prompt.md` |
-| **B4b** | `folder.list`（§3.3）、经由电脑访问的设备上的列出（§3.5）、电脑上的浏览入口（§3.7）；对应的 Rust 核心方法                                                                                                                                   | §6 第 4 项 | B4a 审核后再写                                   |
-| **B4c** | `provider-sessions.discover`、`provider-sessions.adopt`（§3.4）；对应的 Rust 核心方法                                                                                                                                                       | §6 第 2 项 | B4b 审核后再写                                   |
+| **B4a** | Failure reasons (§3.2), conversation.list pinnedAt/archived, project.create/remove, conversation.pin/rename/restore/search, write-frame checks, Rust methods | §6 item3 | `docs/reviews/b4a-remote-organization-prompt.md` |
+| **B4b** | folder.list (§3.3), indirect listing (§3.5), desktop entry (§3.7), Rust methods | §6 item4 | After B4a review |
+| **B4c** | provider-sessions.discover/adopt (§3.4), Rust methods | §6 item2 | After B4b review |
 
-T1b 和 iPad 的远程管理界面在 B4 三轮都合进 `main` 以后做。
+T1b/iPad management UI follows after all B4 rounds merge into main.

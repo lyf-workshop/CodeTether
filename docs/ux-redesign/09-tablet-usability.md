@@ -1,118 +1,118 @@
-# 09 · 平板可用性检查（T1）
+# 09 · Tablet Usability Review (T1)
 
-日期：2026-11-08。依据：04 的 S5 和平板列、07、平板原型 `tablet/`、安卓 `fix/t1a-tablet-fidelity` 的 `945c849`（截图在 `D:/Projects/Software/agenthub-archive/t1a-shots/t1a-tablet-fidelity-7-9/`）、联想 TB375FC 的真机验收（`t1a-report.md`）。
+Date — 2026-11-08. References are S5 and the tablet column in 04, 07, the `tablet/` prototype, Android `fix/t1a-tablet-fidelity` at `945c849` (screenshots in `D:/Projects/Software/agenthub-archive/t1a-shots/t1a-tablet-fidelity-7-9/`), and Lenovo TB375FC physical-device acceptance (`t1a-report.md`).
 
-这份文档回答两个问题：平板上最常做的事，现在要几步、顺不顺；哪些地方要改。第 2、3 节是从截图、代码和原型推出来的判断，第 4 节的真机交互测试用来证实或推翻它们。
+This document asks how many steps common tablet tasks take, whether they flow naturally, and what needs to change. Sections 2 and 3 contain inferences from screenshots, code, and prototypes. The physical interaction tests in section 4 should confirm or refute them.
 
-## 1. 平板要做好的事
+## 1. What the Tablet Must Do Well
 
-平板是“舒服地读对话、审阅改动，也能新建和回复”的屏幕（04 第 4 条、03 §0）。按这个定位，常做的事和希望的步数：
+The tablet is a screen for comfortably reading conversations and reviewing changes, while also supporting creation and replies (04 item 4, 03 §0). This positioning suggests the following common tasks and target step counts.
 
-| #   | 要做的事                                        | 希望     |
+| # | Task | Target |
 | --- | ----------------------------------------------- | -------- |
-| T1  | 打开应用，一眼看出哪些会话要我处理、哪些在跑    | 0 步     |
-| T2  | 批准或拒绝一个等待批准的请求                    | 2 步     |
-| T3  | 读完一个会话，逐行看改动，再追加一条指令（S5） | 5 步以内 |
-| T4  | 在某个项目里新建会话                            | 4 步以内 |
-| T5  | 停止一个跑偏的任务                              | 2 步     |
-| T6  | 找到前几天的某个会话                            | 3 步以内 |
-| T7  | 电脑离线、网络断了、被移除以后，知道怎么办      | 不用猜   |
-| T8  | 横竖屏、分屏切换后接着做                        | 不丢东西 |
+| T1 | Open the app and immediately identify conversations needing attention and those running | 0 steps |
+| T2 | Approve or reject a pending approval | 2 steps |
+| T3 | Read a conversation, review line-by-line changes, and add another instruction (S5) | At most 5 steps |
+| T4 | Create a conversation within a project | At most 4 steps |
+| T5 | Stop a task that has gone off track | 2 steps |
+| T6 | Find a conversation from several days ago | At most 3 steps |
+| T7 | Understand what to do when a computer is offline, connectivity fails, or the device is removed | No guessing |
+| T8 | Continue after rotating or switching to split screen | Nothing lost |
 
-## 2. 现在的路径（945c849，从截图和代码推）
+## 2. Current Paths (945c849, Inferred from Screenshots and Code)
 
-| #   | 现在怎么做                                                                                                                         | 步数   | 问题                                                                       |
+| # | Current Path | Steps | Issue |
 | --- | ---------------------------------------------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------------------- |
-| T1  | 首页顶部“需要你处理”，下面每台设备一节                                                                                             | 0      | “需要你处理”里混着运行中的会话；侧栏“待处理”的数字和它对不上（见 P1）      |
-| T2  | 首页点会话 → “允许一次”                                                                                                            | 2      | 顺                                                                         |
-| T3  | 点会话 → 右上角图标打开变更 → 选文件 → 横向拖动读长行 → 关面板 → 点输入框 → 发送                                                  | 6 到 7 | 变更入口是没有文字的图标（P3）；长行只能横向拖（P4）                       |
-| T4  | 项目页点“新建会话” → 打开项目列表选项目 → 选 AI 工具 → 写第一条消息 → 开始                                                       | 5      | 从项目页打开还要再选项目（P2）；第一条消息是单行输入框（P2）               |
-| T5  | 会话里点“停止”                                                                                                                     | 1      | 一点就停，没有确认，也不能撤销（P5）                                       |
-| T6  | 侧栏搜索框 → 输入标题                                                                                                              | 2      | 只搜已经读到的会话标题，搜不到前几天的；搜索框看起来像能搜全部（P6）       |
-| T7  | 离线有提示和“重新检查”；被移除页有“输入配对码”和“看其他电脑”                                                                     | —      | 真机验收已过；慢网和错误提示还没系统看过                                   |
-| T8  | 草稿、会话、变更面板、选中的文件和滚动位置都保留                                                                                   | —      | 模拟器上已过；系统回收进程后的恢复没在真机上做过                           |
+| T1 | Home starts with “Needs your attention,” followed by sections per device | 0 | The attention section includes running conversations, and its count differs from the sidebar Inbox (P1). |
+| T2 | Tap a conversation on Home → “Allow once” | 2 | Smooth |
+| T3 | Open a conversation → Open changes with the top-right icon → Select a file → Drag horizontally to read long lines → Close panel → Tap input → Send | 6 to 7 | Changes uses an unlabeled icon (P3), and long lines require horizontal dragging (P4). |
+| T4 | Click New Conversation on a project page → Open the project list and select a project → Choose AI tool → Write first message → Start | 5 | The project must be selected again even from its page, and the first message uses a single-line field (P2). |
+| T5 | Tap Stop in a conversation | 1 | Stops immediately, without confirmation or undo (P5). |
+| T6 | Sidebar search field → Type title | 2 | Searches only already-loaded titles, missing older conversations. The field appears to search everything (P6). |
+| T7 | Offline notice and Recheck, plus Enter Pairing Code and View Other Computers on the removal page | — | Physical acceptance passed, but slow networks and errors have not been reviewed systematically. |
+| T8 | Draft, conversation, changes panel, selected file, and scroll positions persist | — | Passed on emulator. Restoration after OS process reclamation has not been tested on hardware. |
 
-## 3. 发现的问题和建议
+## 3. Findings and Recommendations
 
-标了“需要你定”的是改原型或改规则，已在第 5 节定下。其余的是实现没有照原型，直接修。
+Items marked “Your decision needed” change the prototype or rules. These were decided in section 5. The others are implementation deviations to fix directly.
 
-**P1 首页“需要你处理”和侧栏“待处理”说的不是一回事（需要你定）**
+**P1 Home's “Needs your attention” and sidebar Inbox mean different things (your decision needed)**
 
-- 现在：首页“需要你处理”是等待批准加上运行中的会话（原型 `screens.js` 的 `live` 就是这么写的）；侧栏“待处理”是等待批准、已完成待查看、失败。截图里一个写 2，一个写 3。运行中的会话不需要你做什么，却排在“需要你处理”里。
-- 这是原型的设计错误，不是实现的错。
-- 建议：首页第一节只放真正要你动手的，和“待处理”用同一份数据，数字一致；运行中的放第二节“正在运行”。每台设备的分组照旧。
+- Home currently combines awaiting-approval and running conversations, as the prototype's `screens.js` `live` selection does. Sidebar Inbox contains awaiting approval, completed awaiting review, and failed. The screenshots show counts of 2 and 3. Running conversations require no user action yet appear in the attention section.
+- This is a prototype design error, rather than an implementation error.
+- Put only items requiring user action in Home's first section, using the same data and counts as Inbox. Put running conversations in a second “Running” section. Keep the device groups.
 
-**P2 新建会话没有按上下文预选（照原型修）**
+**P2 New Conversation ignores its opening context (fix to match prototype)**
 
-- 原型从项目页、设备页、侧栏项目行的“＋”打开时，项目已经选好；实现里总要再选一次（报告写了“沿用手动选择项目”）。
-- 第一条消息是单行输入框，写长一点的指令就看不全。改成多行，至少 4 行高，可以继续长高。
-- 键盘上 Ctrl+Enter 开始。
+- The prototype preselects the project when opened from a project page, device page, or sidebar project-row “+”. The implementation requires selecting it again. The report states that manual project selection was retained.
+- The first message is a single-line field that cannot display longer instructions well. Make it multiline, at least four lines high, with further growth supported.
+- Ctrl+Enter starts from the keyboard.
 
-**P3 变更入口看不出来（需要你定）**
+**P3 Changes is hard to discover (your decision needed)**
 
-- 会话页右上角的变更按钮只有一个图标，没有文字。审阅改动是平板最重要的事（S5），入口应该一眼能看到。
-- 建议：改成带文字的“变更 3”（3 是改了几个文件），没有改动时不显示。
+- The top-right changes button is an unlabeled icon. Reviewing changes is central to the tablet (S5), so the entry should be immediately recognizable.
+- Use a label such as “Changes 3,” where 3 counts changed files, and hide it when there are no changes.
 
-**P4 长行只能横向拖（需要你定）**
+**P4 Long lines require horizontal dragging (your decision needed)**
 
-- 变更面板 420 宽，长的代码行要左右拖着读，竖屏 520 宽也一样。
-- 建议：默认自动换行，面板顶部放一个“换行”开关，关掉后恢复横向滚动。开关记住上次的选择。
+- Code lines require horizontal dragging in the 420-wide panel and the 520-wide portrait overlay.
+- Enable wrapping by default and add a Wrap toggle at the top. Disabling it restores horizontal scrolling. Remember the last choice.
 
-**P5 停止没有确认（需要你定）**
+**P5 Stop lacks confirmation (your decision needed)**
 
-- 一点就停，不能撤销。平板上手掌误触比电脑上多。04 的 A7 计划“批准和停止前先解锁”，还没做。
-- 建议：A7 做之前，停止先弹一个确认：“停止这一轮？已经做了的修改会保留。”A7 做了以后换成解锁。批准不加确认：它是最常用的快捷操作，命令就在卡片上，看得清楚。
+- One tap stops the task irreversibly. Accidental palm input is more common on tablets. A7 in 04 plans unlocking before approval and stop, but is not implemented.
+- Until A7, confirm stopping with “Stop this turn? Changes already made will be kept.” Replace this with unlock once A7 is implemented. Approval needs no extra confirmation because it is the most frequent quick action and its command is visible in the card.
 
-**P6 搜索的范围说得不清楚（B4a 解决）**
+**P6 Search scope is unclear (addressed by B4a)**
 
-- 搜索框看起来能搜全部，实际只搜已经读到的会话标题。
-- B4a 加了服务器端的 `conversation.search` 以后接上。之前，在搜索窗口里写明“只搜索已打开过的会话标题”（实现里已有类似说明，真机上确认看得到）。
+- Search looks global but covers only already-loaded conversation titles.
+- Integrate server-side `conversation.search` after B4a adds it. Until then, state “Searches only titles of previously opened conversations” in the search dialog. Similar wording already exists, so confirm its visibility on hardware.
 
-**P7 选中和复制（待测）**：消息、批准卡里的命令、diff 能不能长按选中复制。平板上常要把一段输出或命令拿去别处，做不到就是 T3 的大问题。
+**P7 Selection and copying (to test)** — Check whether messages, approval commands, and diffs support long-press selection and copying. Tablet users often need to move output or commands elsewhere. Failure is a major T3 issue.
 
-**P8 长会话里的位置（待测）**：往上翻读的时候来了新消息，会不会被拉回底部；有没有“回到最新”。
+**P8 Position in long conversations (to test)** — Determine whether incoming messages pull readers back to the bottom while reading older content and whether a Jump to Latest action exists.
 
-## 4. 怎么验证
+## 4. Validation
 
-真机交互测试：`docs/reviews/t1a-tablet-interaction-test-prompt.md`。它做三件事：
+The physical interaction test prompt is `docs/reviews/t1a-tablet-interaction-test-prompt.md`. It covers three activities.
 
-- 按第 1 节的 T1 到 T8 实际走一遍，记步数、时间、卡住的地方；
-- 查手势、滚动、输入法、选中复制、连点、加载和出错、无障碍、长内容；
-- 请你本人花 15 分钟按 6 个任务用一遍，执行智能体录屏计时，最后问你几个问题。
+- Perform T1–T8 from section 1, recording steps, time, and sticking points.
+- Inspect gestures, scrolling, keyboards, selection and copying, repeated taps, loading and error states, accessibility, and long content.
+- Ask you to spend 15 minutes on six tasks while the executing agent records screen video and timing, then asks a few questions.
 
-问题按三级记：**挡住**（做不完或会出错）、**很麻烦**（能做完但要多走、要猜、要回头）、**小问题**（样子或文字）。测完我把结果补进这一节，定下修复范围。
+Classify findings as **blocking** (cannot complete or produces errors), **cumbersome** (completes but requires extra steps, guessing, or backtracking), or **minor** (appearance or wording). After testing, I will add results here and define the fix scope.
 
-## 5. 定下来的（2026-11-09）
+## 5. Decisions Made (2026-11-09)
 
-你同意了建议，都写进了 07 §4 的“交互规则”和原型（02-01、02-04、02-13、02-14）：
+You accepted the recommendations. They are reflected in 07 §4's Interaction Rules and prototype pages 02-01, 02-04, 02-13, and 02-14.
 
-1. P1：首页第一节只放要你动手的，和“待处理”一致；运行中的单列“正在运行”。
-2. P3：变更入口改成“变更 3”。
-3. P4：diff 默认换行，加“换行”开关。
-4. P5、I7：A7 之前，停止先确认。
-5. I6：iPad 上“设备 › 项目”可以点，左边缘右滑返回。
+1. P1 puts only actionable items in Home's first section, matching Inbox, and separates running conversations into “Running.”
+2. P3 labels the entry “Changes 3.”
+3. P4 enables diff wrapping by default and adds a Wrap toggle.
+4. P5 and I7 require stop confirmation until A7.
+5. I6 makes Device › Project clickable on iPad and supports a rightward swipe from the left edge to return.
 
-iPad 在 r4 里做（第 14 项）。安卓等交互测试的结果出来，和测出来的问题一起写进下一轮修复。
+Implement these on iPad in r4, item 14. For Android, wait for interaction-test results and include these with the discovered issues in the next fix prompt.
 
-## 6. iPad（`30e8b9f`）
+## 6. iPad (`30e8b9f`)
 
-依据：iPad Air 11-inch (M4)、iPadOS 27.2 的真机验收（`~/agenthub-archive/i1-report.md` 的"真机验收（30e8b9f）"），和读 `apps/ios` 代码。真机验收卡在新建会话，后面的交互还没在真机上走过，下面多数是从代码推的，交互测试里证实。
+Based on physical acceptance on iPad Air 11-inch (M4), iPadOS 27.2 (`~/agenthub-archive/i1-report.md`, “Physical-device acceptance (30e8b9f)”), and inspection of `apps/ios`. Acceptance was blocked at conversation creation, leaving later interactions untested on hardware. Most observations below are code inferences to confirm in interaction testing.
 
-P1 到 P8 在 iPad 上一样成立，另外有这些：
+P1–P8 also apply on iPad, with the following additions.
 
-| #   | 级别   | 问题                                                                                                                                                                                                                         | 处理               |
+| # | Severity | Issue | Resolution |
 | --- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| I1  | 挡住   | 新建会话总是"当前会话不支持此操作"：`SupervisorClient.swift:280` 从 AI 工具的能力里读 `providerExecution`，这个字段在设备的能力里（`packages/protocol/src/machines.ts:38`）。模拟器的假数据把它塞进了 AI 工具，所以没测出来 | r4 修              |
-| I2  | 很麻烦 | 后台每 10 秒刷新一次，刷新时 `isBusy` 为真，输入框和发送按钮被禁用（`TabletViews.swift:1224`、`AppModel.swift:847`、`:858`）。正在打字时键盘可能被收起，发送按钮闪灰                                                        | r4 修              |
-| I3  | 很麻烦 | 会话页每 750 ms 轮询一次，失败一次就弹"操作未完成"（`AppModel.swift:841-843`）。离线时关掉又弹                                                                                                                              | r4 修              |
-| I4  | 很麻烦 | 来了新消息就滚到底（`TabletViews.swift:1195`），往上翻读的时候会被拉走，没有"回到最新"。电脑上的规则是只有已经在底部才跟随（AGENTS.md），这是实现的错（P8）                                                                 | r4 修              |
-| I5  | 很麻烦 | 横屏打开变更面板时侧栏不收起（`TabletViews.swift:253` 宽屏总是显示侧栏），会话只剩约 460 pt 宽。07 规定收起                                                                                                                 | r4 修（第 3 项）   |
-| I6  | 很麻烦 | 没有返回：路由是自己写的，不是 `NavigationStack`。横屏没有返回按钮，也不能从左边缘右滑返回，从会话回到项目只能靠侧栏。安卓有系统返回键，所以这个问题只在 iPad 上                                                            | 已定，r4 做        |
-| I7  | 很麻烦 | 发送和停止在同一个位置（`TabletViews.swift:1226`）：点了发送，按钮马上变成停止，连点第二下就把刚开始的这一轮停了                                                                                                            | 已定，r4 做        |
-| I8  | 待测   | 复制：`.textSelection(.enabled)` 在 iOS 上大概只能长按整段复制，不能选其中一部分；diff 每一行是单独一段，一次只能复制一行（P7）                                                                                              | 测完定             |
-| I9  | 待测   | 字号都写死成 `.system(size:)`，系统设置里的"更大字体"大概不起作用                                                                                                                                                            | 测完定             |
-| I10 | 待测   | iPad 上常见的做法都没有：会话行的长按菜单和右键菜单、触控板指针的悬停效果、左滑操作。原型里也没画                                                                                                                            | 测完看用户找不找   |
-| I11 | 小问题 | 新建会话预选第一个可用的项目，不是当前页的项目（P2）；新建窗口里 ⌘↩ 不起作用                                                                                                                                                 | 和 P2 一起修       |
-| I12 | 小问题 | 被移除页的电脑名取的是"第一台不可用的电脑"（`AppModel.swift:884`），有几台电脑时可能写错                                                                                                                                  | r4 修              |
+| I1 | Blocking | New Conversation always reports “This operation is not supported by the current conversation.” `SupervisorClient.swift:280` reads `providerExecution` from tool capabilities, although it belongs to device capabilities (`packages/protocol/src/machines.ts:38`). Emulator fixtures incorrectly placed it on the tool, hiding the defect. | Fix in r4 |
+| I2 | Cumbersome | Background refresh every 10 seconds sets `isBusy`, disabling input and send (`TabletViews.swift:1224`, `AppModel.swift:847`, `:858`). While typing, the keyboard may dismiss and send flashes disabled. | Fix in r4 |
+| I3 | Cumbersome | Conversation polling every 750ms opens “Operation not completed” after a single failure (`AppModel.swift:841-843`). Offline, it reappears after dismissal. | Fix in r4 |
+| I4 | Cumbersome | New messages always scroll to the bottom (`TabletViews.swift:1195`), pulling readers away from older content, with no Jump to Latest. Desktop rules follow only while already at the bottom (AGENTS.md). This is an implementation error (P8). | Fix in r4 |
+| I5 | Cumbersome | Opening landscape changes does not collapse the sidebar (`TabletViews.swift:253` always shows it in wide mode), leaving about 460pt for the conversation. 07 requires collapsing it. | Fix in r4, item 3 |
+| I6 | Cumbersome | No Back navigation. Routing is custom rather than `NavigationStack`, with neither landscape Back nor an edge-swipe gesture. Returning from a conversation to its project requires the sidebar. Android's system Back makes this specific to iPad. | Decided, implement in r4 |
+| I7 | Cumbersome | Send and Stop occupy the same position (`TabletViews.swift:1226`). Send immediately becomes Stop, so a second rapid tap stops the turn just started. | Decided, implement in r4 |
+| I8 | To test | On iOS, `.textSelection(.enabled)` may allow only whole-paragraph copying rather than partial selection. Each diff line is a separate paragraph, potentially limiting copying to one line (P7). | Decide after testing |
+| I9 | To test | Hardcoded `.system(size:)` font sizes may ignore Larger Text in system settings. | Decide after testing |
+| I10 | To test | Common iPad interactions are absent, including long-press and right-click conversation menus, trackpad hover, and swipe-left actions. The prototype also omits them. | Observe whether users look for them |
+| I11 | Minor | New Conversation preselects the first available project instead of the current project's context (P2), and ⌘↩ does not work in its dialog. | Fix with P2 |
+| I12 | Minor | The removed page names the first unavailable computer (`AppModel.swift:884`), potentially identifying the wrong one when several exist. | Fix in r4 |
 
-真机交互测试：`docs/reviews/i1-ipad-interaction-test-prompt.md`，在 r4 推送、审核以后做。
+Run `docs/reviews/i1-ipad-interaction-test-prompt.md` for physical interaction testing after r4 is pushed and reviewed.

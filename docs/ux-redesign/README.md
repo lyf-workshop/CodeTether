@@ -1,55 +1,55 @@
-# CodeTether UX 重设计 v4（设计交付）
+# CodeTether UX Redesign v4 (Design Handoff)
 
-状态：这里是 UI 设计的事实来源（AGENTS.md，2026-11-02 起不再使用 Figma）。电脑端 v4 已实现、验收并发布为 `v0.1.0-alpha.2`。v4 把信息架构改成 **账号 › 设备 › 项目 › 会话**：登录后看到自己的设备，每台设备列出它上面的项目，一个项目就是那台设备上的一个文件夹。只画后端已经支持的能力；浅色为主、深色可切换的视觉沿用 v2。01 和 02 是按基线 `bbcda690a081` 写的设计时记录，里面的“现状”指当时的基线。
+Status: this directory is the UI design authority (AGENTS.md, replacing Figma since 2026-11-02). Desktop v4 is implemented, accepted, and released as `v0.1.0-alpha.2`. v4 organizes information as **Account › Devices › Projects › Conversations**. Signed-in users see their devices and each device's projects, where one project is one folder on that device. Show only backend-supported capabilities, retaining v2's light-first, dark-switchable visual design. Documents 01/02 record design at baseline `bbcda690a081`. Their references to current state mean that baseline.
 
-| 文件 | 内容 |
+| File | Contents |
 |---|---|
-| [01-feature-inventory-and-mapping.md](01-feature-inventory-and-mapping.md) | 关键事实、前端审核、功能盘点 F01–F68、旧入口 → 新入口 → 原型截图 → 源码 |
-| [02-dev-handoff.md](02-dev-handoff.md) | 信息架构、视觉规范（浅色/深色 Token）、组件、状态表达、能力门控、数据依赖、待确认事项、Figma 写入计划、实现顺序 |
-| [03-project-plan.md](03-project-plan.md) | 阶段规划（电脑 · 平板 · 手机）、分工、审核不变量；阶段状态以 `docs/ROADMAP.md` 顶部为准 |
-| [04-requirements.md](04-requirements.md) | 需求说明，按功能编号和三端阶段 |
-| [05-desktop-update.md](05-desktop-update.md) | U1 电脑端一键更新的设计 |
-| [06-pairing-remote-control.md](06-pairing-remote-control.md) | B1 配对和远程控制的设计 |
-| [07-tablet.md](07-tablet.md) | T1 平板应用的设计（和 B4 远程管理的范围） |
-| `tablet/index.html` | 平板可点击原型（`?o=port` 竖屏、`?theme=dark` 深色；截图在 `tablet/png/`，用 `tablet/export-png.sh` 导出） |
-| [overview.html](overview.html) | 82 张截图总览（`png/00-overview.png` 为整页图） |
-| `prototype/index.html` | 本地可点击原型（浏览器直接打开；演示数据，不调用任何真实接口） |
-| `export-png.sh` | 重新导出 `png/`（需要 Chrome，约 1 分钟） |
+| [01-feature-inventory-and-mapping.md](01-feature-inventory-and-mapping.md) | Key facts, frontend review, F01–F68 inventory, old/new entry points, prototype screenshots, source |
+| [02-dev-handoff.md](02-dev-handoff.md) | Information architecture, light/dark tokens, components, state presentation, capability gates, data dependencies, open questions, Figma-writing plan, implementation order |
+| [03-project-plan.md](03-project-plan.md) | Desktop/tablet/phone stages, responsibilities, review invariants. Authoritative stage status is at the top of `docs/ROADMAP.md` |
+| [04-requirements.md](04-requirements.md) | Requirements by feature ID and platform stage |
+| [05-desktop-update.md](05-desktop-update.md) | U1 desktop one-click update design |
+| [06-pairing-remote-control.md](06-pairing-remote-control.md) | B1 pairing and remote control design |
+| [07-tablet.md](07-tablet.md) | T1 tablet design and B4 remote-management scope |
+| `tablet/index.html` | Interactive tablet prototype (`?o=port` portrait, `?theme=dark` dark). Screenshots in `tablet/png/`, exported with `tablet/export-png.sh` |
+| [overview.html](overview.html) | Overview of 82 screenshots (`png/00-overview.png` is the full page) |
+| `prototype/index.html` | Local interactive prototype, opened directly in browser, using demo data without real API calls |
+| `export-png.sh` | Regenerate `png/`, requiring Chrome and about 1 minute |
 
-## v4 相对 v3 的变化
+## Changes from v3 to v4
 
-v3 让一个项目挂多台电脑上的文件夹（项目 › 文件夹 › 会话），还有“其他主机 · 仅查看”。这不是现在的目标，v4 改为：
+v3 attached folders on multiple computers to a project (Project › Folder › Conversation), with Other Hosts / View Only. v4 replaces that model:
 
-- **设备优先**：侧栏和起始页 `#/devices` 按设备列出，设备下面是它的项目，项目下面是会话。一个项目只属于一台设备（`ProjectRecord` + 那台设备上唯一的 `ProjectLocation`），界面上不再有“文件夹”这一层，也不能给项目再加另一台设备上的位置。
-- **不做只读设备**：去掉“其他主机 · 仅查看”、访问申请、“允许其他电脑查看这台电脑”。设备只有两种，都能完整使用：这台电脑，和用 CodeTether Node 配对的设备。
-- **选文件夹就找回以前的会话**：添加项目后立即扫描这个文件夹里的 Codex / Claude Code 会话（`provider-sessions`），在同一个弹窗里勾选导入；项目页也有“以前的会话”一节，可以重新扫描。这台电脑和 Node 配对的设备都支持。
-- 同一账号下的其他 Mac / Windows 桌面版、Windows 配对，后端目前做不到完整控制，放到 `#/roadmap`，不在主流程里出现。
+- **Device first**: sidebar and initial `#/devices` page list devices, their projects, then conversations. A project belongs to exactly one device (`ProjectRecord` plus its unique `ProjectLocation` there). No Folder layer or additional location on another device appears.
+- **No view-only devices**: remove Other Hosts / View Only, access requests, and Allow Other Computers to View This Computer. Two fully usable device types remain, This Computer and CodeTether Node-paired devices.
+- **Recover prior conversations after choosing a folder**: immediately scan added projects for Codex/Claude Code `provider-sessions`, then select/import within the same dialog. Project pages also expose Previous Conversations and rescan. Both local and Node-paired devices support this.
+- Other same-account Mac/Windows desktops and paired Windows lack complete backend control. Keep them in `#/roadmap`, outside primary flows.
 
-## 打开原型
+## Open the Prototype
 
-直接用浏览器打开 `prototype/index.html`（file://，不访问网络）。URL 参数：
+Open `prototype/index.html` directly in browser via file:// without network access. URL parameters:
 
-- `?theme=light|dark|system`：主题，默认浅色；也可以在 设置 › 外观 或 Ctrl K 里切换，选择会记在 localStorage。
-- `?os=win|mac`：标题栏样式（Windows 窗口控制 / mac 红绿灯）与平台文案。
-- `?modal=…`：直接打开某个浮层。
-  - `addproj`：添加项目（选设备）；`addproj:m-mac` 固定设备；`addproj:m-local:found` 直接看“找到以前的会话”这一步。
-  - `new`：新建会话；`new~p-web` 预选项目（侧栏按钮、Ctrl N 的行为），`new:p-web` 固定项目，`new@m-mac` 预选这台设备上第一个可用的项目。
-  - `rmproj:p-docs` 移除项目（有会话时只说明原因）；`unpair:m-mac` 取消配对（设备上还有项目时只说明原因）；`addr:m-mac` 更新地址。
-  - `palette`、`rename:c3`。
-- 快捷键：Ctrl K 命令面板，Ctrl N 新建会话（预选当前项目），Esc 关闭浮层。
+- `?theme=light|dark|system`: default light, also selectable in Settings › Appearance or Ctrl K. Persisted in localStorage.
+- `?os=win|mac`: titlebar controls and platform-specific copy.
+- `?modal=…`: open a specific overlay.
+  - `addproj`: choose device for Add Project. `addproj:m-mac` fixes a device. `addproj:m-local:found` opens Found Previous Conversations directly.
+  - `new`: New Conversation. `new~p-web` preselects a project for sidebar/Ctrl N, `new:p-web` fixes a project, `new@m-mac` preselects the first available project on that device.
+  - `rmproj:p-docs` removes a project or explains remaining conversations. `unpair:m-mac` unpairs or explains remaining projects. `addr:m-mac` updates an address.
+  - `palette`, `rename:c3`.
+- Shortcuts: Ctrl K command palette, Ctrl N New Conversation with current project preselected, Esc close overlay.
 
-## 检查流程（hash 路由）
+## Walkthrough (Hash Routes)
 
-1. 首次启动：`#/onboarding?step=welcome` … `step=project`（选文件夹）→ `step=previous`（找到以前的会话）→ `step=ready` → `#/devices`
-2. 看到所有设备：`#/devices`，每台设备一节，列出它的项目卡片（会话数、进行中、可导入数）
-3. 添加项目并找回以前的会话：设备节或侧栏设备行的“+” → 选文件夹 → “已添加 …，找到 N 个以前的会话” → 导入所选 → 进入项目
-4. 项目里的以前的会话：`#/projects/p-web` 底部“以前的会话” → 勾选 → 导入所选；也可以重新扫描
-5. 在项目里新建会话：侧栏项目行的“+”或项目页“新建会话” → 选 AI 工具 → 创建后进入会话
-6. 处理审批：`#/inbox` → `#/c/c1`（等待批准）→ `#/c/c1?panel=files&tab=changes`
-7. 找回会话：`#/projects/p-api/search?q=重试`（标题和你发送过的内容，只在一个项目里）；`#/projects/p-api?view=archived`；或 Ctrl K 按标题
-8. 添加设备：`#/add` → `#/add/node?step=1` … `step=4`（Node 配对，完成后添加项目）
-9. 设置：`#/settings/appearance` · `account` · `notify` · `background` · `about`；`#/roadmap` 为后续规划（与当前功能隔离）
+1. First launch: `#/onboarding?step=welcome` … `step=project` (choose folder) → `step=previous` (prior conversations found) → `step=ready` → `#/devices`.
+2. All devices: `#/devices`, each with project cards showing conversation, running, and importable counts.
+3. Add/recover: device section/sidebar + → choose folder → Added …, Found N Previous Conversations → Import Selected → project.
+4. Previous conversations: `#/projects/p-web` bottom section → select → Import Selected, or rescan.
+5. New conversation: sidebar project + or project New Conversation → choose AI tool → created conversation.
+6. Approval: `#/inbox` → `#/c/c1` (waiting) → `#/c/c1?panel=files&tab=changes`.
+7. Find conversation: `#/projects/p-api/search?q=重试` (titles and user input, project-scoped), `#/projects/p-api?view=archived`, or Ctrl K title search.
+8. Add device: `#/add` → `#/add/node?step=1` … `step=4`, then add project.
+9. Settings: `#/settings/appearance`, `account`, `notify`, `background`, `about`. `#/roadmap` separates planned from current features.
 
-状态演示参数：`#/devices?state=loading|empty`、`#/devices/m-linux`（离线）、`#/devices/m-local?proj=error`（项目列表读取失败）、`#/projects/p-docs`（文件夹无法访问）、`#/projects/p-ml`（设备离线）、`#/inbox?f=none`、`#/c/c4`（离线且失败）、`#/c/c5`（导入的会话）、`#/settings/account?account=out`、`#/signin?step=email|code|unconfigured`。
+Demo states: `#/devices?state=loading|empty`, `#/devices/m-linux` (offline), `#/devices/m-local?proj=error` (project read failure), `#/projects/p-docs` (folder unavailable), `#/projects/p-ml` (device offline), `#/inbox?f=none`, `#/c/c4` (offline/failed), `#/c/c5` (imported), `#/settings/account?account=out`, `#/signin?step=email|code|unconfigured`.
 
-旧路由（`#/home`、`#/sessions`、`#/search`、`#/projects`、`#/computers`、`#/computers/:id`、`#/hosts`、`#/pair`、`#/connect`、`#/add/desktop`、`#/account`、`#/doctor`）会重定向到新路由。
+Old routes (`#/home`, `#/sessions`, `#/search`, `#/projects`, `#/computers`, `#/computers/:id`, `#/hosts`, `#/pair`, `#/connect`, `#/add/desktop`, `#/account`, `#/doctor`) redirect to new routes.

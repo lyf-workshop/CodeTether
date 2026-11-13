@@ -1,59 +1,59 @@
-# 任务：发布 v0.1.0-alpha.3
+# Task: release v0.1.0-alpha.3
 
-主要在 Windows 上运行；iOS 的构建和测试由 Mac 做（见"目标"第 3 项）。依据：`docs/DEVELOPMENT-PROCESS.md` 的 §3 和 §7（在 `origin/ux/design` 上，用 `git show` 读）。
+Run mainly on Windows. Mac handles iOS builds/tests (goal 3). Reference: sections 3 and 7 of `docs/DEVELOPMENT-PROCESS.md` (read with `git show` from `origin/ux/design`).
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-用户已经在真机上验收通过。把这一轮的修复和 iPad 应用合进 `main`，打 `v0.1.0-alpha.3` 标签，两台电脑的安装版换成这个标签的构建。
+The user has accepted the physical-device tests. Merge this round's fixes and iPad app into `main`, tag `v0.1.0-alpha.3`, and update both installed desktop builds to that tag.
 
-要合进去的（都已审核通过）：
+Branches to include (all reviewed):
 
-- 一条线性的提交链。`main` 已经在 `e4bdd57`（含 `fd1d905` 的 Supervisor 帧预算和 `e4bdd57` 的 Relay 确认竞态），后面还要快进：`fix/android-retry-explicit-failure`（`aeac893`）→ `fix/t1a-tablet-fidelity`。后一个都是在前一个的基础上开的，可以直接快进。开始前先用 `git fetch` 看 `main` 实际在哪个提交，以实际为准。
-- `i1/ipad-app`：从更早的 `f290602` 分出来，`main` 上有 3 个它没有的安卓提交。这个分支已经推送，不能变基，用合并提交合进来。它改了 `packages/supervisor-mobile`，安卓也用这个 Rust 核心。
+- A linear chain: `main` is already at `e4bdd57` (including `fd1d905` Supervisor frame budgets and `e4bdd57` Relay ack race). Fast-forward through `fix/android-retry-explicit-failure` (`aeac893`) to `fix/t1a-tablet-fidelity`. Each builds on its predecessor. Run `git fetch` first and use the actual `main` commit as the authority.
+- `i1/ipad-app` diverged from older `f290602`; `main` contains three Android commits absent there. It is already pushed, so merge with a merge commit instead of rebasing. It changes `packages/supervisor-mobile`, the Rust core also used by Android.
 
-要做到：
+Required outcomes:
 
-1. **发布分支**：从 `fix/t1a-tablet-fidelity` 的最新提交开出 `release/v0.1.0-alpha.3`，再把 `i1/ipad-app` 合进来（合并提交）。冲突只在预期的地方（安卓和 iOS 共用的 Rust 核心、文档）时自己解决，并在报告里写清楚怎么解决的。
-2. **版本号和更新记录**：
-   - 根 `package.json` 的版本现在写的是 `0.1.0-alpha.0`，但已经有 `v0.1.0-alpha.1`、`v0.1.0-alpha.2` 两个标签。先查清前两次发布是怎么处理版本号的，照同样的做法；查不清就问用户。
-   - 新建 `CHANGELOG.md`，写 `v0.1.0-alpha.3` 这一版：用户能感受到的变化（平板和 iPad 能读取和操作电脑、经 Relay 新建会话不再卡住、平板界面按设计修正等），中文，不写内部代号。
-3. **质量检查**：在发布分支上跑 `pnpm typecheck`、`pnpm lint`、`pnpm test`、`pnpm build`；安卓 Gradle 门禁 `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest`；`packages/supervisor-mobile` 的 `cargo test`。推送发布分支，然后告诉用户：Mac 上要用同一个提交跑 iOS 的单元测试和构建（`apps/ios/Scripts/test.sh`、`build.sh device`），由用户转给 Mac。
-4. **合进 main 和打标签**：Mac 的 iOS 检查通过、用户同意后，把 `main` 快进到发布分支，推送 `main`；打附注标签 `v0.1.0-alpha.3`，推送标签。
-5. **安装版**：
-   - Windows：照 `docs/reviews/windows-install-update-prompt.md` 的做法，把安装版换成标签的构建。目标提交改成标签对应的提交，其余不变。
-   - Mac：告诉用户，照 `docs/reviews/mac-install-update-prompt.md` 的做法换成标签的构建，由用户转给 Mac。
-   - 安卓：用标签构建 debug APK，记下 SHA-256。装到平板之前先问用户。
-6. **删掉已合并的分支和工作区**：`main` 推送成功后，已经合并的修复分支和它们的工作区按流程删除。删除远端分支之前，列出来请用户确认。
+1. **Release branch**: create `release/v0.1.0-alpha.3` from latest `fix/t1a-tablet-fidelity`, then merge `i1/ipad-app` with a merge commit. Resolve conflicts independently only in expected shared Rust-core and documentation areas, explaining resolutions in the report.
+2. **Version and changelog**:
+   - Root `package.json` still says `0.1.0-alpha.0` despite tags `v0.1.0-alpha.1` and `v0.1.0-alpha.2`. Investigate how those releases handled versions and follow the same approach; ask the user if unclear.
+   - Create `CHANGELOG.md` for `v0.1.0-alpha.3` in Chinese, describing user-visible changes (tablet/iPad reading and controlling computers, Relay creation no longer stuck, tablet UI aligned with design, etc.) without internal codenames.
+3. **Quality checks**: run `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`; Android Gradle `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest`; and `cargo test` in `packages/supervisor-mobile`. Push the release branch, then ask the user to relay to Mac that iOS unit tests/build must run at the same commit (`apps/ios/Scripts/test.sh`, `build.sh device`).
+4. **Main and tag**: after Mac iOS checks pass and the user agrees, fast-forward `main` to the release branch and push it. Create/push annotated `v0.1.0-alpha.3`.
+5. **Installed builds**:
+   - Windows: follow `docs/reviews/windows-install-update-prompt.md`, targeting the tag's commit with all other requirements intact.
+   - Mac: have the user relay the update procedure from `docs/reviews/mac-install-update-prompt.md`, targeting the tag.
+   - Android: build a debug APK from the tag and record SHA-256. Ask before installing on the tablet.
+6. **Remove merged branches/worktrees**: after `main` pushes successfully, remove merged fix branches and worktrees per process. List remote branches for user confirmation before deleting them.
 
-## 已知情况
+## Known facts
 
-- 构建环境和安装的坑都记在之前的报告里：Windows 的在 `D:/Projects/Software/agenthub-archive/windows-install-fd1d905-report.md`，Mac 的在 `~/agenthub-archive/mac-install-b1-report.md`。
-- 两台电脑现在装的是 `fd1d905`。这一轮的合并没有数据库迁移的话，换成标签构建可以回退。合并后先确认有没有新迁移，有就在报告里写明，并照安装提示词做好备份。
-- 完整的 `pnpm test` 里 Relay 指纹限流用例（`apps/relay/test/relay-service.test.mjs:1164`）偶尔失败，单跑能过；遇到就重跑并在报告里记一笔。
-- 生产 Relay 已经是 `e4bdd57`，这次发布不用重新部署 Relay。合并后如果 `apps/relay` 有新的改动，告诉用户，不要自己部署。
-- `docs/` 下的文档以 `ux/design` 分支为准，ROADMAP 由设计那边更新，这次发布不合并 `ux/design`。
+- Build/install pitfalls are in `D:/Projects/Software/agenthub-archive/windows-install-fd1d905-report.md` for Windows and `~/agenthub-archive/mac-install-b1-report.md` for Mac.
+- Both computers currently run `fd1d905`. Updating to the tag can be rolled back if merging introduces no migration. Check for new migrations first and report any, with backups per install prompts.
+- Full `pnpm test` intermittently fails Relay fingerprint rate limiting (`apps/relay/test/relay-service.test.mjs:1164`), passing alone. Rerun and record if encountered.
+- Production Relay already runs `e4bdd57`, so this release needs no redeployment. Report any new `apps/relay` changes after merge without deploying independently.
+- `ux/design` is authoritative for `docs/`; design maintains ROADMAP. Do not merge `ux/design` in this release.
 
-## 边界
+## Boundaries
 
-- **自己决定**：合并和冲突的处理（限于预期的地方）；版本号的改法（照前两次的做法）；CHANGELOG 的写法；构建和安装的做法。
-- **先问用户**：
-  - 推送 `main`、打标签、推送标签；
-  - 冲突出现在预期以外的地方，或者需要改代码才能通过检查；
-  - 版本号的做法查不清；
-  - 删除远端分支；
-  - 把新构建装到平板或 iPad 上。
-- **不做**：强制推送、变基已推送的分支、改写历史；读取或打印凭据；部署 Relay 或控制服务。
+- **Decide independently**: expected-area merges/conflicts, version handling following past releases, CHANGELOG wording, build/install approach.
+- **Ask the user first**:
+  - Pushing `main`, creating/pushing tags;
+  - Conflicts outside expected areas or code changes required for checks;
+  - Unclear version handling;
+  - Remote branch deletion;
+  - Installing new builds on tablet or iPad.
+- **Do not**: force-push, rebase pushed branches, rewrite history; read/print credentials; deploy Relay or the control service.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/release-v0.1.0-alpha.3-report.md`：
+Write `D:/Projects/Software/agenthub-archive/release-v0.1.0-alpha.3-report.md`.
 
-- 发布分支的提交，合并时的冲突和解决办法；
-- 版本号的做法和依据；CHANGELOG 的内容；
-- 各项质量检查的结果，失败的原样贴出；Mac 的 iOS 检查结果（用户转回来的）；
-- `main` 和标签推送后的远端提交；
-- Windows 安装版更新前后的 build id；安卓 APK 的 SHA-256；
-- 删除了哪些分支和工作区；
-- 没做完的事和原因。
+- Release commit, merge conflicts, and resolutions;
+- Version approach and evidence; CHANGELOG contents;
+- Quality-check results with failures verbatim; Mac iOS results relayed by user;
+- Remote commits after main/tag pushes;
+- Installed Windows build IDs before/after; Android APK SHA-256;
+- Removed branches/worktrees;
+- Incomplete work and reasons.

@@ -1,62 +1,62 @@
-# 任务：T1a 安卓真机验收（vivo X60）
+# Task: T1a Android Physical-Device Acceptance (vivo X60)
 
-在 Windows 上运行（T1a 的工具链和 `adb` 都在这台电脑上）。这轮只验收，不改仓库代码，不提交。
+Run on Windows, where the T1a toolchain and `adb` are installed. This round is acceptance testing only. Do not change repository code or commit.
 
-依据：`docs/reviews/t1a-tablet-app-prompt.md`、`docs/ux-redesign/07-tablet.md`（在 `origin/ux/design` 上，用 `git show` 读）；T1a 的历史报告在 `D:/Projects/Software/agenthub-archive/t1a-report.md`。
+References: `docs/reviews/t1a-tablet-app-prompt.md` and `docs/ux-redesign/07-tablet.md` on `origin/ux/design`, read with `git show`. Historical T1a results are in `D:/Projects/Software/agenthub-archive/t1a-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-在 vivo X60 真机上验证 T1a 的安卓应用，连上 Mac 上的 CodeTether，直连和经 Relay 都通。应用代码是 `origin/main` 的 `b668e53`（和 `t1a/tablet-app` 的 `b668e53` 是同一个提交）。
+Verify the T1a Android app on a physical vivo X60, connecting to CodeTether on Mac over both direct and Relay paths. Use application commit `b668e53` from `origin/main`, identical to `b668e53` on `t1a/tablet-app`.
 
-T1a 之前只在模拟器上验证过，这轮要补的是真机上才能得到的结果。清单，每项记"通过"，或"失败"加现象和错误：
+T1a was previously tested only on an emulator. This round supplies results that require a physical device. Record each checklist item as Passed, or Failed with symptoms and errors:
 
-1. **安装和启动**：debug 版装到手机，能启动到登录页。
-2. **设备密钥的安全级别**：应用把设备密钥放在 Android Keystore，按 StrongBox、TEE、软件的顺序尝试。记下 vivo X60 上实际落在哪一级（应用的设置或日志里能看到；看不到就用 adb 或代码里已有的诊断办法查）。
-3. **登录和配对**：邮箱验证码登录同一个账号；用 Mac 上"添加设备 › 添加手机或平板"的 6 位码配对。Mac 设备页里出现这台手机，名称和平台（`Android-arm64`）正确。
-4. **直连**（设置 › 连接检查 选"自动"）：最近的会话、待处理、已有会话的历史和实时更新；回复；新建会话并看到回复；变更面板的文件列表和逐行 diff；批准、拒绝、停止、处理完成；归档、搜索、设备和项目。
-5. **经 Relay**（选"只走 Relay"）：重复 4。Mac 断网或退出应用时，手机仍连得上 Relay 并看到电脑离线；Mac 恢复后经 Relay 继续操作。
-6. **真实内容**：Mac 上用真实的 Codex 或 Claude Code 跑一个会产生文件改动的任务。T1a 的模拟器验收用合成夹具，没验证过真实的逐行 diff 和逐字输出，这轮看这两项。
-7. **被移除**：Mac 保持一条已连接的会话，在 Mac 设备页移除这台手机。记下从点击移除到手机显示"被移除"页的秒数（T1a 只测到过 13.69 秒的上界，包含自动化的开销，这次用秒表或日志时间戳量），以及 Mac 上正在运行的工作是否继续。然后用新配对码再配一次，能连上，最后在 Mac 上移除，不留测试授权。
-8. **布局和输入**：竖屏、横屏、浅色、深色；旋转时发送中的草稿和待确认不丢；有外接键盘（蓝牙或 OTG）的话，测 Ctrl+N 新建、Ctrl+K 搜索、Ctrl+Enter 发送、Esc 关闭；没有就写"未测"。
+1. **Installation and launch**: install the debug APK on the phone and launch to the login page.
+2. **Device-key security level**: the app stores its device key in Android Keystore, trying StrongBox, TEE, then software. Record the actual vivo X60 level from settings/logs, or use adb/existing diagnostics if it is not visible.
+3. **Login and pairing**: sign in to the same account using an email code. Pair with the Mac's 6-digit code from Add Device › Add Phone or Tablet. Verify the phone appears on the Mac device page with the correct name and platform (`Android-arm64`).
+4. **Direct** (Settings › Connection Check, Automatic): recent conversations, Inbox, existing history and live updates, replies, new conversation and response, changed-file list and line-by-line diff, approve, reject, stop, mark reviewed, archive, search, devices, and projects.
+5. **Relay** (Relay only): repeat item 4. When the Mac disconnects or quits, the phone still reaches Relay and shows the computer offline. Continue over Relay after Mac recovery.
+6. **Real content**: run a real Codex or Claude Code task on Mac that changes files. Emulator acceptance used synthetic fixtures and did not verify real line-by-line diffs or incremental text. Verify both now.
+7. **Removal**: keep a connected conversation while removing this phone on the Mac device page. Measure seconds from Remove to the phone's Removed page using a stopwatch or log timestamps. T1a previously obtained only a 13.69-second upper bound including automation overhead. Verify Mac work continues, re-pair with a new code, confirm connectivity, then remove the phone on Mac to leave no test authorization.
+8. **Layout and input**: portrait, landscape, light, and dark. In-flight drafts and pending confirmations survive rotation. If a Bluetooth or OTG keyboard is available, test Ctrl+N for New Conversation, Ctrl+K for search, Ctrl+Enter for send, and Esc for close. Otherwise record Not tested.
 
-## 已知情况
+## Known Facts
 
-- **系统版本**：应用的 `minSdk` 是 31，即 Android 12。vivo X60 出厂是 Android 11（Funtouch OS 11.1），官方有升到 Android 12 的更新。先在手机上确认版本；低于 12 装不上，这时需要用户升级系统，停下来告诉用户。
-- **布局是手机的窄屏版**：宽布局（左侧栏加右侧变更面板）只在宽度不小于 900dp 且横屏时启用（`apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt` 的 `BoxWithConstraints`）。X60 横屏的宽度很可能不到 900dp，用 `adb shell wm size` 和 `wm density` 核对。所以这轮验证的是功能、连接和真机行为，平板的宽布局仍然只有模拟器验证过。验收记录里要写明"平板宽布局未在真机验证"（`07-tablet.md` §7 第 3 条）。
-- **Mac**：Mac 上的安装版已经换成 `origin/main` 的构建，在线，有配对入口。iPad 的验收也在用这台 Mac，两台设备可以同时配对，互不影响。配对码要用户在 Mac 上生成并告诉你。
-- **控制服务的来源名单**：它只管浏览器的跨域检查，原生应用不带 `Origin` 头，所以不需要放开任何来源，也不需要用户在服务器上做事。
-- **网络**：手机和 Mac 在同一个局域网时才能直连；不在同一个网络时，"自动"会走 Relay。
-- **APK**：`D:/Projects/Software/agenthub-t1a-tablet/apps/android/app/build/outputs/apk/debug/app-debug.apk` 是 `b668e53` 的构建（37,688,888 字节，SHA-256 `3099dbffd9cac0b154bdab908a68703cfd8547e53e88b869850738eb455838c1`）。可以直接用，也可以重新构建；用哪个都要核对对应的提交。
-- **vivo 的安装限制**：vivo 的系统可能要在开发者选项里额外允许 USB 安装或安装未知应用，装不上时先查这个。
-- **预期问题**：
-  - 单条历史记录太大时，服务端可能返回 `internal`，应用会减半重试。还不行就记下来，这是后端的缺口。
-  - 配对成功后，`readClaim` 可能只返回会话视图、没有授权对象，要等目录里出现可用的控制授权。
+- **OS version**: the app's `minSdk` is 31, Android 12. vivo X60 shipped with Android 11/Funtouch OS 11.1 and has an official Android 12 update. Check the phone's version first. Below 12, installation is impossible until the user upgrades. Stop and inform the user.
+- **Layout is the narrow phone version**: the wide layout with sidebar and right Changes panel requires at least 900dp width and landscape orientation (`BoxWithConstraints` in `apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt`). X60 landscape width likely remains below 900dp. Check with `adb shell wm size` and `wm density`. This round verifies functionality, connection, and physical-device behavior. The report must state "Tablet wide layout has not been verified on a physical device" (`07-tablet.md` §7 item 3).
+- **Mac**: its installed application was updated to an `origin/main` build, is online, and has pairing. iPad acceptance also uses this Mac, and simultaneous pairing is supported. The user must generate the Mac pairing code and provide it.
+- **Control-service allowed origins**: only browser cross-origin checks use them. Native apps omit `Origin`, so no allowlist change or server action is needed.
+- **Network**: direct connectivity requires phone and Mac on the same LAN. Automatic uses Relay otherwise.
+- **APK**: `D:/Projects/Software/agenthub-t1a-tablet/apps/android/app/build/outputs/apk/debug/app-debug.apk` is built from `b668e53`, 37,688,888 bytes, SHA-256 `3099dbffd9cac0b154bdab908a68703cfd8547e53e88b869850738eb455838c1`. Reuse it or rebuild, verifying the corresponding commit either way.
+- **vivo installation restrictions**: developer options may separately require permission for USB installation or unknown apps. Investigate this if installation fails.
+- **Expected issues**:
+  - An oversized history record may produce server `internal`. The app retries with half the page size. Record continued failure as a backend gap.
+  - After pairing, `readClaim` may return only a session view without an authorization object. Wait for usable control authorization in the directory.
 
-## 边界
+## Boundaries
 
-- **自己决定**：怎么安装、怎么连手机、怎么量时间和读 Keystore 级别；环境问题（`adb` 驱动、端口转发、临时文件放在 `D:/Projects/Software/agenthub-archive` 下）；失败后的诊断和重试；验收中遇到的问题记进报告，继续验收其余项。
-- **先问用户**：
-  - 需要用户本人操作：手机上的 USB 调试授权、安装确认、系统升级、邮箱验证码、在 Mac 上生成配对码、在 Mac 上移除设备、断开 Mac 的网络；
-  - 要改仓库代码才能继续；
-  - 改生产服务的配置（控制服务、Relay、服务器），包括通过 SSH；
-  - 清除手机上其他应用的数据，或卸载其他应用。
-- **不做**：
-  - 读取或打印凭据：`.secrets/`、其他 `.env`、`~/.codex/auth.json`、`~/.claude.json`；日志脱敏时保留 `[codetether:` 开头的报错行；
-  - 动 Mac 上正式的 `com.codetether.node` 服务和数据目录；
-  - 提交、推送、打标签。
+- **Decide independently**: installation/connection methods, timing and Keystore inspection, environment issues including adb drivers and port forwarding, temporary files under `D:/Projects/Software/agenthub-archive`, diagnosis and retries. Record acceptance issues and continue other items.
+- **Ask the user first**:
+  - Personal actions: USB-debugging permission, installation confirmation, OS upgrade, email code, generating a Mac pairing code, removing the device on Mac, or disconnecting Mac networking.
+  - Repository changes needed to continue.
+  - Production control-service, Relay, or server configuration, including over SSH.
+  - Clearing other phone apps' data or uninstalling them.
+- **Do not**:
+  - Read/print credentials from `.secrets/`, other `.env` files, `~/.codex/auth.json`, or `~/.claude.json`. Preserve error lines beginning `[codetether:` when sanitizing logs.
+  - Touch the production Mac `com.codetether.node` service or data directory.
+  - Commit, push, or tag.
 
-写操作只用用户准备的测试目标。
+Use only user-prepared test targets for writes.
 
-## 报告
+## Report
 
-追加到 `D:/Projects/Software/agenthub-archive/t1a-report.md`，新开一节"真机验收（vivo X60）"：
+Append "Physical-device acceptance (vivo X60)" to `D:/Projects/Software/agenthub-archive/t1a-report.md`:
 
-- 手机的系统版本、屏幕尺寸和密度、Keystore 的实际安全级别；验收的提交和 APK 的 SHA-256；
-- 安装过程和遇到的问题、你怎么解决的；
-- 清单 1 到 8 每一项的结果；
-- 移除的秒数，以及量的方法；
-- 真实的逐行 diff 和逐字输出的结果；
-- 截图（竖屏、横屏、深色各一张，只截手机屏幕）；
-- 没做完的事和原因，以及明确写出"平板宽布局未在真机验证"。
+- Phone OS version, screen dimensions/density, actual Keystore level, tested commit, and APK SHA-256.
+- Installation issues and solutions.
+- Results for checklist items 1–8.
+- Removal timing and measurement method.
+- Real line-by-line diff and incremental-text results.
+- Portrait, landscape, and dark screenshots, capturing only the phone screen.
+- Unfinished work and reasons, explicitly stating "Tablet wide layout has not been verified on a physical device".

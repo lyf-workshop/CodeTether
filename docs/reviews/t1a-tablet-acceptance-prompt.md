@@ -1,57 +1,57 @@
-# 任务：T1a 安卓平板真机验收
+# Task: T1a Android Tablet Physical-Device Acceptance
 
-在 Windows 上运行（T1a 的工具链和 `adb` 都在这台电脑上）。这轮只验收，不改仓库代码，不提交。
+Run on Windows, where the T1a toolchain and `adb` are installed. This round is acceptance testing only. Do not change repository code or commit.
 
-依据：`docs/ux-redesign/07-tablet.md`、平板原型 `docs/ux-redesign/tablet/`（截图在 `docs/ux-redesign/tablet/png/`，39 张，按原型页编号命名），`docs/reviews/t1a-device-acceptance-prompt.md`（都在 `origin/ux/design` 上，用 `git show` 读）。之前的结果在 `D:/Projects/Software/agenthub-archive/t1a-report.md`："真机验收（vivo X60）"和其中的"fd1d905 复测"。
+References: `docs/ux-redesign/07-tablet.md`, tablet prototype `docs/ux-redesign/tablet/` (39 screenshots in `docs/ux-redesign/tablet/png/`, named by prototype page number), and `docs/reviews/t1a-device-acceptance-prompt.md`, all on `origin/ux/design`, read with `git show`. Prior results are in `D:/Projects/Software/agenthub-archive/t1a-report.md`, under "Physical-device acceptance (vivo X60)" and its "fd1d905 retest" subsection.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-在真实的安卓平板上验证 T1a，对端是 Windows 上的安装版（`git-fd1d90540450`）。vivo X60 已经在手机上验证了连接、读写、真实 diff、逐字输出、撤销和复配，这轮重点补手机上测不了的，加上一遍核心流程的回归。
+Verify T1a on a physical Android tablet against the installed Windows app (`git-fd1d90540450`). vivo X60 already verified phone connection, reads/writes, real diffs, incremental text, revocation, and re-pairing. Focus on tablet-only coverage and a core-flow regression.
 
-清单，每项记"通过"，或"失败"加现象和错误：
+Record each item as Passed, or Failed with symptoms and errors:
 
-1. **安装和设备信息**：装上、启动到登录页；记下型号、Android 版本、屏幕尺寸和密度、横屏和竖屏下的宽度（dp）、Keystore 的实际安全级别（StrongBox、TEE 还是软件）。
-2. **宽布局**：横屏时出现左侧栏、主区域、右侧变更面板。和原型逐页对照：`02-01` 首页、`02-03` 起的会话页、`02-0x` 的变更面板、`03-01` 起的设备和项目、`04-01` 起的设置。每页截一张，写出和原型不一致的地方（布局、间距、颜色、文案、缺少或多出来的元素），不改代码。
-3. **宽窄切换**：横屏和竖屏来回切，分屏或多窗口改变宽度时也切一次。切换时正在编辑的草稿、打开的会话、选中的变更、待确认的发送都保留。
-4. **待确认状态下旋转**：发送或新建后、结果还在"待确认"时旋转，旋转后待确认还在，只提交一次。手机上没抓到这个状态，这次想办法抓到（比如让对端回复慢一点，或断开网络制造"待确认"）。
-5. **处理完成**：在待处理页对一条"已完成待查看"执行"处理完成"，直连和 Relay 各一次。手机上因为卡片太像、定位不到唯一一条而没做；这次先在测试项目里造一条标题唯一的待处理，再执行。
-6. **外接键盘**：问用户有没有蓝牙键盘或键盘保护套。有就测 Ctrl+N 新建、Ctrl+K 搜索、Ctrl+Enter 发送、Esc 关闭；没有就写"未测"。
-7. **核心回归**（直连和 Relay 各一遍，挑代表性的做，不用每项都重复手机上的全部细节）：最近的会话、打开会话看历史和实时更新、回复、批准或拒绝、停止、归档、变更面板的逐行 diff、搜索、设备和项目。
-8. **被移除和复配**：在 Windows 设备页移除这台平板，平板显示"被移除"页；再用新码配一次能连上；最后移除，不留测试授权。
+1. **Installation and device information**: install and launch to login. Record model, Android version, screen dimensions/density, landscape and portrait width in dp, and actual Keystore level (StrongBox, TEE, or software).
+2. **Wide layout**: landscape shows the sidebar, main content, and right Changes panel. Compare page by page with prototype `02-01` Home, conversation pages from `02-03`, `02-0x` Changes, devices/projects from `03-01`, and settings from `04-01`. Capture each page and describe layout, spacing, color, wording, missing, or extra-element differences without changing code.
+3. **Wide/narrow transitions**: rotate both ways and change width through split screen or multi-window. Preserve edited drafts, open conversation, selected change, and pending sends.
+4. **Rotation while confirmation is pending**: rotate after Send or Create while its result is pending. The pending state remains, with one submission only. This state was not captured on the phone. Reproduce it using a slower peer response or a network interruption.
+5. **Mark reviewed**: act on one completed-review Inbox item under direct and Relay connections. The phone run could not identify a unique card among similar items. Create a uniquely titled test item first.
+6. **External keyboard**: ask whether the user has a Bluetooth keyboard or keyboard case. If available, test Ctrl+N, Ctrl+K, Ctrl+Enter, and Esc. Otherwise record Not tested.
+7. **Core regression**: perform representative direct and Relay cases without repeating every phone detail. Cover recent conversations, history/live updates, reply, approve or reject, stop, archive, line-by-line Changes, search, devices, and projects.
+8. **Removal and re-pairing**: remove the tablet on Windows, verify its Removed page, pair with a fresh code, verify connection, then remove it again to leave no test authorization.
 
-## 已知情况
+## Known Facts
 
-- **宽布局的条件**：宽度不小于 900dp 且横屏（`apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt:165`）。先用 `adb shell wm size` 和 `wm density` 算出横屏宽度。不到 900dp 的话宽布局不会出现，停下来告诉用户。
-- **系统版本**：`minSdk` 是 31（Android 12），低于 12 装不上，停下来告诉用户。
-- **APK**：沿用 `b668e53` 的验收构建，SHA-256 `3099dbffd9cac0b154bdab908a68703cfd8547e53e88b869850738eb455838c1`，来源和 vivo 那轮一样。重新构建也可以，核对对应的提交。
-- **已知的问题，记录但不挡验收**：
-  - **经 Relay 新建会话**：vivo 复测时停在"结果待确认"，重试后 Windows 上没有对应的会话，正由另一个任务查。这次 Relay 下也试一次，把现象记下来（时间、提示文字），然后跳过。直连新建是好的。
-  - 单条很长的 diff 和导入的原生会话：B1 修复后会截断，截断时没有单独标出来；经 Node 的电脑上原生会话的历史一次只读一条。看到就记下。
-- **测试目标**：写操作只用 Windows 上的独立测试项目 `T1a vivo X60 acceptance`（`D:/Projects/Software/agenthub-archive/t1a-vivo-x60-scratch-20261106-e2945b18`），可以沿用，也可以在它旁边另建一个平板专用的。
-- **vivo 那轮的做法可以复用**：安装、ADB 观察、截图、计时、清理的脚本都在 `D:/Projects/Software/agenthub-archive/t1a-logs/vivo-x60/`。
-- **来源**：原生应用不带 `Origin` 头，不需要放开任何来源。
+- **Wide-layout condition**: at least 900dp width and landscape (`apps/android/app/src/main/java/org/codetether/app/ui/TabletApp.kt:165`). Calculate landscape width first with `adb shell wm size` and `wm density`. If below 900dp, stop and inform the user.
+- **OS version**: `minSdk` is 31 (Android 12). Stop and inform the user if the OS is older.
+- **APK**: reuse the `b668e53` acceptance build, SHA-256 `3099dbffd9cac0b154bdab908a68703cfd8547e53e88b869850738eb455838c1`, from the same source as vivo acceptance. Rebuilding is allowed with commit verification.
+- **Known issues to record without blocking acceptance**:
+  - **Creating through Relay**: vivo retesting stayed at "Result awaiting confirmation". After retry, Windows had no corresponding conversation. Another task is investigating. Attempt once, record time and wording, then skip. Direct creation works.
+  - Long individual diffs and imported native conversations are truncated after the B1 fix without a separate truncation indicator. Native history on a computer accessed through Node reads one record per request. Record observations.
+- **Test target**: use only the isolated Windows project `T1a vivo X60 acceptance` (`D:/Projects/Software/agenthub-archive/t1a-vivo-x60-scratch-20261106-e2945b18`) for writes. Reuse it or create an adjacent tablet-specific project.
+- **Reusable vivo procedures**: installation, ADB observation, screenshot, timing, and cleanup scripts are in `D:/Projects/Software/agenthub-archive/t1a-logs/vivo-x60/`.
+- **Origins**: native apps omit `Origin`. No allowlist change is required.
 
-## 边界
+## Boundaries
 
-- **自己决定**：安装、观察、截图、造测试数据的方法；环境问题；失败后的诊断和重试。遇到问题记进报告，继续验收其余项。
-- **先问用户**：
-  - 需要用户本人操作：平板上的 USB 调试授权和安装确认、邮箱验证码、在 Windows 上生成配对码、在 Windows 上移除设备、接键盘；
-  - 要改仓库代码；
-  - 改生产服务的配置；
-  - 清除平板上其他应用的数据，或卸载其他应用。
-- **不做**：
-  - 读取或打印凭据；
-  - 动 Windows 上正式安装版的数据目录、远程机器和 Node；
-  - 提交、推送、打标签。
+- **Decide independently**: installation, observation, screenshots, synthetic test data, environment diagnosis, and retries. Record issues and continue other cases.
+- **Ask the user first**:
+  - Personal actions: tablet USB-debugging/installation permission, email code, Windows pairing-code generation, Windows device removal, or keyboard connection.
+  - Repository changes.
+  - Production-service configuration changes.
+  - Clearing other tablet apps' data or uninstalling them.
+- **Do not**:
+  - Read or print credentials.
+  - Touch installed Windows app data, remote machines, or Node.
+  - Commit, push, or tag.
 
-## 报告
+## Report
 
-追加到 `D:/Projects/Software/agenthub-archive/t1a-report.md`，新开一节"真机验收（安卓平板）"：
+Append "Physical-device acceptance (Android tablet)" to `D:/Projects/Software/agenthub-archive/t1a-report.md`:
 
-- 平板的型号、系统版本、尺寸和密度、横竖屏宽度、Keystore 级别；APK 的 SHA-256；
-- 清单 1 到 8 每一项的结果；
-- 宽布局和原型的逐页对照：截图，以及不一致的地方列表（页编号、哪里不一样）；
-- 经 Relay 新建的现象；
-- 没做完的事和原因。
+- Tablet model, OS, dimensions/density, landscape/portrait width, Keystore level, and APK SHA-256.
+- Results for items 1–8.
+- Page-by-page wide-layout comparison with prototype, including screenshots and differences identified by page number.
+- Relay-creation observations.
+- Unfinished work and reasons.

@@ -1,73 +1,73 @@
-# 任务：I1 iPad 真机验收（继续）
+# Task: Continue I1 iPad Physical-Device Acceptance
 
-在 Mac 上运行。这轮只验收，不改仓库代码，不提交。
+Run on Mac. Acceptance only. Do not change repository code or commit.
 
-依据：`docs/reviews/i1-ipad-app-prompt.md`、`docs/reviews/i1-fix-prompt-r1.md`、`docs/reviews/i1-fix-prompt-r2.md`、`docs/reviews/i1-fix-prompt-r3.md`、审核记录 `docs/reviews/i1-ipad-app.md`（都在 `origin/ux/design` 上，用 `git show` 读）。之前的结果在 `~/agenthub-archive/i1-report.md`。
+Read these on `origin/ux/design` with `git show`: `docs/reviews/i1-ipad-app-prompt.md`, `docs/reviews/i1-fix-prompt-r1.md`, `docs/reviews/i1-fix-prompt-r2.md`, `docs/reviews/i1-fix-prompt-r3.md`, and review record `docs/reviews/i1-ipad-app.md`. Prior results are in `~/agenthub-archive/i1-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-上一轮装好、登录、配对都通过了，但读取 Mac 内容时 `machine.get` 返回 `internal`。原因是 Supervisor 的响应超过 16 KiB 的帧上限，已经由 `fd1d905` 修好，Mac 的安装版已更新到 `git-fd1d90540450`。这轮把验收做完。
+Installation, login, and pairing previously passed, but `machine.get` returned `internal` when reading Mac content because a Supervisor response exceeded 16 KiB. `fd1d905` fixes that, and the installed Mac app is now `git-fd1d90540450`. Finish acceptance.
 
-验收的提交是 `origin/i1/ipad-app` 的 `30e8b9f`。分支最新提交如果不是它，先告诉用户。
+Test `30e8b9f` on `origin/i1/ipad-app`. If the latest branch commit differs, inform the user first.
 
-先做这几件事：
+First:
 
-1. 确认 Mac 安装版的 build id 是 `git-fd1d90540450`，应用在运行。不是的话停下来告诉用户，不要自己安装。
-2. 在一个干净的工作区里，用 `30e8b9f` 重新构建并覆盖安装到 iPad。不要先删除应用，配对要保留。现在 iPad 上的包带着未提交的改动，不能作为验收版本。
-3. 上一轮的原工作区 `~/agenthub-work/i1-ipad` 里还有"与本任务无关的登录和账户未提交改动"。列出这些改动是什么（文件和用途，不贴凭据），留在原处，不要混进验收构建，不要删除。
-4. 做一次连接检查，确认工作区能读出来，`machine.get` 不再报 `internal`。
+1. Verify the running Mac app's build ID is `git-fd1d90540450`. Otherwise stop and inform the user without installing independently.
+2. Rebuild `30e8b9f` in a clean worktree and overwrite-install on iPad without deleting the app, preserving pairing. The existing iPad package includes uncommitted changes and cannot be used for acceptance.
+3. Inventory unrelated uncommitted login/account changes in `~/agenthub-work/i1-ipad`, describing files/purpose without credentials. Leave them in place, outside the acceptance build, without deletion.
+4. Run Connection Check, confirming workspace reads and no `internal` from `machine.get`.
 
-然后按清单验收，每项记"通过"，或"失败"加现象和错误：
+Then mark each item Passed, or Failed with symptoms and errors:
 
-1. **直连**（连接方式选"自动"，并确认实际是直连）：
-   - 最近的会话能刷新，能看到各台设备和项目；
-   - 已有会话的历史和实时更新；回复；
-   - 新建会话（项目、AI 工具，推理强度只有 Claude Code 有），能看到回复；
-   - 变更面板的文件列表和逐行 diff；
-   - 待处理里批准、拒绝、处理完成；
-   - 归档、恢复、按标题搜索、设备列表、项目列表。
-2. **经 Relay**：用户告诉你生产 Relay 已经更新到 `e4bdd57` 以后再做（另一个任务在部署，部署时 Relay 会重启）。选"只走 Relay"，重复第 1 项。经 Relay 新建会话至少做 3 次，每次 Mac 上恰好多一个会话、第一条消息只发一次。Mac 断网或退出应用时，iPad 看到电脑离线；恢复后经 Relay 继续操作。
-3. **待确认时旋转**：发送后立刻关掉 iPad 的 Wi-Fi，出现"结果待确认"后旋转，提示、草稿都保留；恢复网络后 Mac 上只多一轮。
-4. **宽窄切换**：横竖屏、分屏和侧拉改变宽度时，正在编辑的草稿、打开的会话、变更面板和选中的 diff 都保留。
-5. **被移除和复配**：Mac 保持一条已连接的会话，在 Mac 设备页移除这台 iPad。记下从点击到 iPad 显示"被移除"的秒数、Mac 上正在运行的任务是否继续。再用新码配一次能连上，最后在 Mac 上移除，不留测试授权。
-6. **外观**：浅色、深色、跟随系统。外接键盘：问用户有没有，有就测 ⌘N、⌘K、⌘↩、Esc 和按住 ⌘ 时的快捷键列表；没有就写"未测"。
+1. **Direct**, using Automatic and verifying the actual path:
+   - Refresh recent conversations and view devices/projects.
+   - Existing history/live updates and reply.
+   - Create with project/tool selection and Claude Code-only reasoning strength, then see the response.
+   - Changed-file list and line-by-line diff.
+   - Inbox approval, rejection, and mark reviewed.
+   - Archive, restore, title search, device list, and project list.
+2. **Relay**: wait until the user confirms production Relay is updated to `e4bdd57`. Another task is deploying and will restart it. Select Relay only and repeat item 1. Create at least 3 times, each adding exactly one Mac conversation and sending the first message once. Mac disconnection/exit shows offline on iPad. Continue over Relay after recovery.
+3. **Rotate while pending**: immediately disable iPad Wi-Fi after Send. When confirmation becomes pending, rotate and verify draft/prompt persist. After reconnecting, Mac has exactly one new Turn.
+4. **Width transitions**: rotation, split screen, and Slide Over preserve draft, conversation, Changes panel, and selected diff.
+5. **Removal/re-pairing**: retain a connected conversation, remove iPad from Mac Devices, and measure seconds to Removed. Confirm Mac work continues, re-pair with a new code, connect, then remove again to leave no test authorization.
+6. **Appearance**: light, dark, and system. Ask about a keyboard. If available, test ⌘N, ⌘K, ⌘↩, Esc, and hold-⌘ shortcut help. Otherwise record Not tested.
 
-## 已知情况
+## Known Facts
 
-- **还没修的问题，看到就记下，不挡验收**：
-  - 界面上出现了"Supervisor / Relay""只走 Relay"这类词，违反 `docs/ux-redesign/06-pairing-remote-control.md` §1 的文案规则。下一轮修。
-  - 一台机器读取失败，会让同一台电脑整个显示离线（审核记录的建议改第 3 项）。
-  - Mac 上很长的 diff 会被截断，截断时只加了省略号，没有单独标出来。看变更面板里有没有显示不完整、却当成完整的情况。
-  - 经 Node 的电脑上，导入的原生会话一次只读一条历史，往回翻会慢。有这类会话就看一下。
-- **安卓平板的参考**：联想平板验收时发现，旋转后变更面板和选中的 diff 会丢；被移除页、连接检查页、多个页面和原型 `docs/ux-redesign/tablet/png/` 不一致（`D:` 盘的报告在 Windows 上，要点就是这些）。iPad 用同一份设计，这些地方重点看，截图对照原型。
-- **构建**：沿用上一轮的构建和签名方式（`apps/ios/Scripts/build.sh device` 加 Personal Team 签名），过程记在 `~/agenthub-archive/i1-report.md`。构建后的配置检查会打印两个主机名和"present, shape correct"，不会打印密钥。
-- **测试目标**：写操作只用用户准备的测试项目，真实的 Codex 或 Claude Code。
-- **来源**：iPad 应用是原生程序，不需要放开任何来源，用户不用在 Windows 上做事。
-- 日志脱敏时保留 `[codetether:` 开头的报错行。
+- **Unfixed issues to record without blocking**:
+  - "Supervisor / Relay" and "Relay only" violate wording rules in `docs/ux-redesign/06-pairing-remote-control.md` §1. Fix next round.
+  - One machine read failure makes the entire computer appear offline (review suggestion 3).
+  - Long Mac diffs are truncated with only an ellipsis. Check whether incomplete Changes content is presented as complete.
+  - Imported native history on a computer accessed through Node reads one record per request, slowing backward pagination. Check if applicable.
+- **Android tablet reference**: Lenovo acceptance found loss of panel/selected diff after rotation and prototype differences on Removed, Connection Check, and other pages in `docs/ux-redesign/tablet/png/`. The detailed `D:` report is on Windows. Focus iPad checks on these shared-design issues and compare screenshots.
+- **Build**: reuse previous build/signing (`apps/ios/Scripts/build.sh device` plus Personal Team) in `~/agenthub-archive/i1-report.md`. Post-build checks print two hostnames and "present, shape correct", never keys.
+- **Test targets**: writes use only user-prepared projects and real Codex or Claude Code.
+- **Origins**: iPad is native. No allowlist changes or Windows-user action are needed.
+- Preserve `[codetether:` error lines in sanitized logs.
 
-## 边界
+## Boundaries
 
-- **自己决定**：构建、安装、观察、截图、计时的方法；环境问题；失败后的诊断和重试。遇到问题记进报告，继续验收其余项。
-- **先问用户**：
-  - 需要用户本人操作：iPad 上的信任和弹窗、在 Mac 上生成配对码、在 Mac 上移除设备、断开 Mac 网络、接键盘；
-  - 要改仓库代码；
-  - 删除或覆盖用户数据，杀掉不是你启动的进程；
-  - 改生产服务的配置。
-- **不做**：
-  - 读取或打印凭据，`v4-build.env` 只由构建脚本读取；
-  - 动正式的 `com.codetether.node` 服务和数据目录，直接读写安装版的数据库；
-  - 提交、推送、打标签。
+- **Decide independently**: build/install/observe/screenshot/time methods, environment diagnosis, and retries. Record issues and continue other items.
+- **Ask the user first**:
+  - Personal actions: iPad trust/dialogs, Mac pairing-code generation/removal/network disconnect, keyboard connection.
+  - Repository changes.
+  - Deleting/overwriting user data or killing processes you did not start.
+  - Production configuration changes.
+- **Do not**:
+  - Read/print credentials. Only build scripts read `v4-build.env`.
+  - Touch production `com.codetether.node` service/data or directly access the installed app database.
+  - Commit, push, or tag.
 
-## 报告
+## Report
 
-追加到 `~/agenthub-archive/i1-report.md`，新开一节"真机验收（30e8b9f）"：
+Append "Physical-device acceptance (30e8b9f)" to `~/agenthub-archive/i1-report.md`:
 
-- iPad 型号、系统版本；验收的提交；Mac 安装版的 build id；
-- 原工作区里未提交改动的清单；
-- 清单 1 到 6 每一项的结果，经 Relay 新建每次的结果；
-- 被移除的秒数和量法；
-- 和原型不一致的地方：页编号、哪里不一样、截图（横屏、竖屏、浅色、深色各至少一张，只截 iPad 屏幕）；
-- "已知情况"里那几个问题实际看到的情况；
-- 没做完的事和原因。
+- iPad model/OS, tested commit, and installed Mac build ID.
+- Original-worktree uncommitted changes.
+- Results for items 1–6, including each Relay creation attempt.
+- Removal latency and measurement method.
+- Prototype differences by page number with screenshots, at least one each of landscape, portrait, light, and dark, showing only iPad screen.
+- Actual observations for Known Facts issues.
+- Unfinished work and reasons.

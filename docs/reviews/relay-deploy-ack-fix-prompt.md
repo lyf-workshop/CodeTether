@@ -1,54 +1,54 @@
-# 任务：生产 Relay 更新到 e4bdd57（Supervisor 确认竞态修复）
+# Task: update production Relay to e4bdd57 (Supervisor acknowledgement race fix)
 
-在 Windows 上运行，通过 SSH 操作服务器。这是部署，不改仓库代码，不提交。依据：修复报告 `D:/Projects/Software/agenthub-archive/relay-create-uncertain-report.md`、审核记录 `docs/reviews/fix-relay-create-uncertain.md`（在 `origin/ux/design` 上），以及 B0 报告 `D:/Projects/Software/agenthub-archive/b0-report.md`（现有部署方式、备份和回退的做法）。
+Run on Windows, using SSH for server operations. This is deployment only, without repository code changes or commits. References: fix report `D:/Projects/Software/agenthub-archive/relay-create-uncertain-report.md`, review `docs/reviews/fix-relay-create-uncertain.md` on `origin/ux/design`, and B0 report `D:/Projects/Software/agenthub-archive/b0-report.md` for existing deployment, backup, and rollback procedures.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm that this file has four second-level headings and that the final section is "Report".
 
-## 目标
+## Goals
 
-把 us-vps-01 上的 `codetether-relay.service` 换成 `e4bdd57` 构建的 Relay，让经 Relay 的新建会话不再卡在"结果待确认"。
+Replace `codetether-relay.service` on us-vps-01 with Relay built from `e4bdd57`, preventing Relay conversation creation from remaining at "Outcome unconfirmed".
 
-完成标准：
+Completion criteria:
 
-1. 服务用新程序运行，build id 以 `git-e4bdd57` 开头，不带 `dirty`；
-2. Relay 的身份不变：公开探针看到的 Relay ID 和指纹与部署前相同；
-3. Windows 和 Mac 的 Host 重新连上 Relay：收到 `supervisor.ready(role=host)`，在线发布返回 2xx；
-4. 服务器上其他服务（Caddy、官网、Control Plane、anju-cloud-pivot、anju-competition、cloudcli、xray）的 PID 前后不变；
-5. 回退办法写清楚，并且已经准备好。
+1. Service runs the new executable with build ID beginning `git-e4bdd57` and no `dirty` marker;
+2. Relay identity is unchanged: public probes see the same Relay ID and fingerprint as before;
+3. Windows and Mac Hosts reconnect to Relay, receive `supervisor.ready(role=host)`, and publish presence with 2xx responses;
+4. PIDs of all other server services (Caddy, website, Control Plane, anju-cloud-pivot, anju-competition, cloudcli, xray) remain identical before/after;
+5. Rollback is documented and prepared.
 
-真机上经 Relay 新建会话的复测不在这一轮，由平板验收做。
+Physical-device Relay-creation retesting belongs to tablet acceptance, outside this round.
 
-## 已知情况
+## Known facts
 
-- **现在的部署**（B0 报告"公网 Relay"一节）：程序 `/usr/local/bin/codetether-relay`（SEA），服务 `codetether-relay.service`，8443 原生 TLS，管理地址 `127.0.0.1:9443`。B0 时程序的 SHA-256 是 `fe18675d58e1a3e0f6617e839537d6b76d68c3370dfd6e41f19dd24ac9a84cd3`。先核对现在跑的还是不是它。
-- **身份**：Relay 的身份在 `--state-dir` 指定的状态目录里，客户端都固定了它的 ID 和指纹。只换程序文件，不动状态目录、启动参数和配置，不运行 enroll 等会改身份的命令。状态目录只备份，不读里面的私钥。
-- **构建**：
-  - `pnpm relay:sea`（`apps/relay/scripts/build-relay.mjs`）需要 Node 25.5 以上，按当前平台生成产物，不能在 Windows 上交叉构建。
-  - 服务器的系统 Node 是 v22，不要升级它。
-  - 怎么得到和服务器同架构的 Linux 产物，由你定。比如在服务器的临时目录里用一份独立的官方 Node 构建，或者用 WSL、容器。
-  - 从干净的 `e4bdd57` 构建，用 `apps/relay/scripts/sea-smoke.mjs` 冒烟。
-- **部署前先查一次**：看生产 Relay 的日志里，vivo 复测那段时间（`t1a-report.md` 的"fd1d905 复测"）有没有通道因 `flow_control_violation` 关闭。只看事件类型和时间。有就写进报告，用来给原事件归因。
-- **备份和回退**：照 B0 的做法。备份放 `/var/backups/codetether/<日期>-relay-ack/`，包括旧程序、单元文件和状态目录；本机也留一份旧程序。回退就是换回旧程序再重启服务。
-- **重启的影响**：重启时，所有经 Relay 的连接都会断开几秒，包括两台电脑的 Host、配对的手机和平板、经 Relay 的 Node。客户端会自己重连；进行中的任务不会自动重发。
-- **SSH**：之前几次 SSH 在 banner 阶段超时（`t1a-report.md`）。连接不稳时不要做到一半：先把新程序和备份都准备好，再用一次连接完成换文件和重启。
-- 控制服务的来源名单和 Control Plane 都不用改。
+- **Current deployment** (B0 report, "Public Relay"): executable `/usr/local/bin/codetether-relay` (SEA), unit `codetether-relay.service`, native TLS on 8443, administration `127.0.0.1:9443`. B0 executable SHA-256 was `fe18675d58e1a3e0f6617e839537d6b76d68c3370dfd6e41f19dd24ac9a84cd3`. Verify whether it is still running.
+- **Identity**: stored under `--state-dir`, with clients pinning the ID and fingerprint. Replace only the executable. Preserve state, arguments, and configuration; avoid enrollment or other identity-changing commands. Back up state without reading private keys.
+- **Build**:
+  - `pnpm relay:sea` (`apps/relay/scripts/build-relay.mjs`) needs Node 25.5+ and targets the current platform; Windows cannot cross-build it.
+  - Server system Node is v22. Do not upgrade it.
+  - Choose how to obtain Linux output matching the server architecture, such as a separate official Node in a server temporary directory, WSL, or containers.
+  - Build from clean `e4bdd57` and smoke-test with `apps/relay/scripts/sea-smoke.mjs`.
+- **Pre-deployment investigation**: inspect production Relay logs around vivo retest times ("fd1d905 retest" in `t1a-report.md`) for channel closure due to `flow_control_violation`. Read event types and timestamps only. Report matches to help attribute the incident.
+- **Backup and rollback**: follow B0. Store old executable, unit, and state under `/var/backups/codetether/<date>-relay-ack/`, plus a local copy of the old executable. Roll back by replacing the old executable and restarting the service.
+- **Restart impact**: all Relay connections disconnect briefly, including both Hosts, paired phones/tablets, and Relay-connected Node. Clients reconnect automatically; in-flight tasks are never automatically resent.
+- **SSH**: previous sessions timed out during the banner stage (`t1a-report.md`). For unstable connections, prepare executable and backups first, then replace/restart in one connection to avoid partial deployment.
+- Control-service origin allowlists and Control Plane need no changes.
 
-## 边界
+## Boundaries
 
-- **自己决定**：构建方式；备份和切换的具体做法；冒烟和检查的方法；SSH 不稳时的重试。新程序起不来或身份变了，自己回退到旧程序，确认恢复后再告诉用户。
-- **先问用户**：
-  - 重启服务之前（用户可能正在用平板或 iPad 做经 Relay 的验收）；
-  - 要升级系统 Node 或安装系统包；
-  - 要改 Relay 的配置、启动参数、证书、DNS、防火墙，或动其他服务；
-  - 要改仓库代码。
-- **不做**：读取或打印私钥、令牌、证书私钥；动 Control Plane 和数据库；推送、打标签。
+- **Decide independently**: build approach, backup/switch procedure, smoke/check methods, and retries for unstable SSH. If startup fails or identity changes, restore the old executable, verify recovery, then tell the user.
+- **Ask the user first**:
+  - Before restarting the service (tablet/iPad Relay acceptance may be active);
+  - Before upgrading system Node or installing system packages;
+  - Before changing Relay configuration, arguments, certificates, DNS, firewall, or other services;
+  - Before changing repository code.
+- **Do not**: read/print private keys, tokens, or certificate private keys; touch Control Plane or the database; push or tag.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/relay-deploy-e4bdd57-report.md`：
+Write `D:/Projects/Software/agenthub-archive/relay-deploy-e4bdd57-report.md`.
 
-- 部署前后程序的 SHA-256 和 build id；构建环境；冒烟结果；
-- 日志里 vivo 那段时间有没有 `flow_control_violation`；
-- 备份位置和回退步骤；
-- 完成标准五项的结果，其他服务 PID 的前后对比；
-- 有没有回退，为什么；没做完的事和原因。
+- Before/after executable SHA-256 and build ID, build environment, and smoke results;
+- Whether vivo-period logs contain `flow_control_violation`;
+- Backup location and rollback steps;
+- Results for all five completion criteria and other-service PID comparisons;
+- Whether rollback occurred and why; incomplete work and reasons.

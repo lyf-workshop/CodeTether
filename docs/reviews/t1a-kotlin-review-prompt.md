@@ -1,63 +1,63 @@
-# 任务：审核 T1a Android 平板应用的 Kotlin 代码
+# Task. Review Kotlin code in the T1a Android tablet app
 
-在这台 Windows 电脑上运行。只审核，不改代码。
+Run on this Windows computer. Review only, without code changes.
 
-审核对象是 `t1a/tablet-app` 分支已推送的提交 `f290602`（基点 `origin/main` `9694895`）里的 `apps/android`。Rust 连接核心 `packages/supervisor-mobile` 已经单独审过：把它的 UniFFI 接口当黑盒，只看 Kotlin 有没有用错它。
+Review `apps/android` at pushed `f290602` on `t1a/tablet-app` (base `origin/main` `9694895`). Rust connection core `packages/supervisor-mobile` was reviewed separately. Treat its UniFFI interface as a black box and assess Kotlin usage only.
 
-开始前确认这份文件有 4 个二级标题，最后一节是“报告”。
+Before starting, confirm this file has four second-level headings and the last section is "Report".
 
-## 目标
+## Goals
 
-找出会让用户看到错误结果、丢数据、泄露凭据或卡住的问题，按严重程度排好。重点看下面这些，看到别的问题也写：
+Find issues causing incorrect results, data loss, credential leakage, or stuck UI, ranked by severity. Focus on these areas and report other findings too.
 
-1. **凭据**：登录 token、验证码、配对码、私钥有没有进日志、异常信息、`toString`、界面。`app/build.gradle.kts` 写进 BuildConfig 的是不是只有公开的值（控制服务地址、Supabase 地址和 publishable key、Relay 地址 / ID / 指纹）；传给原生构建的环境变量白名单会不会带上凭据。备份和明文网络是不是关了，Manifest 有没有多余的导出组件或深链接。T1a 报告提到测试时有“调试输入窗口”直接传验证码和配对码，找到它，确认发布版里没有。
-2. **设备密钥**：P-256 不可导出，StrongBox → TEE → 软件的回退；发布版是否一定拒绝软件密钥（`AndroidDeviceIdentity.kt:65` 附近）。重装、清数据、改锁屏以后密钥丢了会怎样。
-3. **登录**：只登录已有账号；登录状态加密保存；刷新失败和退出登录时清掉。
-4. **配对**：6 位码各种错误的提示；配对成功后等待控制授权的过程有没有上限、能不能取消。
-5. **被移除和连不上**：按 B1 补测的两条规则（见“已知情况”），普通断网会不会显示成“被移除”，真的被移除会不会一直停在“连不上”。
-6. **并发和生命周期**：协程作用域、取消、切到后台、旋转屏幕、进程被杀后恢复。前台轮询（会话 750 ms，目录 5 s）会不会叠在一起、会不会每次都新建连接；估一下每分钟给 Relay 和电脑带来多少连接和请求。
-7. **UniFFI 边界**：同步调用是否都不在主线程；`SupervisorSession` 等原生对象有没有释放；`DeviceSigner` 回调里出错时 Rust 那边能不能收到。
-8. **修改操作**：`actionId` 是不是每次用户操作生成一次；有没有自动重发；连点会不会发两次；结果不确定时界面怎么处理；运行中归档的冲突给用户看的文字是原因，不是裸的“409”或错误码。
-9. **能力门控**：批准、停止、逐行变更是不是只看 AI 工具返回的能力，没有按工具名写死。
-10. **文案**：Host、Node、Machine、ProductDevice、Supervisor、Relay、授权、grant、指纹只能出现在 设置 › 连接检查 里。没做的功能不出现在界面上，只在 设置 › 后续规划 里。
-11. **和设计对照**：侧栏结构、页面、快捷键（Ctrl N / K / Enter、Esc）、窄屏布局。只报明显的不一致，视觉细节由用户定。
-12. **测试**：已有测试覆盖了上面哪些失败路径，缺哪些关键的。
+1. **Credentials.** Check logs, exception messages, `toString`, and UI for login tokens, OTPs, pairing codes, and private keys. Confirm BuildConfig from `app/build.gradle.kts` contains public values only (control-service/Supabase addresses, publishable key, Relay address/ID/fingerprint) and native-build environment allowlists exclude credentials. Verify backups and cleartext networking are disabled, and Manifest has no unnecessary exports/deep links. Locate the report's test-only "debug input window" that injects OTPs/pairing codes and verify production excludes it.
+2. **Device keys.** Nonexportable P-256, StrongBox → TEE → software fallback, and mandatory production rejection of software keys (around `AndroidDeviceIdentity.kt:65`). Examine key loss after reinstall, data clearing, or lock-screen changes.
+3. **Login.** Existing accounts only, encrypted persistence, and cleanup on refresh failure/sign-out.
+4. **Pairing.** Six-digit-code errors, bounded wait for control authorization after pairing, and cancellation.
+5. **Removal vs unreachability.** Apply both B1 supplementary-test rules in "Known facts". Ordinary network loss must not look like removal, and real removal must not remain unreachable forever.
+6. **Concurrency/lifecycle.** Coroutine scope/cancellation, backgrounding, rotation, process restoration. Check overlap in foreground polling (750 ms conversations, 5 s directory), connection reuse, and approximate per-minute Relay/computer connections and requests.
+7. **UniFFI boundary.** Synchronous calls off the main thread, disposal of native objects such as `SupervisorSession`, and Rust receipt of `DeviceSigner` callback failures.
+8. **Mutations.** One actionId per user action, no automatic resends, duplicate taps, uncertainty UI, and explanatory running-archive conflict text instead of raw 409/error codes.
+9. **Capability gates.** Approval, stop, and line diffs must follow returned capabilities rather than hardcoded tool names.
+10. **Copy.** Host, Node, Machine, ProductDevice, Supervisor, Relay, authorization, grant, and fingerprint may appear only under Settings › Connection check. Unimplemented features appear only in Settings › Roadmap.
+11. **Design comparison.** Sidebar, pages, Ctrl N / K / Enter and Esc, and narrow layout. Report obvious mismatches only. The user decides visual details.
+12. **Tests.** Identify covered failure paths and missing critical cases.
 
-## 已知情况
+## Known facts
 
-- **工作区**：`D:/Projects/Software/agenthub-t1a-tablet` 里另一个智能体还在工作，有未提交的改动，不要碰，也不要审这些改动。用 `git show f290602:<路径>` 读，或者自己从 `f290602` 建一个 detached 的工作区（例如 `D:/Projects/Software/agenthub-t1a-review`），审完删掉。
-- **依据**（在 `D:/Projects/Software/agenthub` 的 ux/design 分支上，只读）：
-  - 任务提示词 `docs/reviews/t1a-tablet-app-prompt.md`；
-  - 设计 `docs/ux-redesign/07-tablet.md`；
-  - 配对、续期、移除 `docs/ux-redesign/06-pairing-remote-control.md`；
-  - 文案规则 `docs/ux-redesign/03-project-plan.md` §1 和 §1.1，不变量 §6。
-- **编码智能体的报告**：`D:/Projects/Software/agenthub-archive/t1a-report.md`。里面的说法要对照代码核实，不要直接采信。
-- **B1 补测里看到的两件事**（`D:/Projects/Software/agenthub-archive/b1-fix-report-r1.md`）：
-  - 续期刚完成时，用旧授权重连会收到 `authorization_revoked`。客户端应该先重新读目录、用最新的授权重试，不直接判断为被移除。
-  - 移除以后再连，分类是 `request_failed`，和普通连不上分不开。只有控制服务确认已经没有有效授权时才显示“被移除”页，其他情况显示“这台电脑现在连不上……”。
-- **TypeScript 原版**（行号以 `f290602` 为准）：
-  - 设备注册 `apps/web/src/runtime/account/control-plane-client.ts:415`、`:432`，目录 `:662`；
-  - 配对 `apps/web/src/runtime/account/pairing-client.ts:334`；
-  - 设备自己退出配对 `apps/control-plane/src/server.ts:1336`；
-  - 能力的读法 `apps/web/src/dev/supervisor-operation-client.ts:233-266`；
-  - 操作和结果的 schema `packages/supervisor-transport/src/protocol.ts`。
-- 已知的后端缺口不用再报：单条超过 16 KiB 的历史记录或事件发不出来；项目是否可用是从设备状态推出来的。
+- **Worktree.** Another agent is active in `D:/Projects/Software/agenthub-t1a-tablet` with uncommitted changes. Do not touch or review those changes. Use `git show f290602:<path>`, or create a detached worktree from `f290602` (for example `D:/Projects/Software/agenthub-t1a-review`) and remove it after review.
+- **References** (read-only on the ux/design branch in `D:/Projects/Software/agenthub`).
+  - Task `docs/reviews/t1a-tablet-app-prompt.md`.
+  - Design `docs/ux-redesign/07-tablet.md`.
+  - Pairing, renewal, removal `docs/ux-redesign/06-pairing-remote-control.md`.
+  - Copy rules `docs/ux-redesign/03-project-plan.md` §§1 and 1.1, invariants §6.
+- **Coding agent report.** `D:/Projects/Software/agenthub-archive/t1a-report.md`. Verify claims against code instead of accepting them uncritically.
+- **Two B1 supplementary-test findings** (`D:/Projects/Software/agenthub-archive/b1-fix-report-r1.md`).
+  - Just after renewal, reconnecting with old authorization returns `authorization_revoked`. Reread the directory and retry with latest authorization before treating it as removal.
+  - Connecting after removal yields `request_failed`, indistinguishable from ordinary unreachability. Show Removed only when the control service confirms no valid authorization. Otherwise show "This computer cannot currently be reached…".
+- **Original TypeScript implementation** (line numbers at `f290602`).
+  - Device registration `apps/web/src/runtime/account/control-plane-client.ts:415`, `:432`, directory `:662`.
+  - Pairing `apps/web/src/runtime/account/pairing-client.ts:334`.
+  - Device self-unpair `apps/control-plane/src/server.ts:1336`.
+  - Capabilities `apps/web/src/dev/supervisor-operation-client.ts:233-266`.
+  - Operation/result schemas `packages/supervisor-transport/src/protocol.ts`.
+- Do not repeat known backend gaps. Single history records/events over 16 KiB cannot be sent, and project availability is inferred from device state.
 
-## 注意事项
+## Notes
 
-- 只读：不改代码，不提交，不推送。
-- 不读 `.secrets/`、`.env`、密钥和凭据文件，不打印环境变量。不读 `agenthub-archive/t1a-logs/`，那里有一批日志曾经含有凭据。
-- 不联网访问生产服务。不跑模拟器（T1a 的智能体可能在用），也不跑会触发 Rust 原生构建的 Gradle 任务。读代码就够了。
-- 判定一个问题之前，先看调用方和相关代码：超时、锁、错误映射常常在别的文件里。
+- Read-only. No code changes, commits, or pushes.
+- Do not read `.secrets/`, `.env`, keys, or credentials, or print environment variables. Do not read `agenthub-archive/t1a-logs/`, whose logs previously contained credentials.
+- Do not access production online, run an emulator (the T1a agent may use it), or run Gradle tasks triggering Rust native builds. Code reading suffices.
+- Check callers and related code before confirming an issue. Timeouts, locks, and mappings often live elsewhere.
 
-## 报告
+## Report
 
-写到 `D:/Projects/Software/agenthub-archive/t1a-kotlin-review.md`，中文，大约 1500 字以内：
+Write `D:/Projects/Software/agenthub-archive/t1a-kotlin-review.md` in Chinese, approximately 1,500 Chinese characters or fewer.
 
-- 问题分三级：必须修 / 应该修 / 备注。每条写：
-  - `f290602` 上的文件和行号；
-  - 具体的失败场景（什么输入或状态，用户看到什么）；
-  - 已核实还是只是怀疑；
-  - 建议怎么改，一两句。
-- 查过、确认没问题的重点项，每项一行。
-- 最后写没查的部分。
+- Rank findings as Required / Recommended / Notes. For each include the following.
+  - File and line at `f290602`.
+  - Concrete failing input/state and user-visible result.
+  - Confirmed or suspected status.
+  - One or two sentences suggesting a fix.
+- One line each for important checks confirmed clean.
+- End with unreviewed areas.

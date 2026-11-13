@@ -1,94 +1,94 @@
-# 任务：iPad 真机交互测试和剩下的验收
+# Task: iPad Physical Interaction Testing and Remaining Acceptance
 
-在 Mac 上运行，iPad 用 iPad Air 11-inch (M4)、iPadOS 27.2。等 r4（`docs/reviews/i1-fix-prompt-r4.md`）推送、审核通过以后再做，测的是用户发这份提示词时告诉你的那个提交；没说就先问。这轮只测试，不改仓库代码，不提交。
+Run on Mac with iPad Air 11-inch (M4), iPadOS 27.2, after r4 (`docs/reviews/i1-fix-prompt-r4.md`) is pushed and approved. Test the commit the user specifies when issuing this prompt, asking if unspecified. Testing only, without repository changes or commits.
 
-依据（都在 `origin/ux/design` 上，用 `git show` 读）：
+Read on `origin/ux/design` with `git show`:
 
-- `docs/ux-redesign/09-tablet-usability.md`：要做的事 T1 到 T8、要证实的问题 P1 到 P8 和 §6 的 I1 到 I12；
-- `docs/ux-redesign/07-tablet.md` 和平板原型 `docs/ux-redesign/tablet/`；
-- `docs/reviews/i1-ipad-acceptance-prompt.md`：上一轮验收的清单，第 2 到 6 项这轮做完；
-- `docs/reviews/t1a-tablet-interaction-test-prompt.md`：安卓平板的同一项测试，两边的结果要能对照。
+- `docs/ux-redesign/09-tablet-usability.md`: tasks T1–T8, hypotheses P1–P8, and §6 issues I1–I12.
+- `docs/ux-redesign/07-tablet.md` and `docs/ux-redesign/tablet/` prototype.
+- `docs/reviews/i1-ipad-acceptance-prompt.md`: finish prior checklist items 2–6.
+- `docs/reviews/t1a-tablet-interaction-test-prompt.md`: Android counterpart, with comparable results.
 
-之前的结果在 `~/agenthub-archive/i1-report.md`。
+Prior results: `~/agenthub-archive/i1-report.md`.
 
-开始前确认这份文件有 4 个二级标题，最后一节是"报告"。
+Before starting, confirm this file has 4 second-level headings and the final section is "Report".
 
-## 目标
+## Goals
 
-**A. 剩下的验收**（上一轮卡在新建会话，没做完的）：
+**A. Remaining acceptance**, previously blocked at creation:
 
-1. 经互联网连接（Debug 构建里的强制选项）：上一轮清单第 1 项全部重做；新建会话至少 3 次，每次 Mac 上恰好多一个会话、第一条消息只发一次、没有停在"结果待确认"。Mac 断网或退出应用时 iPad 看到电脑离线，恢复后继续操作。
-2. 上一轮清单第 3 到 6 项：待确认时旋转、宽窄切换、被移除和复配、外观和键盘。
+1. Internet path, forced in Debug: repeat all of prior item 1. Create at least 3 times, each adding exactly one Mac conversation, sending the initial message once, and not remaining pending. Mac exit/disconnection shows offline, with operation resuming on recovery.
+2. Prior items 3–6: pending rotation, width transitions, removal/re-pairing, appearance, keyboard.
 
-**B. 常做的事**（09 §1 的 T1 到 T8，直连和经互联网连接各至少走一遍）。每件事记：
+**B. Frequent tasks**, T1–T8 in 09 §1, at least once per direct/internet path. Record for each:
 
-- 实际的步骤（每一次点击、输入、滑动都算一步），和 09 §2 比哪里不一样；
-- 从开始到完成的时间；
-- 哪一步要停下来想、点错、回头，截图。
+- Actual steps, counting every tap, input, and swipe, and differences from 09 §2.
+- Time from start to completion.
+- Hesitation, wrong taps, and backtracking, with screenshots.
 
-**C. 交互细节**：
+**C. Interaction details**:
 
-- 返回：每一层（侧栏、弹窗、变更面板、会话、设置子页）怎么回到上一层；从左边缘右滑有没有反应；横屏时从会话回到项目要几步（I6）；
-- 滚动：长会话快速滑动是否流畅；打开长会话停在哪里；往上翻读时来了新消息，位置会不会被拉走，有没有"回到最新"（P8）；离开再回来，列表和会话的位置还在不在；
-- 输入：后台刷新时正在打字，键盘会不会被收起、按钮会不会闪灰（I2）；输入框被键盘挡住没有；浮动键盘和分离键盘；中文输入法组字时按 ⌘↩ 会不会误发；发送后键盘和焦点怎么样；
-- 离线和慢网：会话开着时关掉 Wi‑Fi，看提示怎么显示，会不会反复弹窗（I3）；恢复后提示是否自己消失；
-- 选中和复制：消息、批准卡里的命令、diff 能不能选中一部分复制，能不能一次复制几行 diff（P7、I8）；
-- 连点：快速连点"发送""允许一次""创建会话""处理完成"，只执行一次；点了发送马上再点一下同一个位置，会不会把这一轮停掉（I7）；
-- 新建会话（P2、I11）：分别从首页、项目页、设备页、侧栏项目行打开，项目是不是已经选好；第一句话写三四行看不看得全；
-- 停止（P5）：停止按钮和别的按钮多近，误触的可能性；
-- 搜索（P6）：搜一个没打开过的旧会话标题，结果和提示是什么；
-- 横屏打开变更面板：侧栏收没收起，会话还剩多宽（I5）；
-- 触控板和外接键盘（用户有才测）：悬停有没有反馈，右键有没有菜单（I10）；按住 ⌘ 的快捷键列表。
+- Back: each sidebar/dialog/Changes/conversation/settings level, left-edge swipe, and landscape conversation-to-project step count (I6).
+- Scrolling: fast long-history smoothness, initial position, incoming messages while reading older content and Back to Latest (P8), and restoration after leaving/returning.
+- Input: keyboard dismissal or gray-button flicker during refresh (I2), keyboard occlusion, floating/split keyboard, accidental ⌘↩ submission during Chinese composition, keyboard/focus after sending.
+- Offline/slow network: disable Wi-Fi in an open conversation, inspect repeated alerts (I3), and automatic clearing after recovery.
+- Selection/copy: partial message, approval-command, and diff copying, including multiple diff lines (P7, I8).
+- Rapid taps: Send, Allow Once, Create Conversation, Mark Reviewed execute once only. A second tap in the Send location must not accidentally stop the new Turn (I7).
+- Creation (P2, I11): open from Home, project, device, sidebar project row, checking preselection and visibility of 3–4 input lines.
+- Stop (P5): proximity to other controls and accidental-tap risk.
+- Search (P6): query an unopened older title and inspect results/explanation.
+- Landscape Changes: sidebar collapse and remaining conversation width (I5).
+- Trackpad/keyboard, if available: hover feedback, secondary-click menus (I10), hold-⌘ help.
 
-**D. 无障碍**：
+**D. Accessibility**:
 
-- 打开旁白，走一遍 T2 和 T3：只有图标的按钮（侧栏、变更、更多、关闭、停止、发送）有没有读出名字；
-- 设置 › 辅助功能里把文字调到最大：文字有没有跟着变大，有没有截断、重叠，按钮还能不能点（I9）；
-- 小于 44 pt 的可点击元素：用 Xcode 的 Accessibility Inspector 找；
-- 深色模式下文字和背景是否看得清。
+- Enable VoiceOver and perform T2/T3. Verify labels for sidebar, Changes, More, Close, Stop, and Send icon buttons.
+- Set maximum text size in Accessibility. Check scaling, truncation, overlap, and usable buttons (I9).
+- Use Xcode Accessibility Inspector to find targets smaller than 44 pt.
+- Check dark-mode text/background readability.
 
-**E. 长内容和数量多**：长标题、长项目名、长路径、长命令、很长的一行代码、很大的 diff（几百行）、很长的会话（几百条消息）、很多台设备和项目。真机上用真实数据能造的就造，造不出来的在模拟器上用合成数据测，并注明。
+**E. Large content and counts**: long titles, project names, paths, commands, code lines, hundreds of diff lines/messages, and many devices/projects. Use real device data where feasible, otherwise synthetic simulator data, clearly labeled.
 
-**F. 用户本人试用 15 分钟**：
+**F. Fifteen-minute user trial**:
 
-- A 到 E 做完以后，停下来请用户在 iPad 上做下面 6 件事。请用户用控制中心的屏幕录制录下来，或者用 Mac 上的 QuickTime 录 iPad 的屏幕；你计时，用户做的时候你不提示：
-  1. 找到正在等批准的会话，看清要运行什么命令，批准它；
-  2. 打开一个改过文件的会话，把改动从头到尾读一遍，再追加一句"再加一个测试"；
-  3. 在测试项目里新建一个 Codex 会话，问一个问题；
-  4. 让一个任务跑起来，然后停掉它；
-  5. 找到昨天或更早的一个会话；
-  6. 竖过来再横过来，接着刚才的事做。
-- 做完问用户 5 个问题，原话记下来：哪一件最费劲；有没有哪一步不知道该点哪里；有没有点错过；最想改的一处；和电脑上、安卓平板上比怎么样。
+- After A–E, ask the user to perform these six tasks unprompted while recording through Control Center or Mac QuickTime. Time each:
+  1. Find a waiting conversation, understand its command, and approve.
+  2. Read all changes in a modified-file conversation and request one more test.
+  3. Create Codex in the test project and ask a question.
+  4. Start work, then stop it.
+  5. Find a conversation from yesterday or earlier.
+  6. Rotate portrait/landscape and continue the same task.
+- Ask five questions and record verbatim responses: hardest task, uncertainty about where to tap, wrong taps, most desired improvement, and comparison with desktop/Android tablet.
 
-## 已知情况
+## Known Facts
 
-- **对端**：Mac 安装版。开始前确认 build id 和上一轮报告里的一样、应用在运行；不一样就停下来告诉用户，不要自己安装。
-- **构建**：沿用上一轮的做法（`apps/ios/Scripts/build.sh device` 加 Personal Team 签名），覆盖安装，不先删除应用，配对保留。经互联网连接的强制选项只在 Debug 构建里有。
-- **测试项目**：写操作只用用户准备的测试项目。造长会话和大 diff 可以让真实的 Codex 在这个项目里跑，任务要小。
-- **已知的数据缺口**（不算可用性问题，看到就注明）：项目根路径、初次配对和最近使用日期、运行的百分比；经由另一台电脑时导入的原生会话往回翻慢；很长的 diff 被截断时没有标出来。
-- **已知没做的**：T1b 的功能（项目内搜索、添加项目、导入以前的会话、置顶、重命名）、通知、后台保持连接、批准前解锁。原型里画了、界面上没有，这是预期的。
-- 截图只截 iPad 屏幕；录屏结束后告诉用户文件在哪里，不要上传。
-- 日志脱敏时保留 `[codetether:` 开头的报错行。
+- **Peer**: installed Mac app. Verify its running build ID matches the prior report. Otherwise stop and inform the user without installing.
+- **Build**: reuse `apps/ios/Scripts/build.sh device` plus Personal Team, overwrite-install without deleting so pairing persists. Internet-only switch is Debug-only.
+- **Test project**: writes only to user-prepared targets. Small real Codex tasks may create long conversations/diffs.
+- **Known data gaps**, record without treating as usability defects: root paths, original pairing/last-use dates, progress percentage, slow backward imported history through another computer, unmarked long-diff truncation.
+- **Unimplemented**: T1b project search/add/import/pin/rename, notifications, background connectivity, and pre-approval unlocking. Prototype controls for them are intentionally absent.
+- Capture iPad screen only. Tell the user where recordings are stored, without uploading.
+- Preserve `[codetether:` error lines when sanitizing logs.
 
-## 边界
+## Boundaries
 
-- **自己决定**：测试的顺序和方法，计时和记录的方式，造测试数据的方法，环境问题，失败后的重试。遇到问题记下来，继续测其余的。
-- **先问用户**：需要用户本人操作（iPad 上的弹窗和设置、在 Mac 上生成配对码、在 Mac 上移除设备、断开 Mac 网络、接键盘和触控板、F 部分的试用）；要改仓库代码；改生产服务的配置；删除或覆盖用户数据，杀掉不是你启动的进程。
-- **不做**：读取或打印凭据，`v4-build.env` 只由构建脚本读取；动正式的 `com.codetether.node` 服务和数据目录，直接读写安装版的数据库；提交、推送、打标签；修代码。
+- **Decide independently**: test order/method, timing, data preparation, environment issues, retries. Record failures and continue other cases.
+- **Ask the user first**: personal device/settings/pairing/removal/network/keyboard/trackpad/trial actions, repository changes, production configuration, deleting/overwriting user data, or killing processes you did not start.
+- **Do not** read/print credentials (only build scripts read `v4-build.env`), touch production `com.codetether.node`/data, directly access the installed database, commit, push, tag, or fix code.
 
-测完把 iPad 的设置（文字大小、旁白、深色、Wi‑Fi）恢复原样。复配后的那次配对留着还是移除，问用户。
+Restore original text-size, VoiceOver, dark-mode, and Wi-Fi settings. Ask whether to retain or remove the final pairing.
 
-## 报告
+## Report
 
-追加到 `~/agenthub-archive/i1-report.md`，新开一节"交互测试"：
+Append "Interaction testing" to `~/agenthub-archive/i1-report.md`:
 
-- 测的提交，iPad 和 Mac 的版本；
-- **A**：经互联网新建每次的结果，上一轮清单第 1 到 6 项每项的结果；
-- **B**：T1 到 T8 每件事一行：实际步骤数、时间、和 09 §2 的差别、卡住的地方；
-- **问题清单**：每个问题一行，写级别（挡住 / 很麻烦 / 小问题）、在哪一页、怎么复现、截图、对应 09 的哪一条（P1 到 P8、I1 到 I12，或新问题）；
-- **P1 到 P8、I1 到 I12**：每条是证实了、推翻了、已修好，还是没测到；
-- **D**：旁白读不出的按钮、截断的地方、小于 44 pt 的元素列表；
-- **F**：用户 6 件事每件的时间、有没有完成、哪里卡住，5 个问题的原话，录屏文件位置；
-- 恢复了哪些设置；没做完的事和原因。
+- Tested commit and iPad/Mac versions.
+- **A**: each internet creation and each prior checklist item 1–6.
+- **B**: one row per T1–T8, with step count, time, 09 §2 differences, and blockers.
+- **Issues**: one row with severity (blocking / cumbersome / minor), page, reproduction, screenshot, and 09 reference (P1–P8, I1–I12, or new issue).
+- **P1–P8/I1–I12**: confirmed, disproved, fixed, or untested for each.
+- **D**: unlabeled VoiceOver buttons, truncation, and targets below 44 pt.
+- **F**: task timings/completion/sticking points, five verbatim responses, recording path.
+- Restored settings, unfinished work, and reasons.
 
-只写看到的现象和用户的原话，改法由设计决定。
+Report only observations and the user's words. Design determines remedies.

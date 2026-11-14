@@ -1,7 +1,5 @@
 # CodeTether
 
-English | [Simplified Chinese](README.zh-CN.md)
-
 View and control Codex and Claude Code conversations across your computers in one place.
 
 > **Early alpha.** No installers are published yet; build from source. The interface is currently available only in Simplified Chinese.

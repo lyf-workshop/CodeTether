@@ -66,6 +66,12 @@ The first branch is a superset of the remote-only branch on the host side. It al
 
 **Why.** AGENTS.md also says "unsupported Composer actions are hidden". A greyed control shown with "coming soon" is exactly what the invariant forbids, and the review in D2.1 already leaned toward hiding them.
 
+**Revised 2026-11-14.** The Owner wants Attach, Voice and Remaining context built, not removed (AD-12). The principle stands: no control ships greyed out once its feature exists, and each new control is shown only where it works. What changes is the interim:
+
+- Task 5 replaces only the model button.
+- The other three placeholders stay on `main` until X1a, X1b and X1c replace each one with a working control.
+- Removing them first and adding them back weeks later would churn the same code and tests twice.
+
 ### AD-3: Relay certificate renewal without restarts
 
 **Facts.**
@@ -180,6 +186,48 @@ This restates DEVELOPMENT-PROCESS §3–§5, which practice had drifted from:
 - 14 worktrees and about 25 merged remote branches are still around.
 - The v4 desktop work had 13 fix rounds.
 
+### AD-12: Build the Composer's attach, voice and context features now, desktop first (2026-11-14)
+
+**Decision.** The Owner asked for UI-review finding 3 to be implemented. This pulls three X1 items forward, ahead of M2, for the desktop.
+
+**X1a, remaining context.**
+- Both local adapters normalize the usage Codex and Claude Code already report. The Host keeps the latest value per conversation, durably.
+- The Composer shows "剩余 N%" only when the value is real and was measured for the current model.
+- The number must match the native tool's.
+
+**X1b, image attachments.**
+- PNG, JPEG, WebP and GIF; up to 6 per Turn, 5 MiB each; text still required.
+- Conversations on this computer only, with local Codex and local Claude Code.
+- The Host stores the bytes in a CodeTether-owned folder. Durable Turn records keep metadata only. Nothing enters Search, logs or notifications.
+- Retry resends the same attachments.
+- **Later:** other computers, tablet, phone and iPad, and files that are not images. Project files will be referenced with "@" (W15).
+
+**X1c, voice.**
+- Hold to speak; the transcript goes into the draft and is never auto-sent.
+- whisper.cpp in the Tauri shell, with a multilingual model downloaded once on first use against a pinned hash.
+- Audio never leaves the computer and is never written to disk.
+- Desktop only. The tablet and phone have the keyboard's voice typing (W4).
+
+**Word count** ("字数") already works and stays. **The model button** is task 5.
+
+**Why these choices.**
+- **Images only.** Images are the common case: a screenshot of an error or a layout. Both Providers accept them. Other files raise questions of size and of how to store and index them, which the "@" reference avoids.
+- **This computer first.** Remote execution goes through frozen transport and Supervisor contracts. Extending them is its own task.
+- **Local whisper.cpp for voice.**
+  - Windows dictation sends audio to Microsoft and needs a speech pack per language.
+  - macOS recognition works on one locale at a time.
+  - Neither handles mixed Chinese and English well, and WebView2 has no working Web Speech recognition.
+  - Local Whisper is private, works on both platforms with one implementation, and handles mixed speech.
+  - The cost is a one-time model download of roughly 150–500 MB.
+
+**Owner checks before dispatch.** These are defaults the Owner can override:
+- images only
+- this computer only
+- local whisper.cpp with a downloaded model
+- hosting that model on `codetether.org` (needs the Owner's approval when X1c asks)
+
+**Prompts.** `x1a-context-usage-prompt.md`, `x1b-image-attachments-prompt.md`, `x1c-voice-input-prompt.md`.
+
 ## 3. Task queue
 
 | #   | Task                                                                                                                 | Prompt                                                                           | Runs on                                          | Starts                                                      | Deadline             |
@@ -193,10 +241,19 @@ This restates DEVELOPMENT-PROCESS §3–§5, which practice had drifted from:
 | 6   | B3a send speed                                                                                                       | `b3a-send-speed-prompt.md`                                                       | Windows (codex.exe is measured there)            | after 5 is merged                                           | —                    |
 | 7   | B4b folder browsing                                                                                                  | `b4b-folder-browse-prompt.md` (existing; start commit refreshed when dispatched) | Mac                                              | after 2                                                     | —                    |
 | 8   | S1 local API session token                                                                                           | written after AD-5 is accepted                                                   | either                                           | after 6                                                     | —                    |
-| 9   | D2.5 timeline restyle (10 §3.4) plus UI-review findings 1, 2, 12 and 13                                              | written after review of 5                                                        | Windows                                          | after 5 is merged                                           | —                    |
-| 10  | D3 desktop consistency pass (UI-review findings 4–11 and 14–18)                                                      | written after review of 9                                                        | Windows                                          | after 9                                                     | —                    |
+| 9   | D2.5 timeline restyle (10 §3.4) plus UI-review findings 1, 2, 8 (conversation), 12 and 13                            | `d2-5-timeline-restyle-prompt.md`                                                | Windows                                          | after 5 is merged                                           | —                    |
+| 10  | D3a desktop consistency (UI-review findings 4–8, 15, 16)                                                             | `d3a-desktop-consistency-prompt.md`                                              | either (Mac suggested, to balance load)          | after 5 is merged                                           | —                    |
+| 11  | D3b desktop usability (UI-review findings 9–11, 14, 17, 18)                                                          | `d3b-desktop-usability-prompt.md`                                                | either                                           | after 10 is merged                                          | —                    |
+| 12  | X1a remaining context (AD-12)                                                                                        | `x1a-context-usage-prompt.md`                                                    | Windows                                          | after 5 is merged                                           | —                    |
+| 13  | X1b image attachments, this computer (AD-12)                                                                         | `x1b-image-attachments-prompt.md`                                                | Windows (one Mac check)                          | after 5 and 9 are merged                                    | —                    |
+| 14  | X1c voice input, desktop (AD-12)                                                                                     | `x1c-voice-input-prompt.md`                                                      | Windows, then Mac                                | after 5 is merged; after 13 if 13 has merged by then        | —                    |
 
-Claude Code reviews each branch as it comes back and writes `docs/reviews/<branch>.md`. On 2026-11-13 it reviewed `fix/t1a-tablet-fidelity` items 4–9 (no must-fix) and `i1/ipad-app` r4 (one must-fix). Neither had a review record, although `release-alpha3-prompt.md` treated both as reviewed and accepted. In parallel, Claude Code wrote the E1 design draft, `docs/ux-redesign/11-one-computer-one-device.md` (2026-11-13). It awaits the Owner's decisions D1–D6 before any E1 prompt is written. The desktop UI review (`docs/reviews/2026-11-13-desktop-ui-review.md`, 2026-11-13) feeds tasks 9 and 10.
+Claude Code reviews each branch as it comes back and writes `docs/reviews/<branch>.md`. On 2026-11-13 it reviewed `fix/t1a-tablet-fidelity` items 4–9 (no must-fix) and `i1/ipad-app` r4 (one must-fix). Neither had a review record, although `release-alpha3-prompt.md` treated both as reviewed and accepted. In parallel, Claude Code wrote the E1 design draft, `docs/ux-redesign/11-one-computer-one-device.md` (2026-11-13). It awaits the Owner's decisions D1–D6 before any E1 prompt is written. The desktop UI review (`docs/reviews/2026-11-13-desktop-ui-review.md`, 2026-11-13) feeds tasks 9–14. On 2026-11-14, its finding 3 became AD-12 (tasks 12–14), and its prompts were written ahead of the review of task 5. Each one starts from `main` after the merges listed above, so its line numbers may need refreshing when dispatched. Within the two-task limit (AD-11), the suggested order once 5 has merged is:
+
+1. 9 on Windows alongside 10 on the Mac
+2. 12 alongside 11
+3. 13
+4. 14
 
 ### Owner actions
 

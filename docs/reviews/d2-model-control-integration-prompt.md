@@ -10,7 +10,7 @@
 
 - `docs/reviews/2026-11-13-assessment-and-plan.md` AD-1, AD-2, AD-7
 - `docs/reviews/d2-protocol-model-switching-prompt.md` and `docs/reviews/d2-remote-model-switching-prompt.md` (the two original prompts)
-- `docs/ux-redesign/10-desktop-improvements.md` §3.3 (Composer; placeholders removed per AD-2)
+- `docs/ux-redesign/10-desktop-improvements.md` §3.3 (Composer; AD-2 as revised on 2026-11-14)
 - `docs/ux-redesign/08-remote-management.md` §3.1 (rules for extending Supervisor operations)
 - `docs/ux-redesign/03-project-plan.md` §6 (invariants)
 
@@ -32,12 +32,9 @@ Before starting, confirm this file has 4 second-level headings and that the last
 3. **No docs on the code branch** (AD-7).
    - The integrated branch's diff against `main` must not change `AGENTS.md` or anything under `docs/`.
    - The canonical branch edited AGENTS.md, ARCHITECTURE, PRODUCT, ROADMAP and 03. Leave those edits out, and paste their substance into the report; Claude Code will apply it on the docs branch.
-4. **Remove the Composer placeholders** (AD-2).
-   - In `apps/web/src/components/conversation/composer.tsx`, remove:
-     - the disabled "附件" and "语音" buttons (title "即将推出")
-     - the "剩余上下文" label that has no value
-     - the disabled "模型" button (title "模型切换功能开发中"); the real model control from goal 1 replaces it
-   - Nothing appears greyed out "for later". Update tests that asserted the placeholders.
+4. **Replace the model placeholder** (AD-2, revised 2026-11-14).
+   - In `apps/web/src/components/conversation/composer.tsx`, the disabled "模型" button (title "模型切换功能开发中") is replaced by the real model control from goal 1. Update the tests that asserted it.
+   - Leave the "附件" and "语音" buttons and the "剩余上下文" label as they are. The Owner wants those features built, not removed. Tasks X1a, X1b and X1c replace each one with a working control (AD-12).
 5. **Behavior to verify, end to end.** A change applies to the **next** Turn of the same conversation only:
    - The Provider, the Machine, the native session, and earlier Turns never change.
    - A change during an active Turn is refused with `409`, including a Turn admitted while the model catalog was being fetched.
@@ -111,7 +108,7 @@ Write to `<agenthub-archive>/d2-model-control-report.md`:
 - **Merge:** the merge commit; each conflict and how you resolved it.
 - **Ported:** exactly what came from the remote-only branch (files and hunks) and what you left out.
 - **Docs:** the doc edits from the canonical branch that you left out, quoted, for the docs branch.
-- **Placeholders:** the Composer placeholders removed; the tests updated.
+- **Placeholders:** the model placeholder replaced, the tests updated, and confirmation that the other three were left in place.
 - **Behavior:** the goal 5 checks, each with the test that proves it.
 - **Gates:** results for every gate (TypeScript, Rust, Android, iOS), with failures verbatim.
 - **Devices:** real-device and emulator results, if done.

@@ -67,13 +67,17 @@ Severity:
    - "附件" and "语音" (disabled)
    - "模型" (disabled, tooltip "模型切换功能开发中", `composer.tsx:277-285`)
    - "剩余上下文" with no value
-   - "字数 N"
 
-   AD-2 and `d2-model-control-integration-prompt.md` already remove them. Listed here because they are live on `main` today.
+   "字数 N" was listed here at first, but it is a real live count and stays.
+
+   **Disposition (revised 2026-11-14).** The Owner wants these built, not removed (AD-12):
+   - "模型" becomes the real control in task 5.
+   - "剩余上下文" is X1a, "附件" is X1b, and "语音" is X1c.
+   - Until each lands, its placeholder stays.
 4. **A healthy state is shown as a warning.**
    - The New Conversation dialog shows an amber box for a healthy Codex: "执行正常 · 上次已知。…这是最近一次观测；新会话的首个明确轮次会重新验证，不会重发任何旧请求。" (`new-conversation-provider-selection.ts:61`).
    - Amber color plus internal terms, at the moment the user starts work, reads as "something is wrong".
-   - **Fix.** Show nothing for healthy or last-known-healthy. For degraded or unavailable, show one plain sentence (06 §1: no technical terms).
+   - **Fix.** Show nothing for healthy or last-known-healthy. For degraded or unavailable, show one plain sentence without implementation terms (PRODUCT.md, Phase 4D).
 
 ### Medium: consistency
 
@@ -147,7 +151,10 @@ Severity:
 
 | Findings | Where |
 | --- | --- |
-| 3 | Already in `d2-model-control-integration-prompt.md` (AD-2) |
-| 1, 2, 12, 13 | **D2.5 Timeline** (10 §3.4). It is designed but not yet in the task queue. Queue it after D2 integration, because both touch the conversation page. Map the hex colors in 10 §3.4 to tokens. |
-| 4–11, 14–18 | **New task "D3 consistency pass"**, after D2.5, within the WIP limit. Must: 4, 5, 6, 9. Should: the rest. Item 11's activity counts may use only real fields. |
-| Not seen live | Before writing D2.5, capture running, approval, failure and remote states with real data. |
+| 3 | Model: task 5. Context, attachments and voice: AD-12, prompts `x1a-context-usage-prompt.md`, `x1b-image-attachments-prompt.md`, `x1c-voice-input-prompt.md` |
+| 1, 2, 8 (conversation part), 12, 13 | **D2.5 Timeline** (10 §3.4), `d2-5-timeline-restyle-prompt.md`, after D2 integration, because both touch the conversation page. Map the hex colors in 10 §3.4 to tokens. |
+| 4–8 (computer and project pages), 15, 16 | **D3a consistency**, `d3a-desktop-consistency-prompt.md`. Must: 4, 5, 6. |
+| 9–11, 14, 17, 18 | **D3b usability**, `d3b-desktop-usability-prompt.md`, after D3a. Must: 9 and 10. Item 11's activity counts may use only real fields. |
+| Not seen live | D2.5 starts by capturing running, approval and failure states with real Codex and Claude Code runs. |
+
+The original "D3 consistency pass" was split into D3a and D3b on 2026-11-14 to keep each task under the size limit in DEVELOPMENT-PROCESS §4.

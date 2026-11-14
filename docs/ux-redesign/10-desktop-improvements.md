@@ -407,14 +407,14 @@ Changed 2026-11-13 (AD-2 in `docs/reviews/2026-11-13-assessment-and-plan.md`). T
 - Attach
 - Voice
 
-They are removed rather than shown greyed out. Each returns when real data or X1 provides it.
+They are not shown greyed out once a real control exists. Revised 2026-11-14 (AD-2 revised, AD-12): the Owner wants all three built. Until then they stay on `main` as they are, and tasks X1a (remaining context), X1b (image attachments) and X1c (voice) each replace one with a working control.
 
 #### Functional Details
 
 **Provider information bar**
 - Left shows Provider icon, name, and model.
 - Right contains the model and effort control when the Provider supports model switching (D2 model control). Otherwise it is absent.
-- Remaining context appears here only once a Provider reports real context usage. Until then there is no label and no empty indicator.
+- Remaining context ("剩余 N%") appears here once a Provider reports real context usage (X1a). When no value is known, there is no label and no empty indicator.
 
 **Input field**
 - Initial height is two lines, approximately 48px.
@@ -433,7 +433,7 @@ They are removed rather than shown greyed out. Each returns when real data or X1
 - Ctrl+K opens the command palette.
 
 **Action bar**
-- Attachment and voice buttons arrive with X1; until then they are not shown.
+- Attachment (X1b, images, conversations on this computer) and voice (X1c, desktop only) buttons. Each is shown only where it works.
 - Live character count.
 - Send, disabled for empty input.
 

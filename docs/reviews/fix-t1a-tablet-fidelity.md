@@ -69,3 +69,26 @@ Suggested changes (not blocking):
 ## Next steps
 
 The Owner re-checks items 1–9 on a device: the Android emulator for the tablet layout, the vivo X60 for the basics. If that passes, this branch goes into the `v0.1.0-alpha.3` release together with `fix/android-retry-explicit-failure` (`docs/reviews/release-alpha3-prompt-r2.md`).
+
+## Round 4: Owner device re-check (2026-11-15)
+
+Build: `945c849` debug, built with the public client configuration so it can sign in, SHA-256 `31CDFEEB…6A2B`. No source changes. Evidence: `E:/Projects/Software/agenthub/acceptance-945c849/EMULATOR-ACCEPTANCE.md` and `VIVO-X60-ACCEPTANCE.md`.
+
+**Emulator** (Pixel Tablet, Android 16, 2560×1600): all nine items pass.
+
+- **Item 1 was checked live.** The emulator was paired with the installed Windows desktop and opened a real conversation with two changed files. After `adb shell am kill` and a restore from Recents, the selected change and a nonzero vertical scroll position survived, and the before and after screenshots are byte-identical.
+- No live diff was wide enough to test horizontal scroll after process death. Fixture tests cover it.
+- **Items 2–9** used fixture data plus instrumented tests: `TabletUiTest` 11/11, and `MainActivityRotationTest` 6/6 with real split screen.
+- Round 1's suggestion 3 (an end-to-end `adb shell am kill`) is now done.
+
+**vivo X60** (Android 13, system font scale 1.54):
+
+- **Passed:** Home, Inbox, Devices, Settings, Connection Check, the roadmap page and the Remove confirmation.
+- **Not checked on the phone:** a live conversation, Changes and New Conversation. The app showed the computer online briefly, then offline, in Auto and in internet-only modes.
+  - TCP from the phone's shell to the Host, Relay, the account service and the Control Plane succeeded.
+  - A re-pair attempt was claimed on Desktop, but the phone showed a generic network error.
+  - The cause is unknown.
+
+**Assessment.** Items 1–9 pass. The phone failure is a connection problem, not one of the nine items, because the same APK held a live session on the emulator against the same desktop. It does not block this branch or the alpha.3 release: Android builds reach the phone only by manual install. It is diagnosed in `docs/reviews/android-phone-offline-diagnosis-prompt.md`, which also finishes the three phone checks listed above.
+
+**Suggested change (not blocking, T1b):** at a 1.54 system font scale, long instructions on the device cards are cut off with an ellipsis. Let them wrap.

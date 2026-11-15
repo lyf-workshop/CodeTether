@@ -23,23 +23,19 @@ internal sealed interface TabletPage {
     data class Device(val computerId: String, val machineId: String) : TabletPage
     data class Project(val computerId: String, val project: RemoteProject) : TabletPage
     data class Conversation(val computerId: String, val target: ConversationTarget) : TabletPage
-    data class Settings(val section: SettingSection = SettingSection.Account) : TabletPage
+    data class Settings(val section: SettingSection = SettingSection.Overview) : TabletPage
     data class Removed(val computerName: String) : TabletPage
 }
 
-internal enum class SettingSection(val label: String) {
-    Account("账号"),
-    Computers("可以使用的电脑"),
-    Appearance("外观"),
-    Connection("连接检查"),
-    Plans("后续规划"),
-}
+internal enum class SettingSection { Overview, Connection, Plans }
 
 internal enum class Appearance(val label: String) {
     System("跟随系统"), Light("浅色"), Dark("深色"),
 }
 
 internal enum class MutationStatus { Pending, Success, Failed, Unknown }
+
+internal data class ProjectConversationCounts(val active: Int, val archived: Int)
 
 internal data class ComputerView(
     val computer: PairedComputer,
@@ -61,6 +57,7 @@ internal data class TabletState(
     val changesLoading: Boolean = false,
     val projectRows: List<RemoteConversation> = emptyList(),
     val projectLoading: Boolean = false,
+    val projectCounts: ProjectConversationCounts? = null,
     val projectArchived: Boolean = false,
     val projectStatus: String? = null,
     val appearance: Appearance = Appearance.System,

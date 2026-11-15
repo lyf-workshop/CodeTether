@@ -52,28 +52,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.codetether.app.remote.RemoteConversation
 
-private enum class Sheet { Search, Create, Archive }
+private enum class Sheet { Search, Create, Archive, Pair }
 
 @Composable
 internal fun TabletApp(state: TabletState, actions: TabletActions) {
     TabletInk(state.appearance) {
         val appModifier = Modifier.fillMaxSize().background(ink.background).safeDrawingPadding().imePadding()
-        when (val page = state.page) {
+        when (state.page) {
             TabletPage.SignIn -> Box(appModifier, contentAlignment = Alignment.Center) {
                 SignIn(state, actions)
             }
             TabletPage.Pair -> Box(appModifier, contentAlignment = Alignment.Center) {
                 PairScreen(state, actions, canReturn = state.computers.isNotEmpty())
-            }
-            is TabletPage.Removed -> Box(appModifier, contentAlignment = Alignment.Center) {
-                EntryCard {
-                    PageTitle("这台电脑移除了此设备")
-                    Text("${page.computerName} 已断开。要再次使用，请在电脑上生成新的配对码。", color = ink.secondary)
-                    InkButton("重新配对", Modifier.fillMaxWidth()) { actions.navigate(TabletPage.Pair) }
-                    if (state.computers.isNotEmpty()) {
-                        QuietButton("返回最近的会话") { actions.navigate(TabletPage.Home) }
-                    }
-                }
             }
             else -> Workspace(appModifier, state, actions)
         }
@@ -159,39 +149,51 @@ private fun EntryCard(content: @Composable androidx.compose.foundation.layout.Co
 private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletActions) {
     var sheet by rememberSaveable { mutableStateOf<Sheet?>(null) }
     val conversationDrafts = rememberSaveableStateHolder()
-    var changesOpen by remember(state.page) { mutableStateOf(false) }
+    val conversation = state.page as? TabletPage.Conversation
+    val changesPanel = rememberChangesPanelState(state.profile?.id, conversation)
+    var wideSidebarOpen by rememberSaveable { mutableStateOf(true) }
+    var narrowSidebarOpen by rememberSaveable { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     BoxWithConstraints(modifier) {
         val landscape = maxWidth >= 900.dp && maxWidth > maxHeight
-        var sidebarOpen by remember(landscape) { mutableStateOf(landscape) }
-        val conversation = state.page as? TabletPage.Conversation
+        val removedHome = state.page is TabletPage.Removed
+        val settingsDetail = state.page is TabletPage.Settings && state.page != TabletPage.Settings()
+        val sidebarOpen = if (landscape) wideSidebarOpen else narrowSidebarOpen
+        fun setSidebar(open: Boolean) {
+            if (landscape) wideSidebarOpen = open else narrowSidebarOpen = open
+        }
         val connected = conversation?.let { state.computer(it.computerId)?.connection != null } == true
         val allowChanges = state.detail?.canShowChanges == true && connected
-        val showChanges = changesOpen && allowChanges
+        val showChanges = changesPanel.open && allowChanges
         fun go(page: TabletPage) {
             sheet = null
-            if (!landscape) sidebarOpen = false
+            if (!landscape) setSidebar(false)
             actions.navigate(page)
         }
+        fun openPair() { sheet = Sheet.Pair }
         fun dismiss() {
             when {
                 sheet != null -> sheet = null
-                changesOpen -> changesOpen = false
-                sidebarOpen && !landscape -> sidebarOpen = false
+                changesPanel.open -> changesPanel.open = false
+                sidebarOpen && !landscape -> setSidebar(false)
+                settingsDetail -> go(TabletPage.Settings())
                 state.page != TabletPage.Home -> go(TabletPage.Home)
             }
         }
-        BackHandler(sheet != null || changesOpen || (sidebarOpen && !landscape) || state.page != TabletPage.Home) {
+        BackHandler(sheet != null || changesPanel.open || (sidebarOpen && !landscape) || state.page != TabletPage.Home) {
             dismiss()
         }
         LaunchedEffect(Unit) { focus.requestFocus() }
-        LaunchedEffect(showChanges, state.detail?.history?.messages?.size, state.detail?.history?.turns?.lastOrNull()?.status) {
+        LaunchedEffect(removedHome, landscape) {
+            if (removedHome && landscape) setSidebar(true)
+        }
+        LaunchedEffect(conversation, showChanges, state.detail?.history?.messages?.size, state.detail?.history?.turns?.lastOrNull()?.status) {
             if (showChanges) actions.loadChanges()
         }
         Box(Modifier.fillMaxSize().onPreviewKeyEvent { event ->
             if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
             when {
-                event.key == Key.Escape && (sheet != null || changesOpen || (sidebarOpen && !landscape)) -> {
+                event.key == Key.Escape && (sheet != null || changesPanel.open || (sidebarOpen && !landscape)) -> {
                     dismiss()
                     true
                 }
@@ -208,22 +210,35 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
             }
         }.focusRequester(focus).focusable()) {
             Row(Modifier.fillMaxSize()) {
-                if (landscape && sidebarOpen) Sidebar(Modifier.width(300.dp), state, ::go) { sheet = Sheet.Search }
+                if (landscape && (sidebarOpen || removedHome)) {
+                    TabletSidebar(Modifier.width(300.dp), state, ::go,
+                        close = if (showChanges) ({ setSidebar(false) }) else null) { sheet = Sheet.Search }
+                }
                 Column(Modifier.weight(1f).fillMaxHeight()) {
-                    Header(
-                        state = state,
-                        toggleSidebar = { sidebarOpen = !sidebarOpen },
-                        newConversation = { sheet = Sheet.Create },
-                        changes = if (allowChanges) ({
-                            changesOpen = !changesOpen
-                            if (changesOpen) {
-                                if (landscape) sidebarOpen = false
-                            }
-                        }) else null,
-                        archive = if (connected && state.detail?.canControl == true &&
-                            state.detail.conversation.archived.not()) ({ sheet = Sheet.Archive }) else null,
-                    )
-                    state.error?.let { error ->
+                    if (removedHome) {
+                        Row(Modifier.fillMaxWidth().height(52.dp).background(ink.bar).padding(horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if (!landscape) IconAction("☰", "侧栏") { setSidebar(!sidebarOpen) }
+                        }
+                    } else {
+                        Header(
+                            state = state,
+                            toggleSidebar = { setSidebar(!sidebarOpen) },
+                            settingsSidebarToggle = !landscape || !sidebarOpen,
+                            backToSettings = { go(TabletPage.Settings()) },
+                            newConversation = { sheet = Sheet.Create },
+                            changes = if (allowChanges) ({
+                                changesPanel.open = !changesPanel.open
+                                if (changesPanel.open) {
+                                    wideSidebarOpen = false
+                                    narrowSidebarOpen = false
+                                }
+                            }) else null,
+                            archive = if (connected && state.detail?.canControl == true &&
+                                state.detail.conversation.archived.not()) ({ sheet = Sheet.Archive }) else null,
+                        )
+                    }
+                    state.error?.takeUnless { sheet == Sheet.Pair }?.let { error ->
                         Row(Modifier.fillMaxWidth().background(ink.failedCard).padding(start = 16.dp),
                             verticalAlignment = Alignment.CenterVertically) {
                             Text(error, Modifier.weight(1f), color = ink.failed, fontSize = 14.sp)
@@ -232,38 +247,43 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
                     }
                     when (val page = state.page) {
                         TabletPage.Home -> HomePage(state, ::go)
+                        is TabletPage.Removed -> RemovedHomePage(page.computerName,
+                            openPair = ::openPair, seeComputers = { go(TabletPage.Devices) })
                         TabletPage.Inbox -> InboxPage(state, actions, ::go)
-                        TabletPage.Devices -> DevicesPage(state, ::go)
+                        TabletPage.Devices -> DevicesPage(state, ::go, ::openPair)
                         is TabletPage.Device -> DevicePage(state, page, ::go)
                         is TabletPage.Project -> ProjectPage(state, page, actions, ::go)
                         is TabletPage.Conversation -> conversationDrafts.SaveableStateProvider(
                             listOf(page.computerId, page.target.machineId, page.target.projectId, page.target.conversationId).joinToString("/"),
                         ) { ConversationPage(state, page, actions) }
-                        is TabletPage.Settings -> SettingsPage(state, page, actions, ::go)
+                        is TabletPage.Settings -> SettingsPage(state, page, actions, ::go, ::openPair)
                         else -> Unit
                     }
                 }
                 if (landscape && showChanges) {
-                    ChangesPanel(Modifier.width(420.dp), state, { changesOpen = false }, actions::loadChanges)
+                    ChangesPanel(Modifier.width(420.dp), state, { changesPanel.open = false }, actions::loadChanges, changesPanel)
                 }
             }
             if (!landscape && showChanges) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .22f))
-                    .clickable { changesOpen = false })
+                    .clickable { changesPanel.open = false })
                 ChangesPanel(Modifier.align(Alignment.CenterEnd).widthIn(max = 520.dp)
-                    .fillMaxWidth(), state, { changesOpen = false }, actions::loadChanges)
+                    .fillMaxWidth(), state, { changesPanel.open = false }, actions::loadChanges, changesPanel)
             }
             if (!landscape && sidebarOpen) {
                 Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = .25f))
-                    .clickable { sidebarOpen = false })
-                Sidebar(Modifier.width(300.dp).align(Alignment.CenterStart), state, ::go) {
-                    sidebarOpen = false
+                    .clickable { setSidebar(false) })
+                TabletSidebar(Modifier.width(300.dp).align(Alignment.CenterStart), state, ::go, close = { setSidebar(false) }) {
+                    setSidebar(false)
                     sheet = Sheet.Search
                 }
             }
         }
         when (sheet) {
-            Sheet.Search -> SearchSheet(state.loaded, onDismiss = { sheet = null }) { computer, row ->
+            Sheet.Pair -> PairCodeSheet(state, actions, onDismiss = { sheet = null }, onConnected = {
+                go(if (removedHome) TabletPage.Home else state.page)
+            })
+            Sheet.Search -> SearchSheet(state, onDismiss = { sheet = null }) { computer, row ->
                 go(TabletPage.Conversation(computer, row.target))
             }
             Sheet.Create -> CreateSheet(state, actions, onDismiss = { sheet = null }, onCreated = { computer, target ->
@@ -286,11 +306,18 @@ private fun Workspace(modifier: Modifier, state: TabletState, actions: TabletAct
 private fun Header(
     state: TabletState,
     toggleSidebar: () -> Unit,
+    settingsSidebarToggle: Boolean,
+    backToSettings: () -> Unit,
     newConversation: () -> Unit,
     changes: (() -> Unit)?,
     archive: (() -> Unit)?,
 ) {
     val page = state.page
+    if (page is TabletPage.Settings && page != TabletPage.Settings()) {
+        SettingsBackHeader(settingsSidebarToggle, toggleSidebar, backToSettings,
+            if (page.section == SettingSection.Plans) "roadmap-settings-back" else "connection-settings-back")
+        return
+    }
     var menuOpen by remember(page) { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth().background(ink.bar).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
@@ -320,74 +347,28 @@ private fun Header(
                     })
                 }
             }
-        } else if (state.computers.any { it.workspace?.canControl == true && it.connection != null }) {
+        } else if (state.canShowNewConversation()) {
             InkButton("＋ 新建会话", enabled = !state.busy, onClick = newConversation)
         }
     }
     Rule()
 }
 
-@Composable
-private fun Sidebar(modifier: Modifier, state: TabletState, go: (TabletPage) -> Unit, search: () -> Unit) {
-    val attentionCount = state.computers.sumOf { it.workspace?.attentionCount ?: 0 }
-    Column(modifier.fillMaxHeight().background(ink.background).padding(10.dp)) {
-        Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Brand()
-            Spacer(Modifier.width(8.dp))
-            Text("CodeTether", color = ink.text, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        }
-        QuietButton("搜索会话  Ctrl K", Modifier.fillMaxWidth(), onClick = search)
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-            NavItem("最近的会话", state.page == TabletPage.Home) { go(TabletPage.Home) }
-            NavItem(if (attentionCount > 0) "待处理  ${attentionCount}" else "待处理", state.page == TabletPage.Inbox) {
-                go(TabletPage.Inbox)
-            }
-            Spacer(Modifier.height(10.dp))
-            NavItem("设备", state.page == TabletPage.Devices) { go(TabletPage.Devices) }
-            state.computers.forEach { entry ->
-                val workspace = entry.workspace
-                if (workspace == null) {
-                    RowItem(entry.computer.name, "暂时连不上")
-                } else workspace.machines.forEach { machine ->
-                    var machineOpen by remember(entry.computer.id, machine.id) { mutableStateOf(true) }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconAction(if (machineOpen) "⌄" else "›", "展开或收起 ${machine.name}") { machineOpen = !machineOpen }
-                        Column(Modifier.weight(1f)) {
-                            NavItem(machine.name, state.page == TabletPage.Device(entry.computer.id, machine.id)) {
-                                go(TabletPage.Device(entry.computer.id, machine.id))
-                            }
-                        }
-                    }
-                    if (machineOpen) workspace.projects.filter { it.machineId == machine.id }.forEach { project ->
-                        var projectOpen by remember(entry.computer.id, project.id) { mutableStateOf(false) }
-                        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                            IconAction(if (projectOpen) "⌄" else "›", "展开或收起 ${project.name}") { projectOpen = !projectOpen }
-                            Column(Modifier.weight(1f)) {
-                                NavItem(project.name, state.page == TabletPage.Project(entry.computer.id, project)) {
-                                    go(TabletPage.Project(entry.computer.id, project))
-                                }
-                            }
-                        }
-                        if (projectOpen) workspace.recent.filter { it.target.projectId == project.id && it.target.machineId == machine.id }
-                            .take(5).forEach { row ->
-                                Box(Modifier.padding(start = 44.dp)) {
-                                    NavItem(row.title, state.page == TabletPage.Conversation(entry.computer.id, row.target)) {
-                                        go(TabletPage.Conversation(entry.computer.id, row.target))
-                                    }
-                                }
-                            }
-                    }
-                }
-            }
-        }
-        Rule()
-        NavItem("设置", state.page is TabletPage.Settings) { go(TabletPage.Settings()) }
+private fun TabletState.canShowNewConversation(): Boolean {
+    fun canControl(entry: ComputerView?) = entry?.connection != null && entry.workspace?.canControl == true
+    fun canUseMachine(computerId: String, machineId: String): Boolean =
+        canControl(computer(computerId)) && machine(computerId, machineId)?.let {
+            it.available && (it.isLocal || it.status == "online")
+        } == true
+    return when (val current = page) {
+        TabletPage.Home -> computers.any(::canControl)
+        is TabletPage.Project -> canUseMachine(current.computerId, current.project.machineId) &&
+            computer(current.computerId)?.workspace?.projects?.any {
+                it.id == current.project.id && it.machineId == current.project.machineId && it.available
+            } == true
+        is TabletPage.Device -> canUseMachine(current.computerId, current.machineId)
+        else -> false
     }
-}
-
-@Composable
-private fun NavItem(label: String, selected: Boolean, onClick: () -> Unit) {
-    RowItem(label, active = selected, onClick = onClick)
 }
 
 internal fun providerLabel(id: String): String = when (id) {

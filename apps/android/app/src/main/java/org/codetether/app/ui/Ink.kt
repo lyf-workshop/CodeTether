@@ -285,26 +285,35 @@ internal fun Segments(options: List<Pair<String, Boolean>>, onSelect: (Int) -> U
 }
 
 @Composable
-internal fun CenterSheet(title: String, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+internal fun CenterSheet(
+    title: String,
+    onDismiss: () -> Unit,
+    header: (@Composable (String) -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         val focus = remember { FocusRequester() }
+        val shape = RoundedCornerShape(if (header == null) 20.dp else 16.dp)
+        val surface = if (header == null) Modifier.background(ink.card).padding(22.dp) else Modifier.background(ink.background)
         LaunchedEffect(Unit) { focus.requestFocus() }
         Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
             Column(
-                Modifier.widthIn(max = 560.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp))
-                    .border(0.5.dp, ink.rule, RoundedCornerShape(20.dp)).background(ink.card).padding(22.dp)
+                Modifier.widthIn(max = 560.dp).fillMaxWidth().clip(shape)
+                    .border(0.5.dp, ink.rule, shape).then(surface)
                     .onPreviewKeyEvent { event ->
                         if (event.type == KeyEventType.KeyDown && event.key == Key.Escape) {
                             onDismiss()
                             true
                         } else false
                     }.focusRequester(focus).focusable(),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(if (header == null) 12.dp else 0.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(title, Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = ink.text)
-                    IconAction("×", "关闭窗口", onDismiss)
-                }
+                if (header == null) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(title, Modifier.weight(1f), fontWeight = FontWeight.Bold, fontSize = 22.sp, color = ink.text)
+                        IconAction("×", "关闭窗口", onDismiss)
+                    }
+                } else header(title)
                 content()
             }
         }

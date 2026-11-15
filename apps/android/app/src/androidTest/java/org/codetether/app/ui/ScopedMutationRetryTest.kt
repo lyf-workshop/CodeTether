@@ -45,7 +45,7 @@ import uniffi.supervisor_mobile.ConnectionMode
 @RunWith(AndroidJUnit4::class)
 class ScopedMutationRetryTest {
     @Test
-    fun unknownSendIsOnlyReadAutomaticallyAndExplicitRetryReusesTheWholeRequest() = runBlocking {
+    fun actionNotFoundAndUncertainRetriesKeepTheOriginalSendUntilOneSuccess() = runBlocking {
         val backend = Backend().apply { lostFirstResponses.add(SEND_ID) }
         Harness(backend).use { harness ->
             harness.ready()
@@ -58,11 +58,29 @@ class ScopedMutationRetryTest {
             assertEquals(1, backend.attempts(SEND_ID).size)
             assertEquals(MutationStatus.Unknown, harness.sendEntry(PAGE_A)?.status)
 
+            // A preflight miss is not a rejection of the replay, even though the code is not_found.
+            backend.nextFailures[SEND_ID] = RemoteFailure("not_found")
+            harness.onMain { retryMutation(SEND_ID) }
+            awaitState { backend.attempts(SEND_ID).size == 2 && harness.sendEntry(PAGE_A)?.status == MutationStatus.Unknown }
+            assertEquals(SEND_ID, harness.sendEntry(PAGE_A)?.actionId)
+
+            backend.nextFailures[SEND_ID] = RemoteFailure("internal")
+            harness.onMain { retryMutation(SEND_ID) }
+            awaitState { backend.attempts(SEND_ID).size == 3 && harness.sendEntry(PAGE_A)?.status == MutationStatus.Unknown }
+            assertEquals(SEND_ID, harness.sendEntry(PAGE_A)?.actionId)
+
             harness.onMain { retryMutation(SEND_ID) }
             awaitState { harness.sendEntry(PAGE_A)?.status == MutationStatus.Success }
-            assertDeduplicatedRetry(backend, SEND_ID)
-            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
             assertEquals(TARGET_A, harness.sendEntry(PAGE_A)?.result)
+            harness.onMain {
+                retryMutation(SEND_ID)
+                acknowledgeMutation(SEND_ID)
+                retryMutation(SEND_ID)
+            }
+            assertNull(harness.sendEntry(PAGE_A))
+            assertEquals(4, backend.attempts(SEND_ID).size)
+            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
+            assertEquals(1, backend.admissions.values.count { it.actionId == SEND_ID })
         }
     }
 
@@ -142,7 +160,7 @@ class ScopedMutationRetryTest {
     }
 
     @Test
-    fun parcelRestoredUnknownSendKeepsItsPayloadAndNeverWritesUntilRetry() = runBlocking {
+    fun restoredUnknownSendExitsPendingWhenItsRetryIsExplicitlyRejected() = runBlocking {
         val backend = Backend().apply { lostFirstResponses.add(SEND_ID) }
         val account = Account()
         val saved = Harness(backend, account).use { original ->
@@ -162,10 +180,43 @@ class ScopedMutationRetryTest {
             assertEquals(MutationStatus.Unknown, pending.status)
             assertEquals(MutationRequest.Send(SEND_ID, COMPUTER_A.id, TARGET_A, ORIGINAL_TEXT), pending.request)
             assertEquals(1, backend.attempts(SEND_ID).size)
+            // The recovered request may have been admitted before the Host lost its replay record.
+            backend.admissions.remove(SEND_ID)
+            val rejection = RemoteFailure("conflict", definitiveMutationFailure = true)
+            backend.nextFailures[SEND_ID] = rejection
             restored.onMain { retryMutation(SEND_ID) }
-            awaitState { restored.sendEntry(PAGE_A)?.status == MutationStatus.Success }
-            assertDeduplicatedRetry(backend, SEND_ID)
+            awaitState { restored.sendEntry(PAGE_A)?.status == MutationStatus.Failed }
+            val failed = requireNotNull(restored.sendEntry(PAGE_A))
+            assertTrue(!failed.unresolved)
+            assertEquals(rejection.message, failed.message)
+            assertEquals(pending.request, failed.request)
+            restored.onMain { retryMutation(SEND_ID) }
+            assertEquals(2, backend.attempts(SEND_ID).size)
+            assertEquals(ORIGINAL_TEXT.trim(), backend.attempts(SEND_ID).singlePayload().text)
         }
+    }
+
+    @Test
+    fun parcelRestoresAnActiveConversationWithoutPendingWritesOnlyForItsOwner() = runBlocking {
+        val backend = Backend()
+        val (ownerState, otherState) = Harness(backend).use { original ->
+            original.ready()
+            original.onMain { navigate(PAGE_A) }
+            awaitState { original.controller.state.value.detail?.conversation?.target == TARGET_A }
+            assertTrue(original.controller.state.value.mutations.isEmpty())
+            parcelClone(original.handle) to parcelClone(original.handle)
+        }
+        Harness(backend, handle = ownerState).use { restored ->
+            restored.ready()
+            awaitState { restored.controller.state.value.detail?.conversation?.target == TARGET_A }
+            assertEquals(PAGE_A, restored.controller.state.value.page)
+        }
+        val other = Account().apply { profile = AccountProfile("usr_synthetic_other_tablet", OWNER.email) }
+        Harness(backend, account = other, handle = otherState).use { restored ->
+            restored.ready()
+            assertEquals(TabletPage.Home, restored.controller.state.value.page)
+        }
+        assertTrue(backend.calls.isEmpty())
     }
 
     @Test
@@ -237,6 +288,28 @@ class ScopedMutationRetryTest {
     }
 
     @Test
+    fun directoryDoesNotReopenTheSameRemovalAfterViewingOtherComputers() = runBlocking {
+        val backend = Backend()
+        Harness(backend).use { harness ->
+            harness.ready()
+            backend.revokedComputers += COMPUTER_A.id
+            harness.onMain { refresh() }
+            awaitState {
+                val state = harness.controller.state.value
+                !state.busy && state.page == TabletPage.Removed(COMPUTER_A.name) && state.computer(COMPUTER_A.id) == null
+            }
+            harness.onMain {
+                navigate(TabletPage.Devices)
+                refresh()
+            }
+            awaitState { !harness.controller.state.value.busy }
+            assertEquals(TabletPage.Devices, harness.controller.state.value.page)
+            assertNull(harness.controller.state.value.computer(COMPUTER_A.id))
+            assertEquals(COMPUTER_C, harness.controller.state.value.computer(COMPUTER_C.id)?.computer)
+        }
+    }
+
+    @Test
     fun logoutClearsRequestsAndCancelledCompletionsCannotRecreateThem() = runBlocking {
         val backend = Backend().apply { suspendedResponses.add(SEND_ID) }
         val account = Account()
@@ -275,12 +348,15 @@ class ScopedMutationRetryTest {
         val calls = CopyOnWriteArrayList<Call>()
         val admissions = ConcurrentHashMap<String, Call>()
         val actionReads = CopyOnWriteArrayList<String>()
+        val revokedComputers: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        val nextFailures = ConcurrentHashMap<String, RemoteFailure>()
         val lostFirstResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val suspendedResponses: MutableSet<String> = ConcurrentHashMap.newKeySet()
         val suspendedEntered: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
         suspend fun invoke(call: Call) {
             calls += call
+            nextFailures.remove(call.actionId)?.let { throw it }
             val previous = admissions.putIfAbsent(call.actionId, call)
             check(previous == null || previous == call) { "Synthetic retry changed the admitted request" }
             if (call.actionId in suspendedResponses) {
@@ -322,9 +398,10 @@ class ScopedMutationRetryTest {
             return connection()
         }
         override suspend fun disconnect() = Unit
-        override suspend fun workspace(): Pair<RemoteWorkspace, RemoteConnection> = RemoteWorkspace(
-            emptyList(), listOf(PROJECT_A, PROJECT_B, PROJECT_MACHINE), emptyList(), emptyList(), true,
-        ) to connection()
+        override suspend fun workspace(): Pair<RemoteWorkspace, RemoteConnection> {
+            if (computerId in backend.revokedComputers) throw RemoteFailure("computer_removed", removed = true)
+            return RemoteWorkspace(emptyList(), listOf(PROJECT_A, PROJECT_B, PROJECT_MACHINE), emptyList(), emptyList(), true) to connection()
+        }
         override suspend fun send(target: ConversationTarget, text: String, actionId: String) {
             backend.invoke(Call(actionId, "send", computerId, target.machineId, target.projectId,
                 target.conversationId, null, null, text))

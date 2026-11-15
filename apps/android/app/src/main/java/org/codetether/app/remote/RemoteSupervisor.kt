@@ -85,8 +85,7 @@ class RemoteSupervisor(private val account: TabletAccount) {
                     row.conversation().also { if (it.target.machineId != machine.id) invalidResponse() }
                 }
         }
-        val recent = recentRows.filterNot { it.archived }.groupBy { it.target.machineId }
-            .values.flatMap { it.take(5) }
+        val recent = recentRows.filterNot { it.archived }
         val attention = attentionPage(session)
         val machineById = machines.associateBy { it.id }
         val conversationsById = recentRows.associateBy { it.target.conversationId }
@@ -100,8 +99,16 @@ class RemoteSupervisor(private val account: TabletAccount) {
             }
             row.attention(conversation, provider, session.info.canControl)
         }
+        val summaryCounts = attention.optJSONObject("summary")
+        val totalCount = summaryCounts?.count("totalOpen")
+        val approvalCount = summaryCounts?.count("approvalOpen")
+        val completedReviewCount = summaryCounts?.count("completedReviewOpen")
+        val failedCount = summaryCounts?.count("failedOpen")
+        val counts = if (approvalCount != null && completedReviewCount != null && failedCount != null) {
+            RemoteAttentionCounts(approvalCount, completedReviewCount, failedCount)
+        } else items.countsByType().takeIf { totalCount == items.size }
         RemoteWorkspace(machines, projects, recent, items, session.info.canControl,
-            attention.optJSONObject("summary")?.count("totalOpen") ?: items.size) to session.info
+            totalCount ?: items.size, counts) to session.info
     }
 
     suspend fun projectConversations(
@@ -114,7 +121,16 @@ class RemoteSupervisor(private val account: TabletAccount) {
             it.conversation().also { conversation ->
                 if (conversation.target.machineId != project.machineId || conversation.target.projectId != project.id) invalidResponse()
             }
-        }.filter { it.archived == archived && (status == null || it.status == status) }
+        }.filter { status == null || it.status == status }
+    }
+
+    suspend fun projectConversationDirectory(project: RemoteProject): List<RemoteConversation> = read { session ->
+        pages(session, "conversation.list", "conversations", "machineId" to project.machineId,
+            "projectId" to project.id, "archived" to "all") {
+            it.conversation().also { conversation ->
+                if (conversation.target.machineId != project.machineId || conversation.target.projectId != project.id) invalidResponse()
+            }
+        }
     }
 
     suspend fun createProject(
@@ -550,20 +566,31 @@ class RemoteSupervisor(private val account: TabletAccount) {
         } catch (failure: RemoteFailure) {
             if (failure.code in reconnectErrors) releaseConnection()
             if (failure.code in uncertainErrors) throw RemoteFailure(failure.code, failure.httpStatus, uncertainActionId = actionId, reason = failure.reason)
+            // This is the write itself, including Rust validation before any bytes are sent.
+            if (failure.code in definitiveMutationErrors) {
+                throw RemoteFailure(failure.code, failure.httpStatus, reason = failure.reason, definitiveMutationFailure = true)
+            }
             throw failure
         }
         if (result.optionalText("actionId") != actionId) throw RemoteFailure("invalid_response", uncertainActionId = actionId)
         when (result.optionalText("status")) {
             "accepted", "completed" -> return result
-            "rejected" -> throw RemoteFailure("operation_not_allowed")
+            "rejected" -> throw RemoteFailure("operation_not_allowed", definitiveMutationFailure = true)
             else -> throw RemoteFailure("invalid_response", uncertainActionId = actionId)
         }
     }
 
-    private companion object {
-        val reconnectErrors = setOf("connection_closed", "connection_failed", "session_expired", "authorization_revoked", "remote_host_unreachable", "timeout")
-        val directoryCheckErrors = reconnectErrors + setOf("request_failed", "computer_unavailable", "authorization_unavailable", "control_plane_unavailable")
-        val uncertainErrors = reconnectErrors + setOf("invalid_response", "internal")
+    companion object {
+        private val reconnectErrors = setOf("connection_closed", "connection_failed", "session_expired", "authorization_revoked", "remote_host_unreachable", "timeout")
+        private val directoryCheckErrors = reconnectErrors + setOf("request_failed", "computer_unavailable", "authorization_unavailable", "control_plane_unavailable")
+        private val uncertainErrors = reconnectErrors + setOf("invalid_response", "internal", "protocol_error", "unavailable")
+        private val definitiveMutationErrors = setOf("invalid_request", "not_found", "conflict", "operation_not_allowed", "unsupported")
+
+        internal fun isUncertainMutationFailure(failure: Exception, retrying: Boolean): Boolean {
+            val remote = failure as? RemoteFailure ?: return retrying
+            return remote.uncertainActionId != null || remote.code in uncertainErrors ||
+                (retrying && !remote.definitiveMutationFailure)
+        }
     }
 }
 

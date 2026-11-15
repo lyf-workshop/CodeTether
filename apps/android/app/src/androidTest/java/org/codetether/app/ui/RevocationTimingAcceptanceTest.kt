@@ -76,7 +76,7 @@ class RevocationTimingAcceptanceTest {
                             while (!control.finished.get()) {
                                 check(SystemClock.elapsedRealtime() < deadline) { "Revocation acceptance timed out" }
                                 if (removedState.get() != 0L && visibleConfirmation.get() == 0L &&
-                                    removedTitleIsVisible() && isExpectedRemoved(activity, expectedName)
+                                    removedTitleIsVisible(expectedName) && isExpectedRemoved(activity, expectedName)
                                 ) {
                                     visibleConfirmation.compareAndSet(0L, SystemClock.elapsedRealtimeNanos())
                                     // Confirm a new draw after the accessibility tree contains the Removed title.
@@ -121,14 +121,15 @@ class RevocationTimingAcceptanceTest {
     private fun isExpectedRemoved(activity: LiveAcceptanceActivity, name: String): Boolean =
         (activity.controller.state.value.page as? TabletPage.Removed)?.computerName == name
 
-    private fun removedTitleIsVisible(): Boolean {
+    private fun removedTitleIsVisible(computerName: String): Boolean {
+        val title = "$computerName 已把这台平板移除"
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val root = instrumentation.uiAutomation.rootInActiveWindow ?: return false
         try {
             if (root.packageName?.toString() != instrumentation.targetContext.packageName) return false
-            val nodes = root.findAccessibilityNodeInfosByText("这台电脑移除了此设备")
+            val nodes = root.findAccessibilityNodeInfosByText(title)
             return try {
-                nodes.any { it.isVisibleToUser && it.text?.toString() == "这台电脑移除了此设备" }
+                nodes.any { it.isVisibleToUser && it.text?.toString() == title }
             } finally {
                 nodes.forEach { it.recycle() }
             }

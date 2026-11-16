@@ -138,5 +138,7 @@ Place the version row in the first card on the About page, below the CodeTether 
 ## 7. Decisions Needed from You
 
 1. Update hosting was decided on 2026-11-01 as us-vps-01. The tentative base URL is `https://codetether.org/updates`, giving a check URL of `https://codetether.org/updates/alpha/latest.json`. Website source exists only on the VPS. You upload and maintain this directory, and the coding agent does not log into the VPS. You may change the exact path, which determines only `CODETETHER_UPDATE_BASE_URL`.
+   - **Decided 2026-11-15:** `CODETETHER_UPDATE_BASE_URL=https://codetether.org/updates`.
 2. Generate the update signing private key on your own computer with Tauri CLI's `tauri signer generate`. Store it outside the repository with a password. Provide the public key for the release documentation. The coding agent will include commands directly usable on this computer in its report.
+   - **Done 2026-11-15.** The key pair was generated on the Windows computer and is stored outside the repository, password-protected. The public key (minisign key ID `39A9367FBD7A5F67`) is [`docs/release/codetether-update.key.pub`](../release/codetether-update.key.pub); its exact content, without a trailing newline, is `CODETETHER_UPDATE_PUBKEY`. The private key and its password stay with the Owner. Agents receive them only for a release that produces update files.
 3. After implementation and review, manually install alpha.3, release alpha.4, and perform one update each on Windows and Mac.

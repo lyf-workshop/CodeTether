@@ -237,8 +237,9 @@ This restates DEVELOPMENT-PROCESS §3–§5, which practice had drifted from:
 
 | #   | Task                                                                                                                 | Prompt                                                                           | Runs on                                          | Starts                                               | Deadline             |
 | --- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------- | -------------------- |
-| 1   | Release `v0.1.0-alpha.3` (round 2: merge the two reviewed Android fix branches onto the current `main`; I1 excluded) | `release-alpha3-prompt-r2.md`                                                    | Windows                                          | now: T1a re-checked 2026-11-15, release approved     | —                    |
-| 1b  | Phone shows the computer offline (vivo X60 diagnosis; finishes the T1a phone checks)                                 | `android-phone-offline-diagnosis-prompt.md`                                      | Windows, with the phone                          | after 1 has installed the tag on Windows             | —                    |
+| 1   | Release `v0.1.0-alpha.3` (round 2: merge the two reviewed Android fix branches onto the current `main`; I1 excluded) | `release-alpha3-prompt-r2.md`                                                    | Windows                                          | done: released 2026-11-15 (`0bf8cba`)                | —                    |
+| 1b  | Phone shows the computer offline (vivo X60 diagnosis; finishes the T1a phone checks)                                 | `android-phone-offline-diagnosis-prompt.md`                                      | Windows, with the phone                          | now                                                  | —                    |
+| 1c  | Rebuild alpha.3 with the update source (05 §5.2) and reinstall                                                       | `release-alpha3-update-source-prompt.md`                                         | Mac, then Windows after 1b                       | after the Owner adds the update public key           | —                    |
 | 2a  | I1 iPad r5 (one must-fix from the r4 review)                                                                         | `i1-fix-prompt-r5.md`                                                            | Mac                                              | now, if the Owner approves a fifth round (AD-11)     | —                    |
 | 2   | Repo hygiene and CI baseline                                                                                         | `repo-hygiene-ci-prompt.md`                                                      | Mac                                              | after 2a                                             | —                    |
 | 3   | Node 26 pin and Relay TLS reload                                                                                     | `runtime-node26-relay-tls-prompt.md`                                             | Windows                                          | after 1                                              | merged by 2026-11-27 |
@@ -261,7 +262,7 @@ Claude Code reviews each branch as it comes back and writes `docs/reviews/<branc
 3. 13
 4. 14
 
-Task 1b (added 2026-11-15) needs Windows and the phone right after 1. Task 5 can run beside it on the Mac if the Mac has the Android toolchain. Otherwise both run on Windows, and neither may restart or replace the installed desktop during the other's checks.
+Task 1b (added 2026-11-15) needs Windows and the phone. Task 1c's Windows part waits until 1b no longer needs the installed desktop; its Mac part can run first. Task 5 can run beside it on the Mac if the Mac has the Android toolchain. Otherwise both run on Windows, and neither may restart or replace the installed desktop during the other's checks.
 
 ### Owner actions
 
@@ -277,7 +278,9 @@ Task 1b (added 2026-11-15) needs Windows and the phone right after 1. Task 5 can
    - Pushing `main` and the tag is pre-approved, once every gate passes and every conflict is in the expected areas.
    - Uploading the U1 update files is skipped for alpha.3.
    - Deleting the merged remote branches still needs approval when the task asks.
-6. **Pick a Relay deployment window** in the first week of December.
+   - Done: 21 merged remote branches deleted with approval. Leftover folders are listed in `release-v0.1.0-alpha.3.md`.
+6. **Generate the update signing key pair** (05 §7, decision 2) so task 1c can start. Base URL: `https://codetether.org/updates` (decision 1).
+7. **Pick a Relay deployment window** in the first week of December.
 
 ## 4. Backlog (not scheduled)
 

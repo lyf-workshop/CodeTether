@@ -37,7 +37,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
    Use `adb logcat` for the app and the Host's own logs and diagnostics at the same timestamps. If neither side records the stage, add debug-only logging (`BuildConfig.DEBUG` on Android) that names the stage and the error class, on the fix branch, and install a debug APK built from it.
 
 3. **Separate the possible causes** with these checks, and report each result:
-   - **a. The internet route.** On the emulator, with the same APK, stay online for 10 minutes in Auto, then 10 minutes in the Debug internet-only mode. If internet-only fails on the emulator too, the problem is the Relay route, not the phone.
+   - **a. The internet route.** On the emulator, with the alpha.3 debug APK, stay online for 10 minutes in Auto, then 10 minutes in the Debug internet-only mode. If internet-only fails on the emulator too, the problem is the Relay route, not the phone.
    - **b. A stale authorization.** Does the authorization the phone presents match one the Host accepts?
    - **c. vivo restrictions on the app.** The earlier TCP checks ran from the `adb` shell, which vivo does not restrict the way it restricts an app. Record the app's network permission (WLAN and mobile data), its battery and background settings, and any network acceleration or dual-network setting. Test reachability from inside the app, not from the shell.
    - **d. Upgrading over old data.** The emulator was signed in and paired fresh; the phone kept data from an earlier build. Find the build the phone had before, from `D:/Projects/Software/agenthub-archive/t1a-report.md` or `adb shell dumpsys package org.codetether.app`. On the emulator, install that build, sign in and pair, then upgrade in place to the alpha.3 debug APK. Does it stay online?
@@ -66,6 +66,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
 - **Builds.**
   - The re-check used a `945c849` debug build made with the public client configuration (Control Plane `https://api.codetether.org` and the Supabase project) by `E:/Projects/Software/agenthub/acceptance-945c849/build-configured.ps1`.
   - A build without that configuration cannot sign in. Do not print its values.
+  - The release built the alpha.3 debug APK from the tag with the same configuration: `E:/Projects/Software/agenthub/release-alpha3-android-build/CodeTether_v0.1.0-alpha.3_debug.apk`, SHA-256 `1645aa1fc2dd8450baa03d5164c963d75a32d9b9cd2afcae77323f91600879c9`. Use it as the build under test.
+  - The alpha.3 APK has `versionCode` 2; every earlier build, including `945c849`, has 1. Going back to an earlier build over alpha.3 needs `adb install -r -d`. If a downgrade fails on stored data, say so; don't clear data to get past it.
 - **The phone.**
   - vivo X60 (`V2046A`), Android 13, arm64-v8a, 1080×2376 px at 480 dpi.
   - The system font scale is 1.54; leave it.

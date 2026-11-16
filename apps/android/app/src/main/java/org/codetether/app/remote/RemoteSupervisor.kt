@@ -14,6 +14,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.codetether.app.ConnectionDebug
 import org.codetether.app.account.AccountFailure
 import org.codetether.app.account.AccountFailureReason
 import org.codetether.app.account.PairedComputer
@@ -478,16 +479,30 @@ class RemoteSupervisor(private val account: TabletAccount) {
 
     private suspend fun open(target: Selection): Attached {
         var opened: SupervisorSession? = null
+        val mode = target.mode.name.lowercase()
+        var stage = "session.credentials.$mode"
+        ConnectionDebug.mark(stage, "start")
         return try {
             val credentials = account.connection(target.computer, target.mode)
+            ConnectionDebug.mark(stage, "ok")
+            stage = "session.native.$mode"
+            ConnectionDebug.mark(stage, "start")
             withContext(Dispatchers.IO) {
                 val session = credentials.connect()
                 opened = session
                 val expiration = session.expiresAt()
                 Instant.parse(expiration)
-                Attached(session, RemoteConnection(session.transport(), session.control() == "control", expiration))
+                val info = RemoteConnection(session.transport(), session.control() == "control", expiration)
+                ConnectionDebug.mark(stage, "ok", route = info.transport)
+                Attached(session, info)
             }
         } catch (failure: Exception) {
+            ConnectionDebug.mark(stage, "failed", failure, when (failure) {
+                is AccountFailure -> failure.reason.name.lowercase()
+                is MobileException.Failure -> failure.code
+                is RemoteFailure -> failure.code
+                else -> null
+            })
             opened?.let { it.disconnect(); it.close() }
             throw when (failure) {
                 is CancellationException -> failure
@@ -495,7 +510,8 @@ class RemoteSupervisor(private val account: TabletAccount) {
                 is MobileException.Failure -> failure.asRemoteFailure()
                 else -> RemoteFailure("connection_failed")
             }
-        } catch (_: LinkageError) {
+        } catch (failure: LinkageError) {
+            ConnectionDebug.mark(stage, "failed", failure, "runtime_unavailable")
             throw RemoteFailure("runtime_unavailable")
         }
     }
@@ -507,8 +523,15 @@ class RemoteSupervisor(private val account: TabletAccount) {
     }
 
     private suspend fun request(session: Attached, operation: String, vararg fields: Pair<String, Any?>): JSONObject {
-        val input = json("operation" to operation, *fields).toString()
-        return nativeRequest(session) { it.request(input) }
+        val stage = "request.$operation"
+        ConnectionDebug.mark(stage, "start")
+        return try {
+            val input = json("operation" to operation, *fields).toString()
+            nativeRequest(session) { it.request(input) }.also { ConnectionDebug.mark(stage, "ok") }
+        } catch (failure: Exception) {
+            ConnectionDebug.mark(stage, "failed", failure, (failure as? RemoteFailure)?.code)
+            throw failure
+        }
     }
 
     private suspend fun nativeRequest(

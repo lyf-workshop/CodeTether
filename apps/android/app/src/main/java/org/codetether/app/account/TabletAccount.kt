@@ -8,6 +8,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.codetether.app.BuildConfig
+import org.codetether.app.ConnectionDebug
 import uniffi.supervisor_mobile.ConnectOptions
 import uniffi.supervisor_mobile.ConnectionMode
 import uniffi.supervisor_mobile.DeviceSigner
@@ -43,8 +44,17 @@ class TabletAccount internal constructor(
     }
 
     suspend fun computers(): List<PairedComputer> {
-        val session = sessions.current()
-        return control.directory(session, registeredDevice(session))
+        ConnectionDebug.mark("directory.fetch", "start")
+        return try {
+            val session = sessions.current()
+            control.directory(session, registeredDevice(session)).also {
+                ConnectionDebug.mark("directory.fetch", "ok")
+            }
+        } catch (failure: Exception) {
+            ConnectionDebug.mark("directory.fetch", "failed", failure,
+                (failure as? AccountFailure)?.reason?.name?.lowercase())
+            throw failure
+        }
     }
 
     suspend fun pair(code: String, onClaimed: () -> Unit = {}): PairingResult {

@@ -47,6 +47,59 @@ const latestHelp = requiredHelp.replace(
   'Specify tool names (e.g. "Bash,Edit,Read")',
 )
 
+test('uses the measured 2.1.327 Search contract for the Windows local Host native first-party launch', async () => {
+  const probe = {
+    installation,
+    environment: { HOME: tmpdir(), PATH: process.env.PATH },
+    settingsPath: join(tmpdir(), 'codetether-missing-claude-settings.json'),
+    probeVersion: async () => '2.1.327 (Claude Code)',
+    probeHelp: async () => latestHelp,
+    fingerprint: async () => '3'.repeat(64),
+  }
+  const windows = { ...probe, runtimeTarget: 'windows_local_host' }
+  const { compatibility } = await observeClaudeCodeInstallation(windows)
+  assert.equal(compatibility.state, 'limited')
+  for (const key of [
+    'execution',
+    'streaming',
+    'nativeResume',
+    'fileRead',
+    'search',
+    'toolEvents',
+  ]) {
+    assert.equal(compatibility.capabilities[key].effective, true, key)
+  }
+  assert.equal(
+    compatibility.capabilities.nativeSessionDiscovery.effective,
+    false,
+  )
+
+  for (const options of [
+    probe,
+    { ...windows, probeVersion: async () => '2.1.328 (Claude Code)' },
+    { ...windows, installation: { ...installation, launcherKind: 'wrapper' } },
+    {
+      ...windows,
+      environment: {
+        ...probe.environment,
+        ANTHROPIC_BASE_URL: 'https://gateway.example.test',
+      },
+    },
+    {
+      ...windows,
+      probeHelp: async () => latestHelp.replace('Bash,Edit,Read', 'Bash,Edit'),
+    },
+    {
+      ...windows,
+      probeHelp: async () => latestHelp.replace('--restricted', '--other-mode'),
+    },
+  ]) {
+    const observation = await observeClaudeCodeInstallation(options)
+    assert.equal(observation.compatibility.state, 'incompatible')
+    assert.equal(observation.compatibility.capabilities.search.effective, false)
+  }
+})
+
 test('admits the latest REAL-validated profile despite its abbreviated tool help example', async () => {
   const observation = await observeClaudeCodeInstallation({
     installation,

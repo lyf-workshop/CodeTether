@@ -286,7 +286,7 @@ test('canonical selected installation gates creation; a healthy alternate is nev
     [group],
   )[0]
   assert.equal(option.eligibility.eligible, false)
-  assert.match(option.eligibility.label, /当前安装/u)
+  assert.match(option.eligibility.label, /所选安装不可用.*重新检查/u)
   assert.equal(group.selectedInstallationId, selected.installationId)
 })
 
@@ -297,41 +297,127 @@ test('a lifecycle group without its selected identity blocks rather than selecti
       selectedInstallationId,
       installations: [installation('installation_other01')],
     }
-    assert.equal(
-      conversationCreationProviderOptions([provider('codex')], [group])[0]
-        .eligibility.eligible,
-      false,
+    const [{ eligibility }] = conversationCreationProviderOptions(
+      [provider('codex')],
+      [group],
     )
+    assert.equal(eligibility.eligible, false)
+    assert.match(eligibility.label, /尚未选择可用安装/u)
   }
 })
 
-test('selected lifecycle compatibility and current backend authentication stay authoritative', () => {
-  for (const overrides of [
-    { compatibility: { state: 'incompatible' } },
-    {
-      compatibility: {
-        state: 'compatible',
-        capabilities: {
-          execution: { effective: true },
-          streaming: { effective: true },
-          nativeResume: { effective: false },
+test('an empty installation list directs the user to check the installation', () => {
+  const [{ eligibility }] = conversationCreationProviderOptions(
+    [provider('claude-code')],
+    [{ provider: 'claude-code', installations: [] }],
+  )
+  assert.equal(eligibility.eligible, false)
+  assert.match(eligibility.label, /未检测到安装.*确认安装状态后重新检查/u)
+})
+
+test('blocked tool choices show the selected installation’s observed reason and next step', () => {
+  for (const [overrides, expected] of [
+    [
+      { compatibility: { state: 'incompatible', freshness: 'last_known' } },
+      /上次检查时.*不兼容.*重新检查/u,
+    ],
+    [
+      {
+        compatibility: {
+          state: 'incompatible',
+          freshness: 'current',
+          failure: { reason: 'provider_protocol_error' },
+        },
+        backend: {
+          mode: 'first_party',
+          freshness: 'current',
+          readiness: 'ready',
         },
       },
-    },
-    { backend: { freshness: 'current', readiness: 'authentication_required' } },
+      /^所选安装的运行时.*不兼容.*重新检查/u,
+    ],
+    [
+      { compatibility: { state: 'unavailable', freshness: 'not_observed' } },
+      /尚未确认所选安装能否运行.*重新检查/u,
+    ],
+    [
+      {
+        compatibility: {
+          state: 'limited',
+          freshness: 'current',
+          capabilities: {
+            execution: { effective: true },
+            streaming: { effective: true },
+            nativeResume: { effective: false },
+          },
+        },
+      },
+      /不支持新会话所需的运行或恢复能力.*重新检查/u,
+    ],
+    [
+      {
+        backend: {
+          mode: 'first_party',
+          freshness: 'current',
+          readiness: 'authentication_required',
+        },
+      },
+      /需要登录.*登录后重新检查/u,
+    ],
+    [
+      {
+        backend: {
+          mode: 'custom_gateway',
+          freshness: 'current',
+          readiness: 'authentication_required',
+        },
+      },
+      /需要身份验证.*检查服务配置/u,
+    ],
+    [
+      { backend: { freshness: 'current', readiness: 'misconfigured' } },
+      /AI 服务配置不可用.*检查服务配置/u,
+    ],
+    [
+      { backend: { freshness: 'current', readiness: 'unavailable' } },
+      /AI 服务暂时不可用.*重新检查/u,
+    ],
   ]) {
     const selected = installation('installation_selected01', overrides)
     const group = {
-      provider: 'codex',
+      provider: 'claude-code',
       selectedInstallationId: selected.installationId,
       installations: [selected],
     }
-    assert.equal(
-      conversationCreationProviderOptions([provider('codex')], [group])[0]
-        .eligibility.eligible,
-      false,
+    const [{ eligibility }] = conversationCreationProviderOptions(
+      [provider('claude-code')],
+      [group],
     )
+    assert.equal(eligibility.eligible, false)
+    assert.match(eligibility.label, expected)
   }
+})
+
+test('an older backend login observation does not disable a currently eligible tool', () => {
+  const selected = installation('installation_selected01', {
+    backend: {
+      mode: 'first_party',
+      freshness: 'last_known',
+      readiness: 'authentication_required',
+    },
+  })
+  const [{ eligibility }] = conversationCreationProviderOptions(
+    [provider('claude-code')],
+    [
+      {
+        provider: 'claude-code',
+        selectedInstallationId: selected.installationId,
+        installations: [selected],
+      },
+    ],
+  )
+  assert.equal(eligibility.eligible, true)
+  assert.doesNotMatch(eligibility.label, /需要登录/u)
 })
 
 test('legacy descriptor eligibility is preserved without Lifecycle, and runtime health stays advisory', () => {

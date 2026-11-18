@@ -685,6 +685,9 @@ export class LocalProviderLifecycleCoordinator {
         this.#options.observeClaude ?? observeClaudeCodeInstallation
       )({
         installation,
+        ...((this.#options.platform ?? process.platform) === 'win32'
+          ? { runtimeTarget: 'windows_local_host' }
+          : {}),
         environment: this.#options.environment,
         signal: this.#abort.signal,
         checkFirstPartyAuth: true,

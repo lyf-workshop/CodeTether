@@ -80,6 +80,7 @@ export interface ClaudeCodeInstallationObservation {
 
 export interface ObserveClaudeCodeInstallationOptions {
   readonly installation: ClaudeCodeInstallationCandidate
+  readonly runtimeTarget?: 'windows_local_host'
   readonly environment?: NodeJS.ProcessEnv
   readonly settingsPath?: string
   readonly timeoutMs?: number
@@ -142,11 +143,20 @@ export async function observeClaudeCodeInstallation(
     // solely from its version label.
     const help = await (options.probeHelp?.() ??
       probeClaudeCodeHelp(options.installation.launcher, probeOptions))
+    // W0 verified restricted Read/Glob/Grep and native resume for this Windows
+    // native first-party release. Its help gives only an example tool list.
+    const verifiedWindowsSearch =
+      options.runtimeTarget === 'windows_local_host' &&
+      options.installation.launcherKind === 'native' &&
+      options.installation.launcher.kind === 'native' &&
+      backendConfiguration.mode === 'first_party' &&
+      version === '2.1.327'
     compatibility = compatibilityFromHelp(
       version,
       help,
       options.installation.launcherKind !== 'wrapper' &&
         options.installation.launcherKind !== 'unknown',
+      verifiedWindowsSearch,
     )
   } catch (error) {
     if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
@@ -186,6 +196,7 @@ function compatibilityFromHelp(
   version: string | undefined,
   help: string,
   sessionStoreAffinityEstablished: boolean,
+  verifiedWindowsSearch: boolean,
 ): ClaudeCodeCompatibilityObservation {
   const surface = parseClaudeCodeHelp(help)
   const executionSupported =
@@ -238,10 +249,11 @@ function compatibilityFromHelp(
     : optionSupportsValue(surface, '--tools', 'Read')
       ? 'supported'
       : 'unknown'
-  const searchSupport = shippedProtocolEvidence
-    ? 'supported'
-    : optionSupportsValue(surface, '--tools', 'Glob') &&
-        optionSupportsValue(surface, '--tools', 'Grep')
+  const searchSupport =
+    shippedProtocolEvidence ||
+    (verifiedWindowsSearch && fileReadSupport === 'supported') ||
+    (optionSupportsValue(surface, '--tools', 'Glob') &&
+      optionSupportsValue(surface, '--tools', 'Grep'))
       ? 'supported'
       : 'unknown'
   // Tool events are an already-enabled CodeTether policy capability, not a

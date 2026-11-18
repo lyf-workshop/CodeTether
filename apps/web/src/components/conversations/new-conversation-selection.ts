@@ -7,9 +7,13 @@ import type {
   ProjectLocation,
   ProjectRecord,
   ProviderId,
+  ProviderInstallationSummary,
 } from '@codetether/protocol'
-import type { ProviderPresentation } from '../../provider/provider-presentation.js'
-import { providerLifecycleForMachine } from '../../provider/provider-presentation.js'
+import {
+  providerLifecycleForMachine,
+  providerLifecyclePresentation,
+  type ProviderPresentation,
+} from '../../provider/provider-presentation.js'
 import { providerLifecycleSupportsConversationExecution } from '../conversation/conversation-controls.js'
 import { machinePlatformLabel } from '../machines/machine-presentation.js'
 import { selectNewConversationMachine } from './new-conversation-machine-selection.js'
@@ -303,13 +307,75 @@ export function conversationCreationProviderOptions(
         ? {
             ...eligibility,
             eligible: false,
-            label:
-              provider.displayName +
-              ' · 当前安装尚不能创建会话，请在设备详情检查',
+            label: conversationCreationLifecycleBlock(
+              lifecycle,
+              selectedInstallation,
+            ),
           }
         : eligibility,
     }
   })
+}
+
+function conversationCreationLifecycleBlock(
+  lifecycle: MachineProviderLifecycle,
+  selected: ProviderInstallationSummary | undefined,
+): string {
+  const recheck = '请在设备详情重新检查。'
+  if (selected === undefined) {
+    return lifecycle.installations.length === 0
+      ? '未检测到安装。请在运行 AI 工具的电脑上确认安装状态后重新检查。'
+      : `尚未选择可用安装。${recheck}`
+  }
+
+  const { installation, runtime, backend } =
+    providerLifecyclePresentation(lifecycle)
+  if (selected.availability !== 'available') {
+    return `${installation.stateLabel}。${recheck}`
+  }
+
+  const compatibility = selected.compatibility
+  if (compatibility?.freshness === 'not_observed') {
+    return `尚未确认所选安装能否运行。${recheck}`
+  }
+  if (runtime.state === 'incompatible' || runtime.state === 'unavailable') {
+    if (
+      runtime.state === 'unavailable' &&
+      compatibility?.freshness === 'current' &&
+      compatibility.failure
+    ) {
+      return runtime.description
+    }
+    const reason =
+      runtime.state === 'incompatible'
+        ? '所选安装的运行时与当前 CodeTether 不兼容。'
+        : '所选安装无法运行。'
+    return `${compatibility?.freshness === 'last_known' ? '上次检查时，' : ''}${reason}${recheck}`
+  }
+  if (
+    compatibility !== undefined &&
+    (!compatibility.capabilities.execution.effective ||
+      !compatibility.capabilities.streaming.effective ||
+      !compatibility.capabilities.nativeResume.effective)
+  ) {
+    return `${compatibility.freshness === 'last_known' ? '上次检查时，' : ''}所选安装不支持新会话所需的运行或恢复能力。${recheck}`
+  }
+
+  if (selected.backend?.freshness === 'current') {
+    switch (backend.readiness) {
+      case 'authentication_required':
+        if (backend.mode === 'first_party') {
+          return '需要登录。请在运行 AI 工具的电脑上登录后重新检查。'
+        }
+        return 'AI 服务需要身份验证。请在运行 AI 工具的电脑上检查服务配置。'
+      case 'misconfigured':
+        return 'AI 服务配置不可用。请在运行 AI 工具的电脑上检查服务配置。'
+      case 'unavailable':
+        return `AI 服务暂时不可用。${recheck}`
+    }
+  }
+
+  return `当前安装尚不能创建会话。${recheck}`
 }
 
 export type ConversationCreationProviderOption = ReturnType<

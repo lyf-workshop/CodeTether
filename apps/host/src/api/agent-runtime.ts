@@ -3,7 +3,10 @@ import type {
   AgentProvider,
   ApprovalKind,
 } from '@codetether/agent-core'
-import type { ProviderDescriptor } from '@codetether/protocol'
+import type {
+  AvailableProviderModel,
+  ProviderDescriptor,
+} from '@codetether/protocol'
 import type {
   ActionId,
   ConversationId,
@@ -99,6 +102,13 @@ export interface AgentHostRuntime {
   readonly descriptor?: ProviderDescriptor
   /** False for the read-only Host fallback when the Provider cannot launch. */
   readonly available?: boolean
+  /** Explicit control-only catalog refresh; ordinary reads never start a Provider. */
+  refreshAvailableModels?(): Promise<
+    | readonly (AvailableProviderModel & {
+        readonly reasoningOptions?: readonly string[]
+      })[]
+    | undefined
+  >
   subscribeEvents(listener: (event: AgentEvent) => void): () => void
   subscribeFailures(listener: (failure: Error) => void): () => void
   subscribeApprovals(

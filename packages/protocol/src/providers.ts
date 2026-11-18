@@ -50,6 +50,15 @@ export const ProviderModelSchema = z
   .strict()
 export type ProviderModel = z.infer<typeof ProviderModelSchema>
 
+export const AvailableProviderModelSchema = z
+  .object({
+    id: z.string().trim().min(1).max(240),
+    name: z.string().trim().min(1).max(240),
+    description: z.string().trim().min(1).max(1024).optional(),
+  })
+  .strict()
+export type AvailableProviderModel = z.infer<typeof AvailableProviderModelSchema>
+
 export const ProviderReasoningOptionSchema = z
   .object({
     id: z.string().trim().min(1).max(120),
@@ -118,6 +127,7 @@ export const ProviderDescriptorSchema = z
     version: z.string().trim().min(1).max(120).optional(),
     testedVersion: z.string().trim().min(1).max(120).optional(),
     models: z.array(ProviderModelSchema).max(64).optional(),
+    availableModels: z.array(AvailableProviderModelSchema).max(64).optional(),
     reasoningLabel: z.string().trim().min(1).max(120).optional(),
     reasoningOptions: z.array(ProviderReasoningOptionSchema).max(16).optional(),
     executionHealth: ProviderExecutionHealthSchema.optional(),
@@ -143,6 +153,17 @@ export const ProviderDescriptorSchema = z
         message: 'A Provider can expose at most one default model',
         path: ['models'],
       })
+    }
+    const availableModelIds = new Set<string>()
+    for (const [index, model] of (descriptor.availableModels ?? []).entries()) {
+      if (availableModelIds.has(model.id)) {
+        context.addIssue({
+          code: 'custom',
+          message: 'Available Provider model identities must be unique',
+          path: ['availableModels', index, 'id'],
+        })
+      }
+      availableModelIds.add(model.id)
     }
     const reasoningOptionIds = new Set<string>()
     for (const [index, option] of (

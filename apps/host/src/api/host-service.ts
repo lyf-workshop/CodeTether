@@ -155,6 +155,10 @@ import {
   type ProviderExecutionHealth,
   type RenameConversationRequest,
   type RenameConversationResponse,
+  RefreshConversationModelsResponseSchema,
+  type RefreshConversationModelsResponse,
+  type UpdateConversationModelRequest,
+  type UpdateConversationModelResponse,
   type ResolveApprovalRequest,
   type ResolveApprovalResponse,
   type ResolveAttentionRequest,
@@ -311,6 +315,12 @@ const PROVIDER_SESSION_DISCOVERY_MAXIMUM_PAGES = 100
 const PROVIDER_SESSION_PRIVATE_ID_MAXIMUM_BYTES = 4 * 1024
 const PROVIDER_SESSION_REVISION_MAXIMUM_BYTES = 128
 const DEFAULT_MAX_CONCURRENT_PROVIDER_SESSION_SCANS = 4
+type RemoteSelectableModel = {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly reasoningOptions: readonly string[]
+}
 export const DEFAULT_MAX_CONVERSATIONS = 8
 export const DEFAULT_PERSISTENCE_FLUSH_MS = 300
 
@@ -493,6 +503,8 @@ export class HostService {
    * until Host restart).
    */
   readonly #providerOwnershipFailures = new Map<string, CanonicalFailure>()
+  /** Picker metadata is ephemeral and scoped to one authenticated observation. */
+  readonly #remoteModelCatalogs = new Map<string, readonly RemoteSelectableModel[]>()
   readonly #providerExecutionHealth = new Map<
     string,
     DurableProviderExecutionHealthObservation
@@ -644,6 +656,11 @@ export class HostService {
                   providerInstallationId: installation.installationId,
                   installationRevision: installation.installationRevision,
                   now: this.#now,
+                  supportsTurnOverrides: () =>
+                    this.#providerDescriptorForMachine(
+                      machineId,
+                      'claude-code',
+                    )?.capabilities.modelSelection === true,
                   opener: {
                     open: async (input) => {
                       if (
@@ -670,6 +687,7 @@ export class HostService {
       this.#remoteMachines.subscribeStatus?.((machineId, connectionState) => {
         try {
           if (connectionState !== 'online') {
+            this.#clearRemoteModelCatalogs(machineId)
             this.#remoteTransportGenerations.set(
               machineId,
               this.#remoteTransportGeneration(machineId) + 1,
@@ -706,6 +724,7 @@ export class HostService {
       })
     this.#unsubscribeRemoteMachineRemoval =
       this.#remoteMachines.subscribeRemoval?.((machineId) => {
+        this.#clearRemoteModelCatalogs(machineId)
         // Durable revocation recovery may finish after a Host restart, outside
         // the synchronous unpair action. Tear down the now-orphaned Relay
         // worker/configuration as a separate infrastructure lifecycle step.
@@ -727,6 +746,7 @@ export class HostService {
     this.#unsubscribeRemoteProviderDiscovery =
       this.#remoteMachines.subscribeProviderDiscovery?.((observation) => {
         try {
+          this.#clearRemoteModelCatalogs(observation.machineId)
           const durable = this.#persistence?.getMachine(observation.machineId)
           if (durable?.kind !== 'remote') return
           // This callback is emitted only after the coordinator accepted a
@@ -3170,6 +3190,301 @@ export class HostService {
     )
   }
 
+  async updateConversationModel(
+    conversationId: ConversationId,
+    request: UpdateConversationModelRequest,
+  ): Promise<UpdateConversationModelResponse> {
+    const id = ConversationIdSchema.parse(conversationId)
+    return await this.#executeAction(
+      request.actionId,
+      `conversation.updateModel:${id}`,
+      { conversationId: id, request },
+      async () => {
+        const store = this.#requireConversationOrganizationStore()
+        const existing = store.getConversation(id)
+        if (existing === undefined || existing.status === 'creating') {
+          throw new HostServiceError('not_found', 'Conversation was not found', 404)
+        }
+        if (existing.archivedAt !== undefined) {
+          throw archivedConversationControlError()
+        }
+        const hydrated = this.#conversations.get(id)
+        if (
+          existing.status === 'running' ||
+          existing.status === 'waiting' ||
+          hydrated?.startingTurn === true ||
+          hydrated?.record.activeTurnId !== undefined
+        ) {
+          throw new HostServiceError(
+            'conflict',
+            'Wait for the active Turn to finish before changing model settings',
+            409,
+          )
+        }
+        let machine: MachineSummary
+        try {
+          machine = this.#machines.get(existing.machineId)
+          if (
+            machine.availability !== 'available' ||
+            (machine.kind === 'remote' && machine.connectionState !== 'online')
+          ) {
+            throw machineUnavailableError(machine, this.#timestamp())
+          }
+        } catch (error) {
+          throw machineServiceError(error)
+        }
+        let refreshedModels:
+          | Awaited<ReturnType<NonNullable<AgentHostRuntime['refreshAvailableModels']>>>
+          | undefined
+        if (machine.kind === 'remote') {
+          refreshedModels = await this.#refreshRemoteModels(existing)
+        }
+        if (
+          machine.kind === 'local' &&
+          existing.provider === 'codex' &&
+          (request.model !== undefined || request.reasoning !== undefined)
+        ) {
+          const runtime = this.#providers.get('codex')
+          const refresh = runtime?.refreshAvailableModels
+          if (refresh === undefined) {
+            throw new HostServiceError(
+              'operation_not_allowed',
+              'Codex model switching is unavailable',
+              409,
+            )
+          }
+          try {
+            refreshedModels = await refresh.call(runtime)
+          } catch {
+            throw new HostServiceError(
+              'operation_not_allowed',
+              'Codex model list is unavailable',
+              409,
+            )
+          }
+        }
+        const descriptor = this.#providerDescriptorForMachine(
+          existing.machineId,
+          existing.provider,
+        )
+        if (
+          descriptor?.availability !== 'available' ||
+          !this.#machineRuntimeAvailable(existing.machineId, existing.provider)
+        ) {
+          throw providerUnavailableError(existing.provider, descriptor)
+        }
+        if (
+          (request.model !== undefined &&
+            descriptor.capabilities.modelSelection !== true) ||
+          (request.reasoning !== undefined &&
+            descriptor.capabilities.reasoningControl !== true)
+        ) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not support changing this Conversation setting',
+            409,
+          )
+        }
+        const modelIds =
+          refreshedModels?.map((model) => model.id) ??
+          descriptor.availableModels?.map((model) => model.id) ??
+          descriptor.models?.map((model) => model.id)
+        if (request.model !== undefined && modelIds === undefined) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not provide a selectable model list',
+            409,
+          )
+        }
+        if (
+          request.model !== undefined &&
+          !modelIds?.includes(request.model)
+        ) {
+          throw new HostServiceError(
+            'invalid_request',
+            'The selected model is unavailable for this Agent',
+            400,
+          )
+        }
+        const targetModel =
+          request.model ?? existing.currentModel ?? existing.model
+        const modelSpecificReasoning = refreshedModels?.find(
+          (model) => model.id === targetModel,
+        )?.reasoningOptions
+        const sharedReasoning =
+          existing.provider === 'claude-code' &&
+          targetModel === undefined &&
+          refreshedModels !== undefined &&
+          refreshedModels.length > 0 &&
+          refreshedModels.every(
+            (model) =>
+              model.reasoningOptions?.join(',') ===
+              refreshedModels?.[0]?.reasoningOptions?.join(','),
+          )
+            ? refreshedModels[0]?.reasoningOptions
+            : undefined
+        const reasoningOptions =
+          refreshedModels === undefined
+            ? descriptor.reasoningOptions?.map((option) => option.id)
+            : (modelSpecificReasoning ?? sharedReasoning)
+        const effectiveReasoning =
+          request.reasoning ?? existing.currentReasoning ?? existing.reasoning
+        if (request.reasoning !== undefined && reasoningOptions === undefined) {
+          throw new HostServiceError(
+            'operation_not_allowed',
+            'This Agent does not provide reasoning options for the selected model',
+            409,
+          )
+        }
+        const incompatibleReasoning =
+          effectiveReasoning !== undefined &&
+          (request.reasoning !== undefined || request.model !== undefined) &&
+          reasoningOptions !== undefined &&
+          !reasoningOptions.includes(effectiveReasoning)
+        if (incompatibleReasoning && request.reasoning !== undefined) {
+          throw new HostServiceError(
+            'invalid_request',
+            'The selected reasoning option is unavailable for this Agent',
+            400,
+          )
+        }
+        const update =
+          request.model !== undefined &&
+          request.reasoning === undefined &&
+          (incompatibleReasoning ||
+            (effectiveReasoning !== undefined && reasoningOptions === undefined))
+            ? { model: request.model, reasoning: null }
+            : request
+        // Catalog fetch can await a remote Node or local App Server. A Turn
+        // admitted during that wait owns the current settings until it ends.
+        const latest = store.getConversation(id)
+        const latestRuntime = this.#conversations.get(id)
+        if (
+          latest === undefined ||
+          latest.status === 'running' ||
+          latest.status === 'waiting' ||
+          latestRuntime?.startingTurn === true ||
+          latestRuntime?.record.activeTurnId !== undefined
+        ) {
+          throw new HostServiceError(
+            'conflict',
+            'Wait for the active Turn to finish before changing model settings',
+            409,
+          )
+        }
+        let result: DurableConversationMutationResult
+        try {
+          result = store.updateConversationModel(
+            id,
+            update,
+            TimestampSchema.parse(this.#timestamp()),
+          )
+        } catch (error) {
+          this.#handlePersistenceFailure(toError(error))
+          throw runtimeUnavailableError('Conversation durability is unavailable')
+        }
+        this.#syncRuntimeModel(result.conversation)
+        const summary = conversationSummary(result.conversation)
+        if (result.changed) this.#publishConversationUpdated(summary)
+        return {
+          protocolVersion,
+          actionId: request.actionId,
+          status: 'completed',
+          data: { conversation: summary },
+        }
+      },
+      false,
+    )
+  }
+
+  async refreshConversationModels(
+    conversationId: ConversationId,
+  ): Promise<RefreshConversationModelsResponse> {
+    this.#assertAcceptingActions()
+    const id = ConversationIdSchema.parse(conversationId)
+    const existing = this.#requireConversationOrganizationStore().getConversation(id)
+    if (existing === undefined || existing.status === 'creating') {
+      throw new HostServiceError('not_found', 'Conversation was not found', 404)
+    }
+    if (existing.archivedAt !== undefined) {
+      throw archivedConversationControlError()
+    }
+    let machine: MachineSummary
+    try {
+      machine = this.#machines.get(existing.machineId)
+      if (
+        machine.availability !== 'available' ||
+        (machine.kind === 'remote' && machine.connectionState !== 'online')
+      ) {
+        throw machineUnavailableError(machine, this.#timestamp())
+      }
+    } catch (error) {
+      throw machineServiceError(error)
+    }
+    if (!this.#machineRuntimeAvailable(existing.machineId, existing.provider)) {
+      throw providerUnavailableError(
+        existing.provider,
+        this.#providerDescriptorForMachine(existing.machineId, existing.provider),
+      )
+    }
+    let remoteModels: readonly RemoteSelectableModel[] | undefined
+    if (machine.kind === 'remote') {
+      remoteModels = await this.#refreshRemoteModels(existing)
+    } else if (existing.provider === 'codex') {
+      const runtime = this.#providers.get('codex')
+      const refresh = runtime?.refreshAvailableModels
+      if (refresh === undefined) {
+        throw new HostServiceError(
+          'operation_not_allowed',
+          'Codex model discovery is unavailable',
+          409,
+        )
+      }
+      try {
+        await refresh.call(runtime)
+      } catch {
+        throw new HostServiceError(
+          'operation_not_allowed',
+          'Codex model list is unavailable',
+          409,
+        )
+      }
+    }
+    const discovered = this.#providerDescriptorForMachine(
+      existing.machineId,
+      existing.provider,
+    )
+    const descriptor =
+      discovered === undefined || remoteModels === undefined
+        ? discovered
+        : {
+            ...discovered,
+            models: remoteModels.map(({ id, name }) => ({ id, label: name })),
+            availableModels: remoteModels.map(
+              ({ id, name, description }) => ({
+                id,
+                name,
+                ...(description === undefined ? {} : { description }),
+              }),
+            ),
+          }
+    if (
+      descriptor?.availability !== 'available' ||
+      descriptor.capabilities.modelSelection !== true ||
+      (descriptor.availableModels?.length ?? descriptor.models?.length ?? 0) === 0
+    ) {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'This Agent does not provide selectable models',
+        409,
+      )
+    }
+    return RefreshConversationModelsResponseSchema.parse({
+      protocolVersion,
+      provider: descriptor,
+    })
+  }
+
   async pinConversation(
     conversationId: ConversationId,
     request: PinConversationRequest,
@@ -3493,6 +3808,15 @@ export class HostService {
                   ...(request.reasoning === undefined
                     ? {}
                     : { reasoning: request.reasoning }),
+                  ...(machineProvider.capabilities.modelSelection !== true ||
+                  request.model === undefined
+                    ? {}
+                    : { currentModel: request.model }),
+                  ...(machineProvider.capabilities.modelSelection !== true ||
+                  machineProvider.capabilities.reasoningControl !== true ||
+                  request.reasoning === undefined
+                    ? {}
+                    : { currentReasoning: request.reasoning }),
                   status: 'creating',
                   createdAt: timestamp,
                   updatedAt: timestamp,
@@ -3659,6 +3983,16 @@ export class HostService {
                       ...(request.reasoning === undefined
                         ? {}
                         : { reasoning: request.reasoning }),
+                      ...(machineProvider.capabilities.modelSelection !== true ||
+                      (provider.model === undefined &&
+                        request.model === undefined)
+                        ? {}
+                        : { currentModel: provider.model ?? request.model }),
+                      ...(machineProvider.capabilities.modelSelection !== true ||
+                      machineProvider.capabilities.reasoningControl !== true ||
+                      request.reasoning === undefined
+                        ? {}
+                        : { currentReasoning: request.reasoning }),
                       status: 'idle',
                       createdAt: timestamp,
                       updatedAt: timestamp,
@@ -5485,6 +5819,10 @@ export class HostService {
         conversation.record = {
           ...conversation.record,
           model: resumed.model,
+          ...(conversation.record.machineId === this.#machines.localMachineId() ||
+          conversation.record.currentModel !== undefined
+            ? { currentModel: resumed.model }
+            : {}),
           updatedAt: this.#timestamp(),
         }
       }
@@ -5908,6 +6246,12 @@ export class HostService {
       ...(conversation.record.reasoning === undefined
         ? {}
         : { reasoning: conversation.record.reasoning }),
+      ...(conversation.record.currentModel === undefined
+        ? {}
+        : { currentModel: conversation.record.currentModel }),
+      ...(conversation.record.currentReasoning === undefined
+        ? {}
+        : { currentReasoning: conversation.record.currentReasoning }),
       status: conversation.record.status,
       createdAt: conversation.record.createdAt,
       updatedAt: conversation.record.updatedAt,
@@ -5965,6 +6309,25 @@ export class HostService {
     else record.pinnedAt = durable.pinnedAt
     if (durable.archivedAt === undefined) delete record.archivedAt
     else record.archivedAt = durable.archivedAt
+    runtime.record = ConversationRecordSchema.parse(record)
+  }
+
+  #syncRuntimeModel(durable: DurableConversation): void {
+    const runtime = this.#conversations.get(durable.conversationId)
+    if (runtime === undefined) return
+    const record: Record<string, unknown> = {
+      ...runtime.record,
+      updatedAt: durable.updatedAt,
+    }
+    for (const field of [
+      'model',
+      'reasoning',
+      'currentModel',
+      'currentReasoning',
+    ] as const) {
+      if (durable[field] === undefined) delete record[field]
+      else record[field] = durable[field]
+    }
     runtime.record = ConversationRecordSchema.parse(record)
   }
 
@@ -6155,6 +6518,108 @@ export class HostService {
         'Remote Project Location is unavailable or no longer authorized',
       )
     }
+  }
+
+  #clearRemoteModelCatalogs(machineId: MachineId): void {
+    const prefix = `${machineId}\0`
+    for (const key of this.#remoteModelCatalogs.keys()) {
+      if (key.startsWith(prefix)) this.#remoteModelCatalogs.delete(key)
+    }
+  }
+
+  async #refreshRemoteModels(
+    conversation: DurableConversation,
+  ): Promise<readonly RemoteSelectableModel[]> {
+    const list = this.#remoteMachines.listRemoteProviderModels
+    const descriptor = this.#providerDescriptorForMachine(
+      conversation.machineId,
+      conversation.provider,
+    )
+    if (
+      list === undefined ||
+      descriptor?.availability !== 'available' ||
+      descriptor.capabilities.modelSelection !== true ||
+      !this.#machineRuntimeAvailable(
+        conversation.machineId,
+        conversation.provider,
+      )
+    ) {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'Remote model controls are unavailable on this Machine',
+        409,
+      )
+    }
+    const installation = this.#requireProviderRuntimeInstallation(
+      conversation.machineId,
+      conversation.provider,
+      conversation.providerInstallationId,
+    )
+    const observedAt = this.#persistence?.getRemoteProviderObservation(
+      conversation.machineId,
+    )?.observedAt
+    if (observedAt === undefined) {
+      throw providerUnavailableError(conversation.provider, descriptor)
+    }
+    const { durable, trust } = this.#requireRemoteMachineTrust(
+      conversation.machineId,
+    )
+    let models: readonly RemoteSelectableModel[]
+    try {
+      models = await list.call(this.#remoteMachines, durable, trust, {
+        provider: conversation.provider,
+        providerInstallationId: installation.installationId,
+        expectedInstallationRevision: installation.installationRevision,
+      })
+    } catch {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'Remote model list is unavailable',
+        409,
+      )
+    }
+    const machine = this.#machines.get(conversation.machineId)
+    const currentInstallation = this.#providerInstallation(
+      conversation.machineId,
+      conversation.provider,
+      conversation.providerInstallationId,
+    )
+    if (
+      machine.availability !== 'available' ||
+      machine.connectionState !== 'online' ||
+      currentInstallation?.revision !== installation.installationRevision ||
+      this.#persistence?.getRemoteProviderObservation(
+        conversation.machineId,
+      )?.observedAt !== observedAt ||
+      !this.#machineRuntimeAvailable(
+        conversation.machineId,
+        conversation.provider,
+      )
+    ) {
+      throw providerUnavailableError(conversation.provider)
+    }
+    if (models.length === 0) {
+      throw new HostServiceError(
+        'operation_not_allowed',
+        'This Agent does not provide selectable models',
+        409,
+      )
+    }
+    const catalogPrefix = `${conversation.machineId}\0${conversation.provider}\0`
+    for (const key of this.#remoteModelCatalogs.keys()) {
+      if (key.startsWith(catalogPrefix)) this.#remoteModelCatalogs.delete(key)
+    }
+    this.#remoteModelCatalogs.set(
+      remoteModelCatalogKey(
+        conversation.machineId,
+        conversation.provider,
+        installation.installationId,
+        installation.installationRevision,
+        observedAt,
+      ),
+      models,
+    )
+    return models
   }
 
   async #openRemoteCodexSession(input: {
@@ -7628,12 +8093,45 @@ export class HostService {
     const lifecycles = this.#providerLifecyclesForMachine(machine)
     return {
       providers: observation.providers.map((descriptor) => {
+        const lifecycle = lifecycles.find(
+          ({ provider }) => provider === descriptor.provider,
+        )
         const effective = providerDescriptorForSelectedInstallation(
           descriptor,
-          lifecycles.find(({ provider }) => provider === descriptor.provider),
+          lifecycle,
         )
+        const selected = lifecycle?.installations.find(
+          ({ installationId }) =>
+            installationId === lifecycle.selectedInstallationId,
+        )
+        const catalog =
+          current &&
+          effective.capabilities.modelSelection &&
+          selected?.revision !== undefined
+            ? this.#remoteModelCatalogs.get(
+                remoteModelCatalogKey(
+                  machine.machineId,
+                  descriptor.provider,
+                  selected.installationId,
+                  selected.revision,
+                  observation.observedAt,
+                ),
+              )
+            : undefined
         return {
           ...effective,
+          ...(catalog === undefined
+            ? {}
+            : {
+                models: catalog.map(({ id, name }) => ({ id, label: name })),
+                availableModels: catalog.map(
+                  ({ id, name, description }) => ({
+                    id,
+                    name,
+                    ...(description === undefined ? {} : { description }),
+                  }),
+                ),
+              }),
           executionHealth: this.#providerExecutionHealthPresentation(
             machine,
             descriptor.provider,
@@ -8558,6 +9056,12 @@ function conversationSummary(
     provider: record.provider,
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
+    ...(record.currentModel === undefined
+      ? {}
+      : { currentModel: record.currentModel }),
+    ...(record.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: record.currentReasoning }),
     status: record.status,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -9223,6 +9727,12 @@ function conversationRecordFromDurable(
     ...(conversation.reasoning === undefined
       ? {}
       : { reasoning: conversation.reasoning }),
+    ...(conversation.currentModel === undefined
+      ? {}
+      : { currentModel: conversation.currentModel }),
+    ...(conversation.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: conversation.currentReasoning }),
     status: conversation.status,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
@@ -9681,12 +10191,16 @@ function remoteProviderExecutionProfileAvailable(
       codexTransportAvailable &&
       descriptor.capabilities.streaming &&
       enabledCapabilities.every(
-        (capability) => capability === 'resume' || capability === 'streaming',
+        (capability) =>
+          capability === 'modelSelection' ||
+          capability === 'resume' ||
+          capability === 'streaming',
       )
     )
   }
   const allowed = new Set([
     'fileRead',
+    'modelSelection',
     'reasoningControl',
     'resume',
     'search',
@@ -9815,6 +10329,16 @@ function requireProviderThreadId(conversation: ConversationState): string {
     throw providerConversationUnavailableError(conversation.record.provider)
   }
   return conversation.providerThreadId
+}
+
+function remoteModelCatalogKey(
+  machineId: MachineId,
+  provider: AgentProvider,
+  installationId: ProviderInstallationId,
+  revision: ProviderInstallationRevision,
+  observedAt: string,
+): string {
+  return [machineId, provider, installationId, revision, observedAt].join('\0')
 }
 
 function machineRuntimeKey(

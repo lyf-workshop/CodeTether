@@ -61,6 +61,8 @@ export interface RemoteCodexRuntimeSession {
     readonly actionId: string
     readonly turnId: string
     readonly prompt: string
+    readonly model?: string
+    readonly reasoning?: string
   }): Promise<RemoteCodexRuntimeTurn>
   close(): Promise<void> | void
 }
@@ -223,6 +225,8 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
       readonly providerThreadId: string
       readonly cwd: string
       readonly input: string
+      readonly model?: string
+      readonly reasoning?: string
     } & ProviderRuntimeContext,
   ): Promise<ProviderTurnResult> {
     this.#assertOpen()
@@ -242,6 +246,10 @@ export class RemoteCodexHostRuntime implements AgentHostRuntime {
       actionId: identity.actionId,
       turnId: identity.turnId,
       prompt: options.input,
+      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(options.reasoning === undefined
+        ? {}
+        : { reasoning: options.reasoning }),
     })
     const pump = this.#pumpTurn(turn, options.providerThreadId, providerTurnId)
     this.#turnPumps.add(pump)

@@ -251,6 +251,7 @@ test('remote observation and runtime preparation share one selected installation
         .sort(),
       [
         'fileRead',
+        'modelSelection',
         'reasoningControl',
         'resume',
         'search',

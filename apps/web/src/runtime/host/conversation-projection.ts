@@ -137,6 +137,8 @@ export interface ConversationReadModel {
   readonly provider: ProviderId
   readonly model?: string
   readonly reasoning?: string
+  readonly currentModel?: string
+  readonly currentReasoning?: string
   readonly createdAt: string
   readonly updatedAt: string
   readonly lastActivityAt: string
@@ -847,6 +849,12 @@ function projectConversationRecord(
     provider: record.provider,
     ...(record.model === undefined ? {} : { model: record.model }),
     ...(record.reasoning === undefined ? {} : { reasoning: record.reasoning }),
+    ...(record.currentModel === undefined
+      ? {}
+      : { currentModel: record.currentModel }),
+    ...(record.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: record.currentReasoning }),
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     lastActivityAt: record.lastActivityAt ?? record.updatedAt,
@@ -880,6 +888,12 @@ function mergeConversationSummary(
     ...(summary.reasoning === undefined
       ? {}
       : { reasoning: summary.reasoning }),
+    ...(summary.currentModel === undefined
+      ? {}
+      : { currentModel: summary.currentModel }),
+    ...(summary.currentReasoning === undefined
+      ? {}
+      : { currentReasoning: summary.currentReasoning }),
     createdAt: summary.createdAt,
     updatedAt: summary.updatedAt,
     lastActivityAt: summary.lastActivityAt,
@@ -888,9 +902,15 @@ function mergeConversationSummary(
   const mutableOrganization = next as {
     pinnedAt?: string
     archivedAt?: string
+    currentModel?: string
+    currentReasoning?: string
   }
   if (summary.pinnedAt === undefined) delete mutableOrganization.pinnedAt
   if (summary.archivedAt === undefined) delete mutableOrganization.archivedAt
+  if (summary.currentModel === undefined)
+    delete mutableOrganization.currentModel
+  if (summary.currentReasoning === undefined)
+    delete mutableOrganization.currentReasoning
   return next
 }
 
@@ -908,6 +928,8 @@ function sameConversationMetadata(
     left.provider === right.provider &&
     left.model === right.model &&
     left.reasoning === right.reasoning &&
+    left.currentModel === right.currentModel &&
+    left.currentReasoning === right.currentReasoning &&
     left.createdAt === right.createdAt &&
     left.updatedAt === right.updatedAt &&
     left.lastActivityAt === right.lastActivityAt

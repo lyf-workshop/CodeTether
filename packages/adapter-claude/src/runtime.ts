@@ -20,6 +20,7 @@ import type {
   ClaudeCodeEffort,
   ClaudeCodeFailure,
   ClaudeCodeLauncher,
+  ClaudeCodeModel,
   ClaudeCodeTurnResult,
 } from './types.js'
 
@@ -46,6 +47,7 @@ export interface ClaudeCodeStartTurnOptions {
   readonly turnId: string
   readonly prompt: string
   readonly effort?: ClaudeCodeEffort
+  readonly model?: ClaudeCodeModel
 }
 
 export interface ClaudeCodeTurnExecution {
@@ -147,6 +149,7 @@ export class ClaudeCodeSessionRuntime {
       prompt: options.prompt,
       resume: this.#resume,
       ...(options.effort === undefined ? {} : { effort: options.effort }),
+      ...(options.model === undefined ? {} : { model: options.model }),
       ...(this.#environment === undefined
         ? {}
         : { environment: this.#environment }),

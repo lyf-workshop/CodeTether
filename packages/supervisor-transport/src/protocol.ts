@@ -617,10 +617,37 @@ export const supervisorRequestSchema = z.discriminatedUnion('operation', [
       reasoning: z.string().trim().min(1).max(120).optional(),
     })
     .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.updateModel'),
+        actionId: supervisorActionIdSchema,
+        ...supervisorConversationScope,
+        model: z.string().trim().min(1).max(240).optional(),
+        reasoning: z.string().trim().min(1).max(120).optional(),
+      })
+      .strict(),
+    supervisorRequestBaseSchema
+      .extend({
+        operation: z.literal('conversation.models.refresh'),
+        ...supervisorConversationScope,
+      })
+      .strict(),
   ...supervisorB1OperationSchema.options.map((operation) =>
     operation.extend(supervisorRequestBaseSchema.shape),
   ),
-])
+])  .superRefine((request, context) => {
+    if (
+      request.operation === 'conversation.updateModel' &&
+      request.model === undefined &&
+      request.reasoning === undefined
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'A model or reasoning update is required',
+      })
+    }
+  })
+
 export type SupervisorRequest = z.infer<typeof supervisorRequestSchema>
 
 export const supervisorResponseSchema = z

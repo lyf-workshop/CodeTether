@@ -769,6 +769,23 @@ pub(crate) enum Operation {
         conversation_id: String,
         input: TurnInput,
     },
+    #[serde(rename = "conversation.updateModel")]
+    ConversationUpdateModel {
+        action_id: String,
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning: Option<String>,
+    },
+    #[serde(rename = "conversation.models.refresh")]
+    ConversationModelsRefresh {
+        machine_id: String,
+        project_id: String,
+        conversation_id: String,
+    },
     #[serde(rename = "conversation.recent")]
     ConversationRecent {
         machine_id: String,
@@ -860,6 +877,8 @@ impl Operation {
                 | Self::ProjectRemove { .. }
                 | Self::ConversationCreate { .. }
                 | Self::ConversationTurnStart { .. }
+                | Self::ConversationUpdateModel { .. }
+                | Self::ConversationModelsRefresh { .. }
                 | Self::ConversationArchive { .. }
                 | Self::ConversationPin { .. }
                 | Self::ConversationRename { .. }
@@ -1031,6 +1050,25 @@ impl Operation {
                     && scope(machine_id, project_id, conversation_id)
                     && input_valid(input)
             }
+            ConversationUpdateModel {
+                action_id,
+                machine_id,
+                project_id,
+                conversation_id,
+                model,
+                reasoning,
+            } => {
+                action(action_id)
+                    && scope(machine_id, project_id, conversation_id)
+                    && (model.is_some() || reasoning.is_some())
+                    && model.as_ref().is_none_or(|v| bounded_trimmed(v, 240))
+                    && reasoning.as_ref().is_none_or(|v| bounded_trimmed(v, 120))
+            }
+            ConversationModelsRefresh {
+                machine_id,
+                project_id,
+                conversation_id,
+            } => scope(machine_id, project_id, conversation_id),
             ConversationRecent { machine_id, limit } => {
                 machine(machine_id) && (1..=100).contains(limit)
             }
@@ -1297,5 +1335,48 @@ mod tests {
         }))
         .expect("syntactically valid response");
         assert!(response_outcome(invalid_success, "sreq_fixture").is_err());
+    }
+}
+
+#[cfg(test)]
+mod operation_tests {
+    use super::Operation;
+    use serde_json::json;
+
+    #[test]
+    fn model_update_is_a_closed_control_operation() {
+        let request = json!({
+            "operation": "conversation.updateModel",
+            "actionId": "act_fixture_model",
+            "machineId": "machine_mmmmmmmmmmmmmmmm",
+            "projectId": "proj_pppppppppppppppp",
+            "conversationId": "conv_cccccccccccccccc",
+            "reasoning": "high"
+        });
+        let operation: Operation = serde_json::from_value(request.clone()).unwrap();
+        assert!(operation.requires_control());
+        assert!(operation.validate().is_ok());
+
+        let mut empty = request.clone();
+        empty.as_object_mut().unwrap().remove("reasoning");
+        let empty: Operation = serde_json::from_value(empty).unwrap();
+        assert_eq!(
+            empty.validate().unwrap_err().error_code(),
+            "invalid_request"
+        );
+
+        let mut unknown = request;
+        unknown["shellCommand"] = json!("echo unsafe");
+        assert!(serde_json::from_value::<Operation>(unknown).is_err());
+
+        let refresh: Operation = serde_json::from_value(json!({
+            "operation": "conversation.models.refresh",
+            "machineId": "machine_mmmmmmmmmmmmmmmm",
+            "projectId": "proj_pppppppppppppppp",
+            "conversationId": "conv_cccccccccccccccc"
+        }))
+        .unwrap();
+        assert!(refresh.requires_control());
+        assert!(refresh.validate().is_ok());
     }
 }

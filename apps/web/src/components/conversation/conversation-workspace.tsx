@@ -10,7 +10,10 @@ import { Button, agentDefinitions } from '@codetether/ui'
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
-import type { ConversationControls } from './conversation-controls'
+import type {
+  ComposerModelSettings,
+  ConversationControls,
+} from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
@@ -32,6 +35,7 @@ interface ConversationWorkspaceProps {
   displayContext?: ConversationDisplayContext
   machineId?: MachineId
   controls: ConversationControls
+  modelSettings?: ComposerModelSettings
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
@@ -47,6 +51,7 @@ export function ConversationWorkspace({
   displayContext,
   machineId,
   controls,
+  modelSettings,
   targetChangeId,
   targetChangeRequestKey,
   targetTurnId,
@@ -173,6 +178,8 @@ export function ConversationWorkspace({
           conversationId={viewModel.id}
           capabilities={viewModel.capabilities}
           controller={controls.composer}
+          modelSettings={modelSettings}
+          modelSwitchController={controls.modelSwitch}
           interruptController={controls.interrupt}
           context={displayContext}
           providerName={agentDefinitions[viewModel.agent].name}

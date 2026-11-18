@@ -8,7 +8,7 @@
 
 - **Windows-side** means everything a person does with CodeTether on one Windows computer, with no other device involved.
 - **Not included:** pairing, phones, tablets, the iPad, the Relay, other computers, push notifications and E1.
-- **Also postponed since 2026-11-18 (Owner):** macOS acceptance, CI and repository hygiene. The Mac may still implement shared desktop code, but every acceptance is on Windows.
+- **Also postponed since 2026-11-18 (Owner):** macOS acceptance, CI and repository hygiene. Development itself also runs only on Windows for now.
 - **Sources:**
   - the requirement inventory, `docs/ux-redesign/04-requirements.md` §4
   - `docs/ux-redesign/10-desktop-improvements.md`
@@ -67,7 +67,7 @@
 
 ## 3. Order
 
-At most two tasks run at once (AD-11). The Mac can implement shared desktop code; acceptance is on Windows.
+At most two tasks run at once (AD-11), both on Windows: the Owner develops only on Windows for now.
 
 1. **Start with W0.** Claude Code then reviews the report, fills in group A and re-ranks group B. Done on 2026-11-18; then:
    - merge `fix/w0-local-execution` once its Claude Code admission rule is amended (Owner approval to push `main`)

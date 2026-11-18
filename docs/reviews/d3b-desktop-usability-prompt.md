@@ -2,7 +2,7 @@
 
 **Where it runs.** On Windows or the Mac, whichever is free. This is web-only work, except for the small adapter change in goal 2.
 
-**Windows-only scope (Owner, 2026-11-18; AD-13).** You may implement on the Mac. The report's screenshots and the acceptance come from the Windows desktop app.
+**Windows-only scope (Owner, 2026-11-18; AD-13).** Run it on Windows only: the Owner develops only on Windows for now. The report's screenshots and the acceptance come from the Windows desktop app.
 
 **Branch and worktree.** Start from the current `origin/main` after D3a (`feat/d3a-desktop-consistency`) has been merged (fetch first); this task builds on D3a's `PageHeader` and status vocabulary. Create branch `feat/d3b-desktop-usability` in worktree `<agenthub-work>/feat-d3b-desktop-usability`. That is `D:/Projects/Software/agenthub-work/` on Windows and `~/agenthub-work/` on the Mac.
 

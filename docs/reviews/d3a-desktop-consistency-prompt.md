@@ -2,7 +2,7 @@
 
 **Where it runs.** On Windows or the Mac, whichever is free. This is web-only work.
 
-**Windows-only scope (Owner, 2026-11-18; AD-13).** You may implement on the Mac. The report's screenshots and the acceptance come from the Windows desktop app.
+**Windows-only scope (Owner, 2026-11-18; AD-13).** Run it on Windows only: the Owner develops only on Windows for now. The report's screenshots and the acceptance come from the Windows desktop app.
 
 **Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) has been merged (fetch first). Create branch `feat/d3a-desktop-consistency` in worktree `<agenthub-work>/feat-d3a-desktop-consistency`. That is `D:/Projects/Software/agenthub-work/` on Windows and `~/agenthub-work/` on the Mac.
 

@@ -1,6 +1,10 @@
 # Task: Integrate D2 Model Control (Windows Desktop)
 
-**Where it runs.** On the Mac, so that W0b's timing and resource measurements on Windows stay clean. If the Mac is busy, run it on Windows after W0b has finished.
+**Where it runs.** On Windows. The Owner develops only on Windows for now. W0b may be running in the installed app at the same time.
+
+- Never stop, replace or reconfigure the installed app or its Host on `127.0.0.1:4317`.
+- Run any development Host on its own port, with its own `CODETETHER_DATA_DIR` and database, as `fix/w0-local-execution` did.
+- If W0b's agent is timing something, avoid long builds and tests at that moment where you can.
 
 **Windows-only scope (Owner, 2026-11-18; AD-13).**
 

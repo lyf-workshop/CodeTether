@@ -280,35 +280,40 @@ test('runner owns one idempotent text Turn and chunks bounded output', async () 
   }
 })
 
-test('runner preserves a controlled Codex Provider failure without its prose', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'codetether-failure-wire-'))
-  const fake = fakeClientFactory()
-  const pool = new RemoteCodexRunnerPool({
-    codexHome: directory,
-    clientFactory: fake.factory,
+for (const [reason, wireReason] of [
+  ['rate_limited', 'rate_limited'],
+  ['provider_model_unavailable', 'provider_error'],
+]) {
+  test(`runner reports Codex ${reason} as ${wireReason} without Provider prose`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'codetether-failure-wire-'))
+    const fake = fakeClientFactory()
+    const pool = new RemoteCodexRunnerPool({
+      codexHome: directory,
+      clientFactory: fake.factory,
+    })
+    try {
+      const runner = await pool.open(sessionRequest(directory))
+      const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
+      const occurredAt = '2026-09-02T12:00:00.000Z'
+      fake.emit(
+        providerEvent('turn.failed', {
+          error: {
+            message: 'private Provider account and token detail',
+            failure: canonicalFailure(reason, occurredAt),
+          },
+        }),
+      )
+      const events = []
+      for await (const event of turn.events()) events.push(event)
+      assert.equal(events[0].failure.reason, wireReason)
+      assert.equal(events[0].failure.occurredAt, occurredAt)
+      assert.doesNotMatch(JSON.stringify(events), /private|account|token/u)
+    } finally {
+      await pool.close()
+      await rm(directory, { recursive: true, force: true })
+    }
   })
-  try {
-    const runner = await pool.open(sessionRequest(directory))
-    const turn = await runner.startTurn(turnRequest(runner.providerThreadId))
-    const occurredAt = '2026-09-02T12:00:00.000Z'
-    fake.emit(
-      providerEvent('turn.failed', {
-        error: {
-          message: 'private Provider account and token detail',
-          failure: canonicalFailure('rate_limited', occurredAt),
-        },
-      }),
-    )
-    const events = []
-    for await (const event of turn.events()) events.push(event)
-    assert.equal(events[0].failure.reason, 'rate_limited')
-    assert.equal(events[0].failure.occurredAt, occurredAt)
-    assert.doesNotMatch(JSON.stringify(events), /private|account|token/u)
-  } finally {
-    await pool.close()
-    await rm(directory, { recursive: true, force: true })
-  }
-})
+}
 
 test('fatal Codex child failure preserves the controlled crash reason', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-fatal-wire-'))

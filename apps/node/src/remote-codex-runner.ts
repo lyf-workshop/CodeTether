@@ -658,7 +658,14 @@ export class RemoteCodexRunner {
       return
     }
     if (event.type === 'turn.failed') {
-      turn.fail('provider_failed', event.error.failure)
+      const failure = event.error.failure
+      // Keep the fixed remote wire profile compatible with older Hosts.
+      turn.fail(
+        'provider_failed',
+        failure?.reason === 'provider_model_unavailable'
+          ? canonicalFailure('provider_error', failure.occurredAt)
+          : failure,
+      )
       return
     }
     if (event.type === 'turn.interrupted') {

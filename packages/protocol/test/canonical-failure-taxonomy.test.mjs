@@ -56,6 +56,12 @@ const expectedProfiles = {
     'open_machine',
     'provider',
   ],
+  provider_model_unavailable: [
+    'provider',
+    'retry_after_user_action',
+    'view_details',
+    'provider',
+  ],
   provider_service_unavailable: ['provider', 'retry_later', 'wait', 'provider'],
   provider_start_failed: ['provider', 'retry_now', 'retry', 'provider'],
   provider_crashed: ['provider', 'unknown', 'view_details', 'provider'],

@@ -91,6 +91,11 @@ const failureReasonCopy = {
     cause: 'AI 工具已安装，但当前配置无法安全执行。',
     guidance: '请在执行电脑上检查配置，并在电脑详情中重新检测。',
   },
+  provider_model_unavailable: {
+    title: '所选模型不可用',
+    cause: 'AI 工具拒绝了此轮请求使用的模型。',
+    guidance: '请在执行电脑上确认账号可以使用哪些模型，选择可用模型后再发送。',
+  },
   provider_service_unavailable: {
     title: 'AI 工具服务暂时不可用',
     cause: 'AI 工具服务当前无法接受执行请求。',

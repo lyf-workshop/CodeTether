@@ -1409,6 +1409,102 @@ test('a successful later Turn restores backend readiness without rewriting the h
   assert.equal(misconfigured.observedAt, misconfiguredAt)
 })
 
+test('a rejected Codex model leaves the installation ready to run another model', async (t) => {
+  let now = observedAt
+  const fixture = await createFixture(t, { now: () => new Date(now) })
+  const good = await fixture.service.createConversation({
+    actionId: 'act_w0_create_available_model',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    provider: 'codex',
+    model: 'available-model',
+  })
+  const goodConversationId = good.data.conversation.conversationId
+  await fixture.service.startTurn(goodConversationId, {
+    actionId: 'act_w0_confirm_model_health',
+    input: { type: 'text', text: 'Confirm the available model works.' },
+  })
+  fixture.runtime.emit({
+    provider: 'codex',
+    type: 'turn.completed',
+    threadId: 'private-new-session-1',
+    turnId: 'private-turn-1',
+    timestamp: now,
+  })
+  const previousInstallation =
+    fixture.persistence.getProviderInstallation(installationAId)
+  const previousHealth = fixture.persistence.getProviderExecutionHealth(
+    fixture.machineId,
+    'codex',
+  )
+  assert.equal(previousInstallation.backend.readiness, 'ready')
+  assert.equal(previousHealth.state, 'healthy')
+
+  const bad = await fixture.service.createConversation({
+    actionId: 'act_w0_create_unavailable_model',
+    projectId: fixture.projectId,
+    machineId: fixture.machineId,
+    provider: 'codex',
+    model: 'unavailable-model',
+  })
+  const failed = await fixture.service.startTurn(
+    bad.data.conversation.conversationId,
+    {
+      actionId: 'act_w0_send_unavailable_model',
+      input: { type: 'text', text: 'Exercise the rejected model.' },
+    },
+  )
+  now = changedAt
+  const failure = canonicalFailure('provider_model_unavailable', now)
+  fixture.runtime.emit({
+    provider: 'codex',
+    type: 'turn.failed',
+    threadId: 'private-new-session-2',
+    turnId: 'private-turn-2',
+    timestamp: now,
+    error: { message: 'Private fixture model diagnostic', failure },
+  })
+
+  const failedRecord = fixture.persistence.getTurn(failed.data.turn.turnId)
+  assert.equal(failedRecord.status, 'failed')
+  assert.deepEqual(failedRecord.snapshot.turn.error.failure, failure)
+  assert.deepEqual(
+    fixture.persistence.getProviderInstallation(installationAId),
+    previousInstallation,
+  )
+  assert.deepEqual(
+    fixture.persistence.getProviderExecutionHealth(fixture.machineId, 'codex'),
+    previousHealth,
+  )
+  const machine = await fixture.service.getMachine(fixture.machineId)
+  const codex = machine.providers.find(({ provider }) => provider === 'codex')
+  assert.equal(codex.executionHealth.state, 'healthy')
+  assert.equal(
+    selectedInstallation(machine.providerLifecycles[0]).backend.readiness,
+    'ready',
+  )
+
+  const next = await fixture.service.startTurn(goodConversationId, {
+    actionId: 'act_w0_send_available_model_again',
+    input: { type: 'text', text: 'Continue using the available model.' },
+  })
+  assert.deepEqual(
+    fixture.runtime.startTurnCalls.map(({ model }) => model),
+    ['available-model', 'unavailable-model', 'available-model'],
+  )
+  fixture.runtime.emit({
+    provider: 'codex',
+    type: 'turn.completed',
+    threadId: 'private-new-session-1',
+    turnId: 'private-turn-3',
+    timestamp: now,
+  })
+  assert.equal(
+    fixture.persistence.getTurn(next.data.turn.turnId).status,
+    'completed',
+  )
+})
+
 test('Host refresh presents an unchanged unchecked backend as last-known without changing runtime compatibility', async (t) => {
   let fixture
   fixture = await createFixture(t, {

@@ -553,6 +553,42 @@ test('normalizes structured Codex quota failure without Provider prose', () => {
   )
 })
 
+test('handles the complete App Server model rejection envelope without exposing its contents', () => {
+  const normalizer = new CodexEventNormalizer()
+  const message = JSON.stringify({
+    type: 'error',
+    status: 400,
+    error: {
+      type: 'invalid_request_error',
+      code: 'model_not_found',
+      message: 'private upstream details',
+    },
+  })
+  for (const [error, expected] of [
+    [{ codexErrorInfo: 'other', message }, 'provider_model_unavailable'],
+    [{ codexErrorInfo: 'unauthorized', message }, 'login_required'],
+    [{ codexErrorInfo: 'other', message: 'model_not_found' }, 'provider_error'],
+    [
+      { codexErrorInfo: 'other', message: `prefix ${message}` },
+      'provider_error',
+    ],
+    [{ codexErrorInfo: 'other', additionalDetails: message }, 'provider_error'],
+    [
+      { codexErrorInfo: 'other', message: `${message}${' '.repeat(4096)}` },
+      'provider_error',
+    ],
+  ]) {
+    const result = normalize(normalizer, 'turn/completed', {
+      threadId,
+      turn: { id: turnId, status: 'failed', error },
+    })
+    const event = stripRaw(result.events[0])
+    assert.equal(event.error.failure.reason, expected)
+    assert.notEqual(event.error.failure.retryability, 'retry_now')
+    assert.doesNotMatch(JSON.stringify(event), /private upstream details/u)
+  }
+})
+
 test('normalizes interruption separately from failure', () => {
   const normalizer = new CodexEventNormalizer()
   const interrupted = normalize(normalizer, 'turn/completed', {

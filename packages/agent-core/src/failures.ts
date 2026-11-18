@@ -23,6 +23,7 @@ export const canonicalFailureReasons = [
   'provider_not_installed',
   'provider_unsupported_version',
   'provider_misconfigured',
+  'provider_model_unavailable',
   'provider_service_unavailable',
   'provider_start_failed',
   'provider_crashed',
@@ -181,6 +182,12 @@ const profiles: Readonly<
     category: 'provider',
     retryability: 'retry_after_user_action',
     userAction: 'open_machine',
+    source: 'provider',
+  },
+  provider_model_unavailable: {
+    category: 'provider',
+    retryability: 'retry_after_user_action',
+    userAction: 'view_details',
     source: 'provider',
   },
   provider_service_unavailable: {

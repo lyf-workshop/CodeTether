@@ -6,6 +6,38 @@ const CONNECTION_FAILURE_KINDS = new Set([
   'responseStreamDisconnected',
   'responseTooManyFailedAttempts',
 ])
+const MAX_PROVIDER_ERROR_ENVELOPE_LENGTH = 4096
+
+export function classifyCodexTurnError(error: unknown): CanonicalFailureReason {
+  if (!isRecord(error)) return 'provider_error'
+  if (error.codexErrorInfo !== 'other') {
+    return classifyCodexErrorInfo(error.codexErrorInfo)
+  }
+
+  // App Server can put a complete upstream error object in TurnError.message
+  // when its structured union has no matching variant. Only consume the exact
+  // model rejection envelope, and never include the original body in our error.
+  const message = error.message
+  if (
+    typeof message !== 'string' ||
+    message.length > MAX_PROVIDER_ERROR_ENVELOPE_LENGTH
+  ) {
+    return 'provider_error'
+  }
+  let envelope: unknown
+  try {
+    envelope = JSON.parse(message)
+  } catch {
+    return 'provider_error'
+  }
+  return isRecord(envelope) &&
+    envelope.type === 'error' &&
+    isRecord(envelope.error) &&
+    envelope.error.type === 'invalid_request_error' &&
+    envelope.error.code === 'model_not_found'
+    ? 'provider_model_unavailable'
+    : 'provider_error'
+}
 
 /**
  * Maps only Codex App Server's stable structured codexErrorInfo field.

@@ -80,6 +80,7 @@ export interface ClaudeCodeInstallationObservation {
 
 export interface ObserveClaudeCodeInstallationOptions {
   readonly installation: ClaudeCodeInstallationCandidate
+  readonly runtimeTarget?: 'windows_local_host'
   readonly environment?: NodeJS.ProcessEnv
   readonly settingsPath?: string
   readonly timeoutMs?: number
@@ -142,11 +143,22 @@ export async function observeClaudeCodeInstallation(
     // solely from its version label.
     const help = await (options.probeHelp?.() ??
       probeClaudeCodeHelp(options.installation.launcher, probeOptions))
+    // W0 ran the restricted profile on 2.1.327. Its help gives only an
+    // example tool list. Later 2.1 patches still need the same CLI checks.
+    const patch = Number(/^2\.1\.([1-9]\d*)$/u.exec(version ?? '')?.[1])
+    const windowsSearchFallback =
+      options.runtimeTarget === 'windows_local_host' &&
+      options.installation.launcherKind === 'native' &&
+      options.installation.launcher.kind === 'native' &&
+      backendConfiguration.mode === 'first_party' &&
+      Number.isSafeInteger(patch) &&
+      patch >= 327
     compatibility = compatibilityFromHelp(
       version,
       help,
       options.installation.launcherKind !== 'wrapper' &&
         options.installation.launcherKind !== 'unknown',
+      windowsSearchFallback,
     )
   } catch (error) {
     if (error instanceof ClaudeCodeOwnedProcessCleanupError) throw error
@@ -186,6 +198,7 @@ function compatibilityFromHelp(
   version: string | undefined,
   help: string,
   sessionStoreAffinityEstablished: boolean,
+  windowsSearchFallback: boolean,
 ): ClaudeCodeCompatibilityObservation {
   const surface = parseClaudeCodeHelp(help)
   const executionSupported =
@@ -238,10 +251,11 @@ function compatibilityFromHelp(
     : optionSupportsValue(surface, '--tools', 'Read')
       ? 'supported'
       : 'unknown'
-  const searchSupport = shippedProtocolEvidence
-    ? 'supported'
-    : optionSupportsValue(surface, '--tools', 'Glob') &&
-        optionSupportsValue(surface, '--tools', 'Grep')
+  const searchSupport =
+    shippedProtocolEvidence ||
+    (windowsSearchFallback && fileReadSupport === 'supported') ||
+    (optionSupportsValue(surface, '--tools', 'Glob') &&
+      optionSupportsValue(surface, '--tools', 'Grep'))
       ? 'supported'
       : 'unknown'
   // Tool events are an already-enabled CodeTether policy capability, not a
@@ -279,6 +293,7 @@ function compatibilityFromHelp(
       toolEvents: toolEventSupport,
       reasoningControl: booleanSupport(reasoningControlSupported),
     },
+    windowsSearchFallback,
   )
 }
 
@@ -346,11 +361,16 @@ function compatibleCompatibility(
     readonly toolEvents: ClaudeCodeObservedSupport
     readonly reasoningControl: ClaudeCodeObservedSupport
   },
+  ignoreMissingSessionDiscovery: boolean,
 ): ClaudeCodeCompatibilityObservation {
   const supportedCapabilities = capabilitySet('supported')
-  const limited = Object.values(optionalSupport).some(
-    (support) => support !== 'supported',
-  )
+  const { nativeSessionDiscovery, ...runtimeSupport } = optionalSupport
+  // The Windows floor observes execution only. Session discovery has its own
+  // version gate and remains disabled without a verified store format.
+  const limited =
+    (!ignoreMissingSessionDiscovery &&
+      nativeSessionDiscovery !== 'supported') ||
+    Object.values(runtimeSupport).some((support) => support !== 'supported')
   return {
     state: limited ? 'limited' : state,
     runtimeReadiness: limited ? 'limited' : 'ready',
@@ -358,9 +378,7 @@ function compatibleCompatibility(
     capabilities: {
       ...supportedCapabilities,
       nativeResume: optionalCapability(optionalSupport.nativeResume),
-      nativeSessionDiscovery: optionalCapability(
-        optionalSupport.nativeSessionDiscovery,
-      ),
+      nativeSessionDiscovery: optionalCapability(nativeSessionDiscovery),
       fileRead: optionalCapability(optionalSupport.fileRead),
       search: optionalCapability(optionalSupport.search),
       toolEvents: optionalCapability(optionalSupport.toolEvents),

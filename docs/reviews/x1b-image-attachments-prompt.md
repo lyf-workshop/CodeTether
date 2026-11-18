@@ -2,6 +2,8 @@
 
 **Where it runs.** On Windows. It needs this computer's installed Codex and Claude Code for real Turns. Goal 9 needs the Mac for one check; ask the Owner to relay it, or run it there yourself.
 
+**Windows-only scope (Owner, 2026-11-18; AD-13).** Goal 9 (the Mac check) is postponed. Keep shared code building on macOS, but accept on Windows only.
+
 **Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) and D2.5 (`feat/d2-5-timeline`) have both been merged (fetch first). D2.5 restyles the User message that will show the thumbnails. Create branch `feat/x1b-image-attachments` in worktree `D:/Projects/Software/agenthub-work/feat-x1b-image-attachments`.
 
 **Why this task exists.** The Composer shows a disabled "附件" button. The Owner wants attachments to work (AD-12). The most common need is to show the agent a screenshot: an error dialog, a broken layout, a design. Both Providers accept images; CodeTether's Turn input accepts only text.

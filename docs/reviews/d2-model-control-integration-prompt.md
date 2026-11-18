@@ -1,6 +1,16 @@
-# Task: Integrate D2 Model Control (Desktop, Remote Computers, Tablet)
+# Task: Integrate D2 Model Control (Windows Desktop)
 
-**Where it runs.** On whichever computer is free first and has the Android toolchain (Gradle, the NDK and the Rust targets the Android build uses). If that is Windows, the Owner relays an iOS build check to the Mac (goal 6).
+**Where it runs.** On the Mac, so that W0b's timing and resource measurements on Windows stay clean. If the Mac is busy, run it on Windows after W0b has finished.
+
+**Windows-only scope (Owner, 2026-11-18; AD-13).**
+
+- **This task delivers:** model and reasoning-effort control for local conversations in the desktop app, accepted on Windows.
+- **Postponed:**
+  - the tablet, phone and iPad
+  - model control on remote computers
+  - porting the mobile layer
+  - the iOS build check
+- **Already built:** the remote and Supervisor parts of the canonical branch come along with the merge. Keep them compiling and their tests passing, but do not extend them.
 
 **Branch and worktree.** Start from the current `origin/main` after `fix/w0-local-execution` has merged (fetch first). That branch adds the `provider_model_unavailable` failure that goal 7 builds on. If you started before it merged, merge `main` into your branch. Create branch `feat/d2-model-control` in worktree `<agenthub-work>/feat-d2-model-control`.
 
@@ -23,12 +33,11 @@ Before starting, confirm this file has 4 second-level headings and that the last
 1. **Bring in the canonical implementation.**
    - Merge `origin/feat/d2-model-switching` (`f1f6f8c`) into the new branch with a merge commit. Do not rebase or cherry-pick it apart.
    - It was branched from `b668e53`, before B4a and U1, so expect conflicts. Resolve them in favor of `main`'s B4a/U1 behavior plus this branch's model control. In particular, keep `main`'s stabilized Relay rate-limit test (`7616956`) over this branch's version (`c9ba712`).
-2. **Port only the unique parts of the remote-only branch.**
-   - From `origin/feat/d2-remote-model-switching`, bring over only what `feat/d2-model-switching` lacks:
-     - the mobile layer in `183c534`: the Rust `conversation_update_model` / model-refresh UniFFI functions and wire types in `packages/supervisor-mobile`, their interop tests, and the Android Kotlin `RemoteModels`, `RemoteProjection` and `RemoteSupervisor` changes with their instrumented tests
-     - the `machine.get` model-list cap from `bec19e3` in `apps/host/src/api/supervisor-machine-reads.ts`: at most 50 models per Provider, plus the byte-budget fallback
+2. **Port one Host-side cap from the remote-only branch.**
+   - From `origin/feat/d2-remote-model-switching`, bring over only the `machine.get` model-list cap from `bec19e3` in `apps/host/src/api/supervisor-machine-reads.ts`: at most 50 models per Provider, plus the byte-budget fallback. It keeps a paired device's read within budget now that Providers carry model lists.
+   - **Postponed (2026-11-18):** the mobile layer in `183c534`. That covers the Rust `conversation_update_model` / model-refresh UniFFI functions and wire types, their interop tests, and the Android Kotlin `RemoteModels`, `RemoteProjection` and `RemoteSupervisor` changes. Leave that branch as it is.
    - Do **not** bring over its host-side model logic (`485e3b3`, and the rest of `bec19e3`). It duplicates the canonical branch with less protection.
-   - When the two disagree on a wire field or operation shape, the canonical branch wins. Adapt the Rust and Kotlin layers to it, and keep the interop test proving that TypeScript and Rust agree.
+   - The canonical branch's own Rust wire change (`packages/supervisor-mobile/src/wire.rs` and the interop test) comes with the merge. Keep the interop test proving that TypeScript and Rust agree.
 3. **No docs on the code branch** (AD-7).
    - The integrated branch's diff against `main` must not change `AGENTS.md` or anything under `docs/`.
    - The canonical branch edited AGENTS.md, ARCHITECTURE, PRODUCT, ROADMAP and 03. Leave those edits out, and paste their substance into the report; Claude Code will apply it on the docs branch.
@@ -43,9 +52,9 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - `conversation.updated` carries the new selection to every client.
 6. **Quality gate:**
    - `pnpm typecheck`, `pnpm lint`, `pnpm build`, `pnpm test` and `pnpm format:check` for the files you changed
-   - `cargo test` in `packages/supervisor-mobile`
-   - the Android gate: `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest`
-   - the iOS app (merged in alpha.3) shares the Rust core, so `apps/ios/Scripts/build.sh` must still pass. Run it yourself on the Mac, or ask the Owner to relay it from Windows.
+   - `cargo test` in `packages/supervisor-mobile`, because the merge changes `wire.rs`
+   - the Android gate (`testDebugUnitTest lint assembleDebug assembleDebugAndroidTest`) if this computer has the Android toolchain. If it does not, say so in the report; the gate then runs when mobile work resumes.
+   - the iOS build is postponed
 7. **Models the account cannot use** (W0, added 2026-11-18). W0 found that a conversation can store a model the account cannot use, and then every Turn fails. See Known facts. The desktop must make this visible and easy to fix:
    - **In the model control:** when a conversation's current model is not in the Provider's catalog, say so ("不在此账号的可用模型中") and let the user choose another before sending. Do not hide it, and do not replace it silently.
    - **For a new conversation:** the user can see which model it will use before the first send, with the same warning when that model is not in the catalog. Do not override the Provider's own default configuration.
@@ -58,10 +67,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
 8. **Real-device checks** on this computer's installed CLIs, with a development build; do not replace the installed app:
    - switch the model on a local Codex conversation
    - switch the reasoning effort on a local Claude Code conversation
-   - if a paired remote computer is reachable, switch the model on a conversation there
    - record what the Turn actually ran with
-   - on Windows, if possible: a conversation storing a model the account cannot use fails with "所选模型不可用", and switching the model makes the next Turn succeed (goal 7)
-9. **Tablet check.** On the Android emulator, connected to this computer's Host, change the model through the tablet and see the desktop update.
+   - goal 7 on Windows is checked at alpha.4 acceptance. W0's three archived scratch conversations in the Owner's installed app still store the model this account cannot use.
 
 ## Known facts
 
@@ -117,12 +124,12 @@ Push `feat/d2-model-control` to `origin`.
 Write to `<agenthub-archive>/d2-model-control-report.md`:
 
 - **Merge:** the merge commit; each conflict and how you resolved it.
-- **Ported:** exactly what came from the remote-only branch (files and hunks) and what you left out.
+- **Ported:** the `machine.get` cap (files and hunks), and confirmation that nothing else came from the remote-only branch.
 - **Docs:** the doc edits from the canonical branch that you left out, quoted, for the docs branch.
 - **Placeholders:** the model placeholder replaced, the tests updated, and confirmation that the other three were left in place.
 - **Behavior:** the goal 5 checks, each with the test that proves it.
 - **Unavailable models:** goal 7, each case with its test and a screenshot of the warning and of the failure card's action.
-- **Gates:** results for every gate (TypeScript, Rust, Android, iOS), with failures verbatim.
-- **Devices:** real-device and emulator results, if done.
+- **Gates:** results for TypeScript and Rust, and for Android if it ran, with failures verbatim.
+- **Devices:** real-device results.
 - **Commits:** your commits and the pushed remote commit.
 - **Status:** anything left undone and why, and which completion level the work reached.

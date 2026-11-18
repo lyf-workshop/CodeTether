@@ -2,6 +2,15 @@
 
 **Where it runs.** On Windows first. Goal 7 needs the Mac. Run that part there yourself, or hand it to the Mac agent with the Owner's help.
 
+**Windows-only scope (Owner, 2026-11-18; AD-13).**
+
+- **Postponed:**
+  - goal 7 (macOS)
+  - the Mac half of goal 9's speed target
+  - the Mac desktop build in the gates
+- **Still required:** keep the macOS code path compiling where the code is shared.
+- **Acceptance:** Windows only.
+
 **Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) has been merged (fetch first). Create branch `feat/x1c-voice-input` in worktree `D:/Projects/Software/agenthub-work/feat-x1c-voice-input`. If X1b has merged by then, start after it instead; both add a button to the Composer's action bar.
 
 **Why this task exists.** The Composer shows a disabled "语音" button. The Owner wants voice input to work (AD-12): hold to speak, release to get the text into the draft, in Chinese, English or a mix of both.

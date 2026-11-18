@@ -8,6 +8,7 @@
 
 - **Windows-side** means everything a person does with CodeTether on one Windows computer, with no other device involved.
 - **Not included:** pairing, phones, tablets, the iPad, the Relay, other computers, push notifications and E1.
+- **Also postponed since 2026-11-18 (Owner):** macOS acceptance, CI and repository hygiene. The Mac may still implement shared desktop code, but every acceptance is on Windows.
 - **Sources:**
   - the requirement inventory, `docs/ux-redesign/04-requirements.md` §4
   - `docs/ux-redesign/10-desktop-improvements.md`

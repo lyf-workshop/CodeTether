@@ -2,6 +2,8 @@
 
 **Where it runs.** On Windows. It needs this computer's installed Codex and Claude Code for real Turns.
 
+**Windows-only scope (Owner, 2026-11-18; AD-13).** Goals 6 (conversations on another computer) and 7 (tablet and iPad) are postponed until the Windows focus ends. Skip them, and say so in the report.
+
 **Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) has been merged (fetch first). Create branch `feat/x1a-context-usage` in worktree `D:/Projects/Software/agenthub-work/feat-x1a-context-usage`.
 
 **Why this task exists.**
@@ -32,6 +34,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - the observation time
 
    Raw Provider payloads stay inside the adapters.
+
 2. **The Host keeps the latest observation per conversation.**
    - Keep it durably, so a cold conversation shows its last known value. Use one migration with the next free number; task 5 uses 026.
    - Expose it on the conversation detail read and in `conversation.updated` (or the existing low-frequency event that fits) as an optional field.

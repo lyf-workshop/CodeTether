@@ -2,6 +2,8 @@
 
 **Where it runs.** On Windows or the Mac, whichever is free. This is web-only work.
 
+**Windows-only scope (Owner, 2026-11-18; AD-13).** You may implement on the Mac. The report's screenshots and the acceptance come from the Windows desktop app.
+
 **Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) has been merged (fetch first). Create branch `feat/d3a-desktop-consistency` in worktree `<agenthub-work>/feat-d3a-desktop-consistency`. That is `D:/Projects/Software/agenthub-work/` on Windows and `~/agenthub-work/` on the Mac.
 
 **Why this task exists.** The visual system is consistent, but screens disagree with each other:
@@ -35,15 +37,15 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - Delete the four local mappings listed in Known facts.
    - **One summary status per computer and tool.** Proposed labels (keep them unless a fact does not fit, and report any change):
 
-     | Label | Tone | Condition |
-     | --- | --- | --- |
-     | 可用 | success | installed, compatible, signed in, not unhealthy |
-     | 可用，部分功能受限 | warning | limited compatibility, or degraded health |
-     | 未登录 | warning | sign-in required |
-     | 需要更新此 AI 工具 | warning | unsupported version |
-     | 需要更新 CodeTether | warning | incompatible contract |
-     | 未安装 | neutral | not installed |
-     | 暂时不可用 | danger | misconfigured, unavailable, or execution unavailable |
+     | Label               | Tone    | Condition                                            |
+     | ------------------- | ------- | ---------------------------------------------------- |
+     | 可用                | success | installed, compatible, signed in, not unhealthy      |
+     | 可用，部分功能受限  | warning | limited compatibility, or degraded health            |
+     | 未登录              | warning | sign-in required                                     |
+     | 需要更新此 AI 工具  | warning | unsupported version                                  |
+     | 需要更新 CodeTether | warning | incompatible contract                                |
+     | 未安装              | neutral | not installed                                        |
+     | 暂时不可用          | danger  | misconfigured, unavailable, or execution unavailable |
 
    - **Freshness is secondary text**, never the status itself. Examples: "上次检查 10 分钟前", or "尚未检查" when no check has run. That is why Codex reads "可用" on one screen and "尚未检查" on another today: a check that never ran is shown in the status slot.
    - **One status component** in `packages/ui`, or the existing `Badge` with one variant mapping, renders the summary everywhere.

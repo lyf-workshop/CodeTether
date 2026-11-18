@@ -2,7 +2,7 @@
 
 **Owner's instruction (2026-11-17).** "Once Windows testing finishes, complete all Windows-side functionalities." This document defines that scope, its order, and when it is done. It extends AD-13 in `2026-11-13-assessment-and-plan.md`.
 
-**Status.** Claude Code's recommended defaults apply until the Owner changes them. Section 4 lists the choices still open. Group A is filled in after the W0 report is reviewed.
+**Status.** Claude Code's recommended defaults apply until the Owner changes them. Section 4 lists the choices still open. Group A was filled in from the W0 report on 2026-11-18; W0b may add to it.
 
 ## 1. What counts as Windows-side
 
@@ -17,7 +17,18 @@
 
 ## 2. Scope
 
-**A. W0 findings.** Every Blocker and High finding, plus cheap Medium ones. These are listed after the W0 review.
+**A. W0 findings.** Every Blocker and High finding, plus cheap Medium ones. Reviewed on 2026-11-18 (`D:/Projects/Software/agenthub-archive/w0-windows-desktop-audit-report.md`). W0 could not test the core loop because every Codex Turn failed (W0-01), so W0b finishes it and may add rows.
+
+| ID                | Severity     | Finding                                                                                                                                                        | Handled by                                                                                                                                                                                   |
+| ----------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| W0-01             | Blocker      | Every Codex Turn failed with a generic `provider_error`. The cause: the Owner's Codex configuration chose a model this account cannot use (`model_not_found`). | `fix/w0-local-execution` `19d634f` ("所选模型不可用", accepted on review); task 5 goal 7 (pick a usable model, see a warning first); Owner action 9 (Codex's default model)                  |
+| W0-02             | High         | Creating a conversation takes about 14 s; your own message appears about 7.5 s after send                                                                      | Task 6 (B3a), with W0's numbers as the baseline and a breakdown by stage                                                                                                                     |
+| W0-03             | High         | Claude Code `2.1.327` is blocked: its help text no longer lists Glob and Grep. The dialog does not say why.                                                    | `fix/w0-local-execution` `e648a3a`: specific reasons in the dialog (accepted); the admission rule changes from one exact version to a floor before merge, because Claude Code updates itself |
+| W0-04             | Medium       | For someone who uses only this computer, the account, remote devices and AI-tool health are mixed together                                                     | New: the "W0 small fixes" prompt, written after W0b                                                                                                                                          |
+| W0-05, 06, 07, 10 | Medium / Low | Location shown three times; an irrelevant offline-computer hint; repeated archive links; copy that describes the implementation                                | Already in D2.5 goal 8, D3a goal 5 and D3b goals 6, 7 and 9. W0's evidence is added to those tasks when they are dispatched.                                                                 |
+| W0-08             | Medium       | Model, context, attachment and voice controls are placeholders                                                                                                 | Task 5 and tasks 12–14                                                                                                                                                                       |
+| W0-09             | Medium       | When the Host stops while the app is open, the dialog is titled "CodeTether 启动失败" and the user must reopen the app by hand                                 | New: the "W0 small fixes" prompt                                                                                                                                                             |
+| First run (W0 §9) | Not rated    | In a clean profile, the first screen goes straight to setup with no visible way to sign in                                                                     | W0b goal 10 confirms it; then the "W0 small fixes" prompt if it holds                                                                                                                        |
 
 **B. Planned, prompt written.**
 
@@ -57,7 +68,10 @@
 
 At most two tasks run at once (AD-11). The Mac can implement shared desktop code; acceptance is on Windows.
 
-1. **Start with W0.** Claude Code then reviews the report, fills in group A and re-ranks group B.
+1. **Start with W0.** Claude Code then reviews the report, fills in group A and re-ranks group B. Done on 2026-11-18; then:
+   - merge `fix/w0-local-execution` once its Claude Code admission rule is amended (Owner approval to push `main`)
+   - W0b finishes the core loop on alpha.3, once Codex's default model works (Owner action 9)
+   - task 5 starts from `main` after that merge
 2. **Release alpha.4** after task 5, B3a and the W0 Blocker fixes. It is the first real one-click update (U1), so every later batch ships the same way.
 3. **Run group B with group A's fixes in between:** 9 ∥ 10, then 12 ∥ 11, then 13, then 14.
 4. **Group C:**

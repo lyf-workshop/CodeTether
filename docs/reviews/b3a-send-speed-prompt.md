@@ -53,6 +53,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
 
    Use the median of at least 5 runs each.
 
+   Before changing anything, break the "before" time down by stage: the lifecycle check, starting the App Server and the thread, the Host's write, and the UI drawing your message. W0 measured far more than two 2-second checks (see Known facts), so find where the rest goes. Fix what is in this task's scope. List any other large stage in the report with its cause; do not fix it here.
+
 **Should:**
 
 6. **Verify the failure-reason fixes, and fix them if still broken.** 03 B3, second bullet, lists three problems:
@@ -79,6 +81,11 @@ All line numbers refer to `main` at `4801ef1`; they will have moved after the D2
 
 - **The hashing.** `local-provider-lifecycle-coordinator.ts` `#stableCodexObservation` (around line 650) calls `fingerprintCodexInstallation` before and after the observation (`:655`, `:667`). That function (`packages/adapter-codex/src/installation.ts:163`) hashes the entire executable with SHA-256. `packages/adapter-codex/src/compatibility.ts:159` also fingerprints.
 - **The cost.** The Owner measured about 2 seconds per send on this machine. A new conversation pays it twice: once at create, once at the first Turn.
+- **W0's baseline** (installed alpha.3, 2026-11-17, timed from the window; `D:/Projects/Software/agenthub-archive/w0-windows-desktop-audit-report.md`, finding W0-02):
+  - creating a conversation, until the editor is usable: 13.95 and 14.60 seconds
+  - first send until your own message appears: median 7.49 seconds (6.83, 7.49, 7.70)
+  - those Turns failed on the model (W0-01), so the time to a finished Turn is not a baseline
+  - W0b (`w0b-windows-desktop-audit-finish-prompt.md`) measures working Turns the same way. Use whichever is newer.
 - **Where new code goes.** `host-service.ts` is about 10,000 lines. Put the readiness cache in its own module next to the lifecycle coordinator, not inside `HostService` (AD-10).
 - **Other devices.** The tablet and iPad align their send UI in T1b and I1. This task changes only the desktop web UI and the Host.
 

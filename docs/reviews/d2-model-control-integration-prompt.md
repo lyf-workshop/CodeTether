@@ -2,7 +2,7 @@
 
 **Where it runs.** On whichever computer is free first and has the Android toolchain (Gradle, the NDK and the Rust targets the Android build uses). If that is Windows, the Owner relays an iOS build check to the Mac (goal 6).
 
-**Branch and worktree.** Start from the current `origin/main` after the alpha.3 release has landed (fetch first). Create branch `feat/d2-model-control` in worktree `<agenthub-work>/feat-d2-model-control`.
+**Branch and worktree.** Start from the current `origin/main` after `fix/w0-local-execution` has merged (fetch first). That branch adds the `provider_model_unavailable` failure that goal 7 builds on. If you started before it merged, merge `main` into your branch. Create branch `feat/d2-model-control` in worktree `<agenthub-work>/feat-d2-model-control`.
 
 **Why this task exists.** Two branches implement the same feature. This task produces the single version to merge and makes both old branches obsolete (AD-1).
 
@@ -46,15 +46,22 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - `cargo test` in `packages/supervisor-mobile`
    - the Android gate: `testDebugUnitTest lint assembleDebug assembleDebugAndroidTest`
    - the iOS app (merged in alpha.3) shares the Rust core, so `apps/ios/Scripts/build.sh` must still pass. Run it yourself on the Mac, or ask the Owner to relay it from Windows.
+7. **Models the account cannot use** (W0, added 2026-11-18). W0 found that a conversation can store a model the account cannot use, and then every Turn fails. See Known facts. The desktop must make this visible and easy to fix:
+   - **In the model control:** when a conversation's current model is not in the Provider's catalog, say so ("不在此账号的可用模型中") and let the user choose another before sending. Do not hide it, and do not replace it silently.
+   - **For a new conversation:** the user can see which model it will use before the first send, with the same warning when that model is not in the catalog. Do not override the Provider's own default configuration.
+   - **After a `provider_model_unavailable` failure:** the failure card's action opens the model control instead of "view details". Choosing a model and sending again uses the new model for that Turn. Nothing is resent automatically.
+   - **Tests:** a fake catalog plus the exact App Server rejection used by `fix/w0-local-execution`'s classifier tests.
+   - A catalog that cannot be read is not evidence that a model is unavailable. In that case, show no warning.
 
 **Should:**
 
-7. **Real-device checks** on this computer's installed CLIs, with a development build; do not replace the installed app:
+8. **Real-device checks** on this computer's installed CLIs, with a development build; do not replace the installed app:
    - switch the model on a local Codex conversation
    - switch the reasoning effort on a local Claude Code conversation
    - if a paired remote computer is reachable, switch the model on a conversation there
    - record what the Turn actually ran with
-8. **Tablet check.** On the Android emulator, connected to this computer's Host, change the model through the tablet and see the desktop update.
+   - on Windows, if possible: a conversation storing a model the account cannot use fails with "所选模型不可用", and switching the model makes the next Turn succeed (goal 7)
+9. **Tablet check.** On the Android emulator, connected to this computer's Host, change the model through the tablet and see the desktop update.
 
 ## Known facts
 
@@ -79,6 +86,10 @@ Before starting, confirm this file has 4 second-level headings and that the last
 - **Migrations.** `main`'s latest migration is 25, so 026 stays 026. Neither the alpha.3 release nor B4a added a migration.
 - **Line numbers.** `host-service.ts` is over 10,000 lines. If your merge adds a self-contained model-catalog helper there, you may move it into its own module (AD-10). Do not refactor anything else.
 - **Rust interop test.** `cargo test` in `packages/supervisor-mobile` runs `tests/interop.rs` against `tests/interop-fixture.mjs`. It is the only automatic check that the TypeScript and Rust encodings match.
+- **W0's model failure** (`D:/Projects/Software/agenthub-archive/w0-windows-desktop-audit-report.md`, "W0 诊断"):
+  - The Owner's Codex configuration chose a model that this account's catalog does not list. Both the CLI and the App Server rejected it with `model_not_found`, and the same Turn succeeded with a listed model.
+  - alpha.3 creates a local conversation without a model, stores the model the App Server returns, and sends that stored model with every Turn. So every Turn of those conversations failed, and the user could not change the model.
+  - `fix/w0-local-execution` (`19d634f`) classifies that exact rejection as `provider_model_unavailable` ("所选模型不可用") and keeps the Provider's execution health intact. Remote computers still report it as `provider_error`, because the frozen machine-transport reason list is unchanged. Keep it that way here.
 
 ## Boundaries
 
@@ -110,6 +121,7 @@ Write to `<agenthub-archive>/d2-model-control-report.md`:
 - **Docs:** the doc edits from the canonical branch that you left out, quoted, for the docs branch.
 - **Placeholders:** the model placeholder replaced, the tests updated, and confirmation that the other three were left in place.
 - **Behavior:** the goal 5 checks, each with the test that proves it.
+- **Unavailable models:** goal 7, each case with its test and a screenshot of the warning and of the failure card's action.
 - **Gates:** results for every gate (TypeScript, Rust, Android, iOS), with failures verbatim.
 - **Devices:** real-device and emulator results, if done.
 - **Commits:** your commits and the pushed remote commit.

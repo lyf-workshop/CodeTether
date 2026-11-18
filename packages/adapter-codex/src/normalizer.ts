@@ -8,7 +8,7 @@ import {
 } from '@codetether/agent-core'
 
 import { CodexProtocolError } from './errors.js'
-import { classifyCodexErrorInfo } from './failure-classifier.js'
+import { classifyCodexTurnError } from './failure-classifier.js'
 import { logCodexFailure } from './logging.js'
 import type { JsonRpcNotification, JsonRpcRequest } from './protocol.js'
 import { isRecord, readString } from './protocol.js'
@@ -320,7 +320,7 @@ export class CodexEventNormalizer {
       )
     }
     const error = isRecord(turn.error) ? turn.error : undefined
-    const failureReason = classifyCodexErrorInfo(error?.codexErrorInfo)
+    const failureReason = classifyCodexTurnError(error)
     logCodexFailure(error?.codexErrorInfo, failureReason)
     return {
       recognized: true,

@@ -85,6 +85,8 @@ export function safeFailureMessage(
       return `${name} version is not supported`
     case 'provider_misconfigured':
       return `${name} is not configured for execution`
+    case 'provider_model_unavailable':
+      return `${name} rejected the selected model`
     case 'provider_service_unavailable':
       return `${name} service is temporarily unavailable`
     case 'provider_start_failed':
@@ -171,6 +173,7 @@ export function providerExecutionHealthState(
 export function failureAffectsProviderExecutionHealth(
   failure: CanonicalFailure,
 ): boolean {
+  if (failure.reason === 'provider_model_unavailable') return false
   return (
     failure.source === 'provider' ||
     failure.reason === 'runtime_error' ||
@@ -246,6 +249,7 @@ function hostErrorCode(reason: CanonicalFailureReason): HostErrorCode {
     case 'rate_limited':
     case 'provider_capacity_limited':
     case 'provider_protocol_error':
+    case 'provider_model_unavailable':
     case 'output_limit_exceeded':
     case 'protocol_limit_exceeded':
     case 'provider_error':

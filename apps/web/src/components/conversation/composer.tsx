@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  ChevronDown,
   CirclePause,
   FolderOpen,
   LoaderCircle,
@@ -67,6 +66,7 @@ interface ComposerProps {
   context?: ConversationDisplayContext
   providerName?: string
   agent?: AgentId
+  modelControlRequest?: number
   model?: string
   previousUserInput?: string
   archived?: boolean
@@ -79,13 +79,19 @@ export function Composer({
   conversationId,
   capabilities,
   controller,
-  modelSettings,
+  modelSettings = {
+    availableModels: [],
+    reasoningOptions: [],
+    canSelectModel: false,
+    canSelectReasoning: false,
+  },
   modelSwitchController,
   interruptController,
   context,
   providerName = 'AI 工具',
   agent,
   model,
+  modelControlRequest = 0,
   previousUserInput,
   archived = false,
   projectBoundary,
@@ -131,7 +137,24 @@ export function Composer({
     modelSwitchController?.catalog === undefined
       ? (modelSettings?.reasoningOptions ?? [])
       : (modelSwitchController.catalog.reasoningOptions ?? [])
-  const currentModel = modelSettings?.currentModel
+  const [modelOpen, setModelOpen] = useState(false)
+  const modelTriggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (modelControlRequest > 0) {
+      modelTriggerRef.current?.focus()
+      modelTriggerRef.current?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      )
+    }
+  }, [modelControlRequest])
+  const catalog = modelSwitchController?.catalog
+  const modelMissing =
+    catalog?.availableModels !== undefined &&
+    modelSettings?.currentModel !== undefined &&
+    !catalog.availableModels.some(
+      (item) => item.id === modelSettings.currentModel,
+    )
+  const currentModel = modelSettings?.currentModel ?? model
   const modelName =
     availableModels.find((model) => model.id === currentModel)?.name ??
     currentModel ??
@@ -301,17 +324,19 @@ export function Composer({
       >
         {modelSettings === undefined ? null : (
           <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs text-text-secondary">
-<AgentBadge agent={agent ?? "codex"} size="sm" />
+            <AgentBadge agent={agent ?? 'codex'} size="sm" />
             <span aria-hidden="true">·</span>
             {modelSettings.canSelectModel &&
             modelSwitchController !== undefined ? (
               <Select
+                open={modelOpen}
                 value={
                   availableModels.some((model) => model.id === currentModel)
                     ? currentModel
                     : undefined
                 }
                 onOpenChange={(open) => {
+                  setModelOpen(open)
                   if (open) void modelSwitchController.refreshModels()
                 }}
                 onValueChange={(model) =>
@@ -321,6 +346,7 @@ export function Composer({
               >
                 <SelectTrigger
                   size="sm"
+                  ref={modelTriggerRef}
                   aria-label={`切换模型，当前 ${modelName}`}
                   className="h-7 w-auto max-w-52 border-0 bg-transparent px-1 text-xs shadow-none"
                 >
@@ -353,7 +379,9 @@ export function Composer({
                 {modelName}
               </span>
             )}
-            <span className="hidden shrink-0 text-text-muted sm:inline">剩余上下文</span>
+            <span className="hidden shrink-0 text-text-muted sm:inline">
+              剩余上下文
+            </span>
             {modelSettings.canSelectReasoning &&
             modelSwitchController !== undefined ? (
               <Select
@@ -389,6 +417,11 @@ export function Composer({
             )}
           </div>
         )}
+        {modelMissing ? (
+          <p role="status" className="px-4 py-2 text-xs text-warning-text">
+            {currentModel} 不在此账号的可用模型中
+          </p>
+        ) : null}
         {/* Submission and active work keep the same focused, read-only editor.
             Only archived/unavailable gates replace the visible input. */}
         <div hidden={editorHidden} data-composer-editor className="min-w-0">

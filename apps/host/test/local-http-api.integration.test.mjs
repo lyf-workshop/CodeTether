@@ -2539,7 +2539,9 @@ test('local model PATCH validates catalog and changes only the next Turn', async
     const conversationId = created.body.data.conversation.conversationId
     const before = harness.persistence.getConversation(conversationId)
     const events = []
-    const unsubscribe = harness.publisher.subscribe((event) => events.push(event))
+    const unsubscribe = harness.publisher.subscribe((event) =>
+      events.push(event),
+    )
     try {
       const refreshed = await postJson(
         harness.baseUrl,
@@ -2570,7 +2572,10 @@ test('local model PATCH validates catalog and changes only the next Turn', async
       )
       assert.equal(reset.status, 200)
       assert.equal(reset.body.data.conversation.currentReasoning, undefined)
-      assert.equal(harness.persistence.getConversation(conversationId).reasoning, undefined)
+      assert.equal(
+        harness.persistence.getConversation(conversationId).reasoning,
+        undefined,
+      )
       const invalidReasoning = await patchJson(
         harness.baseUrl,
         `/api/v1/conversations/${conversationId}/model`,
@@ -2581,7 +2586,10 @@ test('local model PATCH validates catalog and changes only the next Turn', async
         },
       )
       assert.equal(invalidReasoning.status, 400)
-      assert.equal(harness.persistence.getConversation(conversationId).model, 'gpt-new')
+      assert.equal(
+        harness.persistence.getConversation(conversationId).model,
+        'gpt-new',
+      )
 
       const changed = await patchJson(
         harness.baseUrl,
@@ -2605,6 +2613,14 @@ test('local model PATCH validates catalog and changes only the next Turn', async
       const snapshot = await getJson(harness.baseUrl, '/api/v1/snapshot')
       assert.equal(snapshot.body.conversations[0].currentModel, 'gpt-new')
 
+      const repeated = await patchJson(
+        harness.baseUrl,
+        `/api/v1/conversations/${conversationId}/model`,
+        { actionId: 'act_model_switch01', model: 'gpt-new', reasoning: 'high' },
+      )
+      assert.deepEqual(repeated.body, changed.body)
+      assert.equal(events.length, 2)
+
       const started = await postJson(
         harness.baseUrl,
         `/api/v1/conversations/${conversationId}/turns`,
@@ -2622,7 +2638,10 @@ test('local model PATCH validates catalog and changes only the next Turn', async
         { actionId: 'act_model_active_turn', model: 'gpt-old' },
       )
       assert.equal(activeTurnUpdate.status, 409)
-      assert.equal(harness.persistence.getConversation(conversationId).model, 'gpt-new')
+      assert.equal(
+        harness.persistence.getConversation(conversationId).model,
+        'gpt-new',
+      )
     } finally {
       unsubscribe()
     }
@@ -2630,6 +2649,166 @@ test('local model PATCH validates catalog and changes only the next Turn', async
     await harness.close()
   }
 })
+
+test('model update rechecks Turn admission after fetching its catalog and archives block both operations', async () => {
+  const runtime = new FakeAgentRuntime()
+  runtime.descriptor = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    capabilities: LOCAL_CODEX_CAPABILITIES,
+    availableModels: [
+      { id: 'gpt-old', name: 'Old' },
+      { id: 'gpt-new', name: 'New' },
+    ],
+  }
+  let releaseCatalog
+  let catalogStarted
+  const started = new Promise((resolve) => {
+    catalogStarted = resolve
+  })
+  const gate = new Promise((resolve) => {
+    releaseCatalog = resolve
+  })
+  runtime.refreshAvailableModels = async () => {
+    catalogStarted()
+    await gate
+    return [
+      { id: 'gpt-old', name: 'Old' },
+      { id: 'gpt-new', name: 'New' },
+    ]
+  }
+  const harness = await createHarness({ persistence: true, runtime })
+  try {
+    const project = (await getJson(harness.baseUrl, '/api/v1/projects')).body
+      .projects[0]
+    const create = async (actionId) =>
+      (
+        await postJson(harness.baseUrl, '/api/v1/conversations', {
+          actionId,
+          provider: 'codex',
+          projectId: project.projectId,
+          machineId: harness.machineId,
+          model: 'gpt-old',
+        })
+      ).body.data.conversation.conversationId
+    const conversationId = await create('act_d2_race_create')
+    const updating = patchJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/model`,
+      { actionId: 'act_d2_race_update', model: 'gpt-new' },
+    )
+    await started
+    const turn = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${conversationId}/turns`,
+      {
+        actionId: 'act_d2_race_turn',
+        input: { type: 'text', text: 'Run the original model.' },
+      },
+    )
+    assert.equal(turn.status, 202)
+    releaseCatalog()
+    assert.equal((await updating).status, 409)
+    assert.equal(
+      harness.persistence.getConversation(conversationId).model,
+      'gpt-old',
+    )
+    const archivedId = await create('act_d2_archived_create')
+    const archived = await postJson(
+      harness.baseUrl,
+      `/api/v1/conversations/${archivedId}/archive`,
+      { actionId: 'act_d2_archive' },
+    )
+    assert.equal(archived.status, 200)
+    assert.equal(
+      (
+        await patchJson(
+          harness.baseUrl,
+          `/api/v1/conversations/${archivedId}/model`,
+          { actionId: 'act_d2_archived_model', model: 'gpt-new' },
+        )
+      ).status,
+      409,
+    )
+    assert.equal(
+      (
+        await postJson(
+          harness.baseUrl,
+          `/api/v1/conversations/${archivedId}/models/refresh`,
+          {},
+        )
+      ).status,
+      409,
+    )
+  } finally {
+    releaseCatalog()
+    await harness.close()
+  }
+})
+
+for (const operation of ['model', 'models/refresh']) {
+  test(`archive during catalog fetch refuses ${operation} after the await`, async () => {
+    const runtime = new FakeAgentRuntime()
+    runtime.descriptor = {
+      provider: 'codex',
+      displayName: 'Codex',
+      availability: 'available',
+      capabilities: LOCAL_CODEX_CAPABILITIES,
+      availableModels: [
+        { id: 'gpt-old', name: 'Old' },
+        { id: 'gpt-new', name: 'New' },
+      ],
+    }
+    let release
+    let notify
+    const started = new Promise((resolve) => {
+      notify = resolve
+    })
+    const gate = new Promise((resolve) => {
+      release = resolve
+    })
+    runtime.refreshAvailableModels = async () => {
+      notify()
+      await gate
+      return [{ id: 'gpt-new', name: 'New' }]
+    }
+    const harness = await createHarness({ persistence: true, runtime })
+    try {
+      const project = (await getJson(harness.baseUrl, '/api/v1/projects')).body
+        .projects[0]
+      const created = await postJson(harness.baseUrl, '/api/v1/conversations', {
+        actionId: 'act_d2_archive_race_create',
+        provider: 'codex',
+        projectId: project.projectId,
+        machineId: harness.machineId,
+        model: 'gpt-old',
+      })
+      const id = created.body.data.conversation.conversationId
+      const url = `/api/v1/conversations/${id}/${operation}`
+      const pending =
+        operation === 'model'
+          ? patchJson(harness.baseUrl, url, {
+              actionId: 'act_d2_archive_race_update',
+              model: 'gpt-new',
+            })
+          : postJson(harness.baseUrl, url, {})
+      await started
+      const archived = await postJson(
+        harness.baseUrl,
+        `/api/v1/conversations/${id}/archive`,
+        { actionId: 'act_d2_archive_race_archive' },
+      )
+      assert.equal(archived.status, 200)
+      release()
+      assert.equal((await pending).status, 409)
+      assert.equal(harness.persistence.getConversation(id).model, 'gpt-old')
+    } finally {
+      release()
+      await harness.close()
+    }
+  })
+}
 
 class FakeAgentRuntime {
   provider = 'codex'

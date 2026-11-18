@@ -1698,7 +1698,8 @@ test('remote Codex model controls use the live Node catalog and reach the next T
     provider: 'codex',
   })
   const conversationId = created.data.conversation.conversationId
-  const refreshed = await fixture.service.refreshConversationModels(conversationId)
+  const refreshed =
+    await fixture.service.refreshConversationModels(conversationId)
   assert.deepEqual(
     refreshed.provider.availableModels.map(({ id }) => id),
     ['gpt-primary', 'gpt-secondary'],
@@ -1714,21 +1715,31 @@ test('remote Codex model controls use the live Node catalog and reach the next T
     (error) =>
       error instanceof HostServiceError && error.code === 'invalid_request',
   )
-  assert.deepEqual(fixture.persistence.getConversation(conversationId), beforeInvalid)
+  assert.deepEqual(
+    fixture.persistence.getConversation(conversationId),
+    beforeInvalid,
+  )
   await assert.rejects(
     fixture.service.updateConversationModel(conversationId, {
       actionId: 'act_d2_remote_reasoning_unsupported',
       reasoning: 'high',
     }),
     (error) =>
-      error instanceof HostServiceError && error.code === 'operation_not_allowed',
+      error instanceof HostServiceError &&
+      error.code === 'operation_not_allowed',
   )
-  assert.deepEqual(fixture.persistence.getConversation(conversationId), beforeInvalid)
+  assert.deepEqual(
+    fixture.persistence.getConversation(conversationId),
+    beforeInvalid,
+  )
 
-  const selected = await fixture.service.updateConversationModel(conversationId, {
-    actionId: 'act_d2_remote_model_primary',
-    model: 'gpt-primary',
-  })
+  const selected = await fixture.service.updateConversationModel(
+    conversationId,
+    {
+      actionId: 'act_d2_remote_model_primary',
+      model: 'gpt-primary',
+    },
+  )
   assert.equal(selected.data.conversation.currentModel, 'gpt-primary')
   assert.equal(selected.data.conversation.currentReasoning, undefined)
   const first = await fixture.service.startTurn(conversationId, {
@@ -1736,30 +1747,43 @@ test('remote Codex model controls use the live Node catalog and reach the next T
     input: { type: 'text', text: 'Use the selected remote model.' },
   })
   await waitFor(
-    () => fixture.persistence.getTurn(first.data.turn.turnId)?.status === 'completed',
+    () =>
+      fixture.persistence.getTurn(first.data.turn.turnId)?.status ===
+      'completed',
     'selected remote Turn completion',
   )
   assert.equal(fixture.coordinator.remoteTurnCalls[0].model, 'gpt-primary')
   assert.equal(fixture.coordinator.remoteTurnCalls[0].reasoning, undefined)
   const firstHistory = fixture.persistence.getTurn(first.data.turn.turnId)
 
-  const changed = await fixture.service.updateConversationModel(conversationId, {
-    actionId: 'act_d2_remote_model_secondary',
-    model: 'gpt-secondary',
-  })
+  const changed = await fixture.service.updateConversationModel(
+    conversationId,
+    {
+      actionId: 'act_d2_remote_model_secondary',
+      model: 'gpt-secondary',
+    },
+  )
   assert.equal(changed.data.conversation.currentModel, 'gpt-secondary')
   assert.equal(changed.data.conversation.currentReasoning, undefined)
-  assert.deepEqual(fixture.persistence.getTurn(first.data.turn.turnId), firstHistory)
+  assert.deepEqual(
+    fixture.persistence.getTurn(first.data.turn.turnId),
+    firstHistory,
+  )
   const second = await fixture.service.startTurn(conversationId, {
     actionId: 'act_d2_remote_model_second_turn',
     input: { type: 'text', text: 'Use the next remote model.' },
   })
   await waitFor(
-    () => fixture.persistence.getTurn(second.data.turn.turnId)?.status === 'completed',
+    () =>
+      fixture.persistence.getTurn(second.data.turn.turnId)?.status ===
+      'completed',
     'next remote Turn completion',
   )
   assert.equal(fixture.coordinator.remoteTurnCalls[1].model, 'gpt-secondary')
-  assert.equal(Object.hasOwn(fixture.coordinator.remoteTurnCalls[1], 'reasoning'), false)
+  assert.equal(
+    Object.hasOwn(fixture.coordinator.remoteTurnCalls[1], 'reasoning'),
+    false,
+  )
 })
 
 test('remote model update rejects a Turn admitted while catalog refresh waits', async (t) => {
@@ -1775,10 +1799,13 @@ test('remote model update rejects a Turn admitted while catalog refresh waits', 
   const conversationId = created.data.conversation.conversationId
   fixture.coordinator.modelListGate = deferred()
   fixture.coordinator.turnCompletionGate = deferred()
-  const pendingUpdate = fixture.service.updateConversationModel(conversationId, {
-    actionId: 'act_d2_remote_model_race_update',
-    model: 'gpt-primary',
-  })
+  const pendingUpdate = fixture.service.updateConversationModel(
+    conversationId,
+    {
+      actionId: 'act_d2_remote_model_race_update',
+      model: 'gpt-primary',
+    },
+  )
   await waitFor(
     () => fixture.coordinator.modelListCalls.length === 1,
     'pending remote catalog read',
@@ -1792,11 +1819,16 @@ test('remote model update rejects a Turn admitted while catalog refresh waits', 
     pendingUpdate,
     (error) => error instanceof HostServiceError && error.code === 'conflict',
   )
-  assert.equal(fixture.persistence.getConversation(conversationId).model, undefined)
+  assert.equal(
+    fixture.persistence.getConversation(conversationId).model,
+    undefined,
+  )
   assert.equal(fixture.coordinator.remoteTurnCalls[0].model, undefined)
   fixture.coordinator.turnCompletionGate.resolve()
   await waitFor(
-    () => fixture.persistence.getTurn(started.data.turn.turnId)?.status === 'completed',
+    () =>
+      fixture.persistence.getTurn(started.data.turn.turnId)?.status ===
+      'completed',
     'racing remote Turn completion',
   )
 })
@@ -2836,6 +2868,54 @@ test('a pending old-revision session cleanup remains the exact owner until compl
   }
 })
 
+test('cold native resume preserves the chosen next-Turn model', async (t) => {
+  let service
+  t.after(() => service?.close())
+  const fixture = await createFixture(t, { seedLegacyConversation: true })
+  const conversationId = fixture.legacyConversationId
+  fixture.persistence.updateConversationModel(
+    conversationId,
+    {
+      model: 'chosen-next-model',
+    },
+    changedAt,
+  )
+  fixture.runtime.resumeConversation = async (options) => {
+    fixture.runtime.resumeConversationCalls.push(options)
+    return {
+      providerThreadId: options.providerThreadId,
+      model: 'older-native-model',
+    }
+  }
+  // Reload the persisted selection before the session is hydrated.
+  await fixture.service.close()
+  const persistence = ConversationStore.open({
+    databasePath: join(fixture.directory, 'codetether.sqlite3'),
+  })
+  const runtime = new TrackingRuntime(installationAId, revisionA1)
+  runtime.resumeConversation = fixture.runtime.resumeConversation
+  service = new HostService({
+    runtime,
+    persistence,
+    workspacePolicy: await WorkspacePolicy.create([fixture.workspace]),
+    publisher: new HostEventPublisher({ epoch: newEpoch() }),
+    hostVersion: 'd2-cold-resume-test',
+  })
+  await service.startTurn(conversationId, {
+    actionId: 'act_d2_cold_resume_selection',
+    input: { type: 'text', text: 'Use the selected model.' },
+  })
+  assert.equal(runtime.startTurnCalls.at(-1).model, 'chosen-next-model')
+  assert.equal(
+    persistence.getConversation(conversationId).currentModel,
+    'chosen-next-model',
+  )
+  assert.equal(
+    runtime.startTurnCalls.at(-1).providerThreadId,
+    'private-provider-thread-pre8b',
+  )
+})
+
 async function createFixture(t, options = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'codetether-phase8b-host-'))
   const workspace = join(directory, 'workspace')
@@ -3548,7 +3628,11 @@ class RemoteFreshSessionCoordinator {
   remoteTurnCalls = []
   modelListCalls = []
   models = [
-    { id: 'gpt-primary', name: 'GPT Primary', reasoningOptions: ['medium', 'high'] },
+    {
+      id: 'gpt-primary',
+      name: 'GPT Primary',
+      reasoningOptions: ['medium', 'high'],
+    },
     { id: 'gpt-secondary', name: 'GPT Secondary', reasoningOptions: ['low'] },
   ]
   modelListGate

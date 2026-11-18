@@ -3246,7 +3246,9 @@ export class ConversationStore {
           : parseBoundedText(update.reasoning, 'Current reasoning', 120)
     const currentModel = model ?? existing.currentModel
     const currentReasoning =
-      update.reasoning === null ? undefined : (reasoning ?? existing.currentReasoning)
+      update.reasoning === null
+        ? undefined
+        : (reasoning ?? existing.currentReasoning)
     if (
       existing.model === model &&
       existing.reasoning === reasoning &&
@@ -6025,7 +6027,13 @@ function parseConversation(
       : { reasoning: value.reasoning.trim() }),
     ...(value.currentModel === undefined
       ? {}
-      : { currentModel: parseBoundedText(value.currentModel, 'Current model', 240) }),
+      : {
+          currentModel: parseBoundedText(
+            value.currentModel,
+            'Current model',
+            240,
+          ),
+        }),
     ...(value.currentReasoning === undefined
       ? {}
       : {

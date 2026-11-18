@@ -444,9 +444,12 @@ export const UpdateConversationModelRequestSchema = z
     reasoning: z.string().trim().min(1).max(120).optional(),
   })
   .strict()
-  .refine((request) => request.model !== undefined || request.reasoning !== undefined, {
-    message: 'A model or reasoning update is required',
-  })
+  .refine(
+    (request) => request.model !== undefined || request.reasoning !== undefined,
+    {
+      message: 'A model or reasoning update is required',
+    },
+  )
 export type UpdateConversationModelRequest = z.infer<
   typeof UpdateConversationModelRequestSchema
 >

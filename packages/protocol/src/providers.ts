@@ -57,7 +57,9 @@ export const AvailableProviderModelSchema = z
     description: z.string().trim().min(1).max(1024).optional(),
   })
   .strict()
-export type AvailableProviderModel = z.infer<typeof AvailableProviderModelSchema>
+export type AvailableProviderModel = z.infer<
+  typeof AvailableProviderModelSchema
+>
 
 export const ProviderReasoningOptionSchema = z
   .object({

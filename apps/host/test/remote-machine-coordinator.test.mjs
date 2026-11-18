@@ -1692,7 +1692,8 @@ test('remote model catalog binds the authenticated Machine and installation with
     })
     const confirmed = await coordinator.confirmPairing(
       candidate.pairingAttemptId,
-      (staged) => f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
+      (staged) =>
+        f.store.createRemoteMachineWithTrust(staged.machine, staged.trust),
     )
     await waitFor(() => f.counts.discovery >= 1, 'model catalog discovery')
     const alternate = { host: '172.20.1.52', port: 4319 }
@@ -1711,13 +1712,26 @@ test('remote model catalog binds the authenticated Machine and installation with
       providerInstallationId: 'pinst_coordinatorfixture01',
       expectedInstallationRevision: 'prev_coordinatorfixture01',
     }
-    const models = await coordinator.listRemoteProviderModels(machine, trust, input)
-    assert.deepEqual(models.map(({ id }) => id), ['gpt-remote'])
+    const models = await coordinator.listRemoteProviderModels(
+      machine,
+      trust,
+      input,
+    )
+    assert.deepEqual(
+      models.map(({ id }) => id),
+      ['gpt-remote'],
+    )
     assert.equal(requested[0].peer.machine.machineId, machine.machineId)
     assert.equal(requested[0].peer.machine.nodeId, trust.nodeIdentity)
     assert.equal(requested[0].provider, input.provider)
-    assert.equal(requested[0].providerInstallationId, input.providerInstallationId)
-    assert.equal(requested[0].expectedInstallationRevision, input.expectedInstallationRevision)
+    assert.equal(
+      requested[0].providerInstallationId,
+      input.providerInstallationId,
+    )
+    assert.equal(
+      requested[0].expectedInstallationRevision,
+      input.expectedInstallationRevision,
+    )
 
     rejectCatalog = true
     await assert.rejects(
@@ -1730,7 +1744,10 @@ test('remote model catalog binds the authenticated Machine and installation with
     assert.equal(f.counts.modelList, 2)
     const after = f.store.getTrustedMachinePeer(machine.machineId)
     assert.ok(after)
-    assert.equal(after.endpoints.every((endpoint) => endpoint.lastFailureAt === undefined), true)
+    assert.equal(
+      after.endpoints.every((endpoint) => endpoint.lastFailureAt === undefined),
+      true,
+    )
   } finally {
     await f.close(coordinator)
   }

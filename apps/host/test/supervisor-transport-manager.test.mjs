@@ -1332,11 +1332,12 @@ async function controlActivationFixture(
     })
     await relay.start()
   }
+  const service = serviceFactory?.(identity) ?? {
+    getHostIdentity: () => identity,
+    ...serviceOverrides,
+  }
   const manager = await SupervisorTransportManager.create({
-    service: serviceFactory?.(identity) ?? {
-      getHostIdentity: () => identity,
-      ...serviceOverrides,
-    },
+    service,
     persistence: {
       getHostPresenceConfiguration: () => undefined,
       getHostSupervisorAuthorizationEvidence: (id) => evidence.get(id),

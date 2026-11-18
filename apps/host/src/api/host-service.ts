@@ -504,7 +504,10 @@ export class HostService {
    */
   readonly #providerOwnershipFailures = new Map<string, CanonicalFailure>()
   /** Picker metadata is ephemeral and scoped to one authenticated observation. */
-  readonly #remoteModelCatalogs = new Map<string, readonly RemoteSelectableModel[]>()
+  readonly #remoteModelCatalogs = new Map<
+    string,
+    readonly RemoteSelectableModel[]
+  >()
   readonly #providerExecutionHealth = new Map<
     string,
     DurableProviderExecutionHealthObservation
@@ -657,10 +660,8 @@ export class HostService {
                   installationRevision: installation.installationRevision,
                   now: this.#now,
                   supportsTurnOverrides: () =>
-                    this.#providerDescriptorForMachine(
-                      machineId,
-                      'claude-code',
-                    )?.capabilities.modelSelection === true,
+                    this.#providerDescriptorForMachine(machineId, 'claude-code')
+                      ?.capabilities.modelSelection === true,
                   opener: {
                     open: async (input) => {
                       if (
@@ -3203,7 +3204,11 @@ export class HostService {
         const store = this.#requireConversationOrganizationStore()
         const existing = store.getConversation(id)
         if (existing === undefined || existing.status === 'creating') {
-          throw new HostServiceError('not_found', 'Conversation was not found', 404)
+          throw new HostServiceError(
+            'not_found',
+            'Conversation was not found',
+            404,
+          )
         }
         if (existing.archivedAt !== undefined) {
           throw archivedConversationControlError()
@@ -3234,7 +3239,11 @@ export class HostService {
           throw machineServiceError(error)
         }
         let refreshedModels:
-          | Awaited<ReturnType<NonNullable<AgentHostRuntime['refreshAvailableModels']>>>
+          | Awaited<
+              ReturnType<
+                NonNullable<AgentHostRuntime['refreshAvailableModels']>
+              >
+            >
           | undefined
         if (machine.kind === 'remote') {
           refreshedModels = await this.#refreshRemoteModels(existing)
@@ -3296,10 +3305,7 @@ export class HostService {
             409,
           )
         }
-        if (
-          request.model !== undefined &&
-          !modelIds?.includes(request.model)
-        ) {
+        if (request.model !== undefined && !modelIds?.includes(request.model)) {
           throw new HostServiceError(
             'invalid_request',
             'The selected model is unavailable for this Agent',
@@ -3352,13 +3358,17 @@ export class HostService {
           request.model !== undefined &&
           request.reasoning === undefined &&
           (incompatibleReasoning ||
-            (effectiveReasoning !== undefined && reasoningOptions === undefined))
+            (effectiveReasoning !== undefined &&
+              reasoningOptions === undefined))
             ? { model: request.model, reasoning: null }
             : request
         // Catalog fetch can await a remote Node or local App Server. A Turn
         // admitted during that wait owns the current settings until it ends.
         const latest = store.getConversation(id)
         const latestRuntime = this.#conversations.get(id)
+        if (latest?.archivedAt !== undefined) {
+          throw archivedConversationControlError()
+        }
         if (
           latest === undefined ||
           latest.status === 'running' ||
@@ -3381,7 +3391,9 @@ export class HostService {
           )
         } catch (error) {
           this.#handlePersistenceFailure(toError(error))
-          throw runtimeUnavailableError('Conversation durability is unavailable')
+          throw runtimeUnavailableError(
+            'Conversation durability is unavailable',
+          )
         }
         this.#syncRuntimeModel(result.conversation)
         const summary = conversationSummary(result.conversation)
@@ -3402,7 +3414,8 @@ export class HostService {
   ): Promise<RefreshConversationModelsResponse> {
     this.#assertAcceptingActions()
     const id = ConversationIdSchema.parse(conversationId)
-    const existing = this.#requireConversationOrganizationStore().getConversation(id)
+    const existing =
+      this.#requireConversationOrganizationStore().getConversation(id)
     if (existing === undefined || existing.status === 'creating') {
       throw new HostServiceError('not_found', 'Conversation was not found', 404)
     }
@@ -3424,7 +3437,10 @@ export class HostService {
     if (!this.#machineRuntimeAvailable(existing.machineId, existing.provider)) {
       throw providerUnavailableError(
         existing.provider,
-        this.#providerDescriptorForMachine(existing.machineId, existing.provider),
+        this.#providerDescriptorForMachine(
+          existing.machineId,
+          existing.provider,
+        ),
       )
     }
     let remoteModels: readonly RemoteSelectableModel[] | undefined
@@ -3450,6 +3466,12 @@ export class HostService {
         )
       }
     }
+    if (
+      this.#requireConversationOrganizationStore().getConversation(id)
+        ?.archivedAt !== undefined
+    ) {
+      throw archivedConversationControlError()
+    }
     const discovered = this.#providerDescriptorForMachine(
       existing.machineId,
       existing.provider,
@@ -3460,18 +3482,17 @@ export class HostService {
         : {
             ...discovered,
             models: remoteModels.map(({ id, name }) => ({ id, label: name })),
-            availableModels: remoteModels.map(
-              ({ id, name, description }) => ({
-                id,
-                name,
-                ...(description === undefined ? {} : { description }),
-              }),
-            ),
+            availableModels: remoteModels.map(({ id, name, description }) => ({
+              id,
+              name,
+              ...(description === undefined ? {} : { description }),
+            })),
           }
     if (
       descriptor?.availability !== 'available' ||
       descriptor.capabilities.modelSelection !== true ||
-      (descriptor.availableModels?.length ?? descriptor.models?.length ?? 0) === 0
+      (descriptor.availableModels?.length ?? descriptor.models?.length ?? 0) ===
+        0
     ) {
       throw new HostServiceError(
         'operation_not_allowed',
@@ -3983,12 +4004,14 @@ export class HostService {
                       ...(request.reasoning === undefined
                         ? {}
                         : { reasoning: request.reasoning }),
-                      ...(machineProvider.capabilities.modelSelection !== true ||
+                      ...(machineProvider.capabilities.modelSelection !==
+                        true ||
                       (provider.model === undefined &&
                         request.model === undefined)
                         ? {}
                         : { currentModel: provider.model ?? request.model }),
-                      ...(machineProvider.capabilities.modelSelection !== true ||
+                      ...(machineProvider.capabilities.modelSelection !==
+                        true ||
                       machineProvider.capabilities.reasoningControl !== true ||
                       request.reasoning === undefined
                         ? {}
@@ -5813,13 +5836,15 @@ export class HostService {
         )
       }
       if (
+        conversation.record.currentModel === undefined &&
         resumed.model !== undefined &&
         resumed.model !== conversation.record.model
       ) {
         conversation.record = {
           ...conversation.record,
           model: resumed.model,
-          ...(conversation.record.machineId === this.#machines.localMachineId() ||
+          ...(conversation.record.machineId ===
+            this.#machines.localMachineId() ||
           conversation.record.currentModel !== undefined
             ? { currentModel: resumed.model }
             : {}),
@@ -6588,9 +6613,8 @@ export class HostService {
       machine.availability !== 'available' ||
       machine.connectionState !== 'online' ||
       currentInstallation?.revision !== installation.installationRevision ||
-      this.#persistence?.getRemoteProviderObservation(
-        conversation.machineId,
-      )?.observedAt !== observedAt ||
+      this.#persistence?.getRemoteProviderObservation(conversation.machineId)
+        ?.observedAt !== observedAt ||
       !this.#machineRuntimeAvailable(
         conversation.machineId,
         conversation.provider,
@@ -8124,13 +8148,11 @@ export class HostService {
             ? {}
             : {
                 models: catalog.map(({ id, name }) => ({ id, label: name })),
-                availableModels: catalog.map(
-                  ({ id, name, description }) => ({
-                    id,
-                    name,
-                    ...(description === undefined ? {} : { description }),
-                  }),
-                ),
+                availableModels: catalog.map(({ id, name, description }) => ({
+                  id,
+                  name,
+                  ...(description === undefined ? {} : { description }),
+                })),
               }),
           executionHealth: this.#providerExecutionHealthPresentation(
             machine,

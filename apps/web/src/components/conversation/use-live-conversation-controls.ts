@@ -247,6 +247,7 @@ export function useLiveConversationControls(
   const refreshModels = useCallback(async () => {
     if (modelCatalogGuard.current || !capabilities.canCompose) return
     modelCatalogGuard.current = true
+    setModelCatalog(undefined)
     setModelCatalogLoading(true)
     setModelSwitchError(undefined)
     try {
@@ -263,6 +264,10 @@ export function useLiveConversationControls(
       setModelCatalogLoading(false)
     }
   }, [capabilities.canCompose, model.id, model.provider, runtime])
+
+  useEffect(() => {
+    void refreshModels()
+  }, [refreshModels])
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision): Promise<void> => {

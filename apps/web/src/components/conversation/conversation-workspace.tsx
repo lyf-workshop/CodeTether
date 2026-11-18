@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   ConversationIdSchema,
@@ -57,6 +57,7 @@ export function ConversationWorkspace({
   targetTurnId,
   projectId,
 }: ConversationWorkspaceProps) {
+  const [modelControlRequest, setModelControlRequest] = useState(0)
   const wasArchivedRef = useRef(viewModel.archivedAt !== undefined)
   const conversationId = ConversationIdSchema.safeParse(viewModel.id)
   const organizationConversation =
@@ -157,6 +158,11 @@ export function ConversationWorkspace({
         machineId={machineId}
         projectId={projectId}
         projectRootPath={viewModel.projectRootPath}
+        onOpenModelControl={
+          controls.modelSwitch === undefined
+            ? undefined
+            : () => setModelControlRequest((value) => value + 1)
+        }
         retryController={controls?.failedTurnRetry}
         targetChangeId={targetChangeId}
         targetChangeRequestKey={targetChangeRequestKey}
@@ -178,6 +184,7 @@ export function ConversationWorkspace({
           conversationId={viewModel.id}
           capabilities={viewModel.capabilities}
           controller={controls.composer}
+          modelControlRequest={modelControlRequest}
           modelSettings={modelSettings}
           modelSwitchController={controls.modelSwitch}
           interruptController={controls.interrupt}

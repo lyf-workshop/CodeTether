@@ -9,6 +9,7 @@
 **References** (read with `git show origin/ux/design:<path>`):
 
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 1, 2, 8 (the conversation part), 12 and 13
+- `docs/reviews/2026-11-17-windows-completion-scope.md`, group A: W0-13 to W0-16 confirm those findings on real runs
 - `docs/ux-redesign/10-desktop-improvements.md` §3.4 (Timeline Restyling) and §1 I2 (panel titles: "File Changes" for Codex, "Viewed Files" for Claude)
 - `docs/ux-redesign/02-dev-handoff.md` and the prototype pages in `docs/ux-redesign/png/` for the conversation (02-16 shows the diff)
 - `docs/ux-redesign/03-project-plan.md` §6 (invariants)
@@ -116,6 +117,16 @@ Line numbers refer to `4801ef1`; task 5 will have moved some of them.
 - **Repeated headers.** On a completed Turn, each agent message and each tool group renders its own avatar, "Codex", "已完成" and time. Screenshot `05-conversation` in the review shows three identical headers in one Turn.
 - **Repeated location.** The breadcrumb, the chip row in `conversation-header.tsx` (around `:35` and `:81`), and the context line under the Composer each state device and project.
 - **Demo data.** The README demo data gives two completed Codex conversations only. Running, approval and failure states need real runs. Use a scratch project, never the CodeTether repo itself, for Turns that edit files.
+- **W0b's real runs** (2026-11-18, installed alpha.3; `D:/Projects/Software/agenthub-archive/w0b-windows-desktop-audit-report.md`, screenshots in `w0b-windows-desktop-audit/screenshots/`). Use them as acceptance samples next to the review's demo screenshots:
+  - **Goal 2 (W0-13, High).**
+    - In J13 (`j13-tool-output-complete.png`), two rows both read "执行命令" and "命令执行失败". One command never started because the Windows sandbox failed; the other was a test that ran and failed with TAP output.
+    - Only the "工具输出" panel showed the PowerShell-wrapped command and the latest output. The Turn still read "已完成".
+    - Acceptance shows both rows on one screen. Each shows its unwrapped command, its own status and bounded output. An exit code comes only from a trusted field.
+    - The W0-11 task (`w0-11-windows-sandbox-prompt.md`) makes the sandbox case distinguishable in the data. If it has merged, render that label.
+  - **Goal 3 (W0-14, High).** A real three-file diff (`j5-changes-normal.png`, `j5-changes-1100.png`) uses the proportional font, and at 1100 px long test lines run out of view. Dark mode was not re-checked; check both themes.
+  - **Goal 4 (W0-15).** In J13, the preview, the command group and the summary each show the avatar, "Codex", the time and "已完成". While TA ran (`j3-live-normal.png`), an earlier message read "已完成" next to a work record reading "运行中".
+  - **Goal 6 (W0-16).** The inspector opens on "文件". Both tabs list the same three files, and the panel repeats the tab's title. "变更" shows a red "-0" when nothing was deleted (`j5-files-normal.png`, `j5-changes-normal.png`). Accept with a real change that deletes no lines.
+  - **Not here.** The wording of a file-change Approval goes to the W0 small fixes, and its paths and patch to the W17 design note.
 - **The Composer** belongs to task 5 and the X1 tasks; this task does not change it, except for removing the repeated location line under it.
 
 ## Boundaries

@@ -65,3 +65,23 @@
 4. **Merge** into `main` with a merge commit once the Owner approves pushing `main`. This is not a release, so there is no tag or version change. Task 5 then starts from that `main`.
 
 No documentation changes are needed on the code branch. Claude Code updates group A and the task queue on `ux/design`.
+
+## Round 2 (`0337f6f`, pushed 2026-11-18): accepted
+
+- **The must-fix is done as specified.**
+  - The rule now admits Windows native, first-party Claude Code `2.1.N` with N ≥ 327, as `compatible_unverified`.
+  - The tests cover `2.1.326`, `2.2.0` and a non-Windows target being blocked, and `2.1.327` and `2.1.400` being admitted.
+  - The branch merges into `main` without conflicts.
+- **One change beyond the review, accepted.**
+  - When the floor applies, a missing native-session discovery no longer turns the overall state into `limited`.
+  - Discovery itself stays off under its own version gate, and its capability is still reported as unsupported. So nothing is enabled that was not observed.
+- **Real-device evidence** (`D:/Projects/Software/agenthub-archive/w0-local-execution-report.md`):
+  - Two development Hosts on their own ports and a scratch database ran `2.1.327` with Read, Glob and Grep.
+  - The second Host resumed the same native session.
+  - The installed desktop on `127.0.0.1:4317` was untouched.
+- **Gates:** typecheck, lint and build passed. `pnpm test`: 2,474 passed, 14 skipped, 0 failed. Prettier passed on all 15 changed files. The 56 repository-wide Prettier warnings predate this branch and belong to task 2.
+- **Carried to later tasks:**
+  - **Grep's label.** SSE shows Grep as a generic "Search" item without its pattern. This goes to D2.5 (tool rows), when dispatched.
+  - **Importing native sessions.** Claude Code sessions created outside CodeTether cannot be imported on `2.1.327`, because discovery is gated. This is re-checked in W2, and goes into the W12 design note.
+
+**Next.** Merge into `main` with a merge commit, with the Owner's approval. Task 5 then starts from that `main`.

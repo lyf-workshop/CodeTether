@@ -251,7 +251,9 @@ This restates DEVELOPMENT-PROCESS §3–§5, which practice had drifted from:
   - the M series
 - **Deferred: tasks 3 and 4 (Relay).** Caddy renews the public certificate around 2026-12-02, and the Relay reads its copy only at startup. If task 4 has not shipped by 2026-12-15, a short operations task copies the renewed certificate and restarts the Relay before 2027-01-01.
 - **The Mac's role.** The desktop code is shared, so the Mac can implement desktop tasks. Acceptance runs on Windows.
-- **Exit.** This focus ends when W0's Blocker and High findings are fixed, accepted on Windows and shipped as alpha.4. alpha.4 is also the first real one-click update (U1). The Owner then decides what resumes.
+- **Exit (revised 2026-11-17).** The Owner asked that all Windows-side functionality be completed once W0 finishes. The scope, order and exit are in `2026-11-17-windows-completion-scope.md`.
+  - alpha.4 ships early, after task 5, B3a and the W0 Blocker fixes. It is the first real one-click update (U1), and later batches ship the same way.
+  - The focus ends when every in-scope item is accepted on Windows and a repeat audit (W2) finds no Blocker or High findings.
 
 **Why.**
 

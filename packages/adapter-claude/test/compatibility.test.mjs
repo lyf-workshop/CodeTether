@@ -47,7 +47,7 @@ const latestHelp = requiredHelp.replace(
   'Specify tool names (e.g. "Bash,Edit,Read")',
 )
 
-test('uses the measured 2.1.327 Search contract for the Windows local Host native first-party launch', async () => {
+test('admits the Windows native first-party 2.1 patch range as compatible unverified', async () => {
   const probe = {
     installation,
     environment: { HOME: tmpdir(), PATH: process.env.PATH },
@@ -57,26 +57,33 @@ test('uses the measured 2.1.327 Search contract for the Windows local Host nativ
     fingerprint: async () => '3'.repeat(64),
   }
   const windows = { ...probe, runtimeTarget: 'windows_local_host' }
-  const { compatibility } = await observeClaudeCodeInstallation(windows)
-  assert.equal(compatibility.state, 'limited')
-  for (const key of [
-    'execution',
-    'streaming',
-    'nativeResume',
-    'fileRead',
-    'search',
-    'toolEvents',
-  ]) {
-    assert.equal(compatibility.capabilities[key].effective, true, key)
+  for (const version of ['2.1.327', '2.1.400']) {
+    const { compatibility } = await observeClaudeCodeInstallation({
+      ...windows,
+      probeVersion: async () => `${version} (Claude Code)`,
+    })
+    assert.equal(compatibility.state, 'compatible_unverified', version)
+    assert.equal(compatibility.runtimeReadiness, 'ready', version)
+    for (const key of [
+      'execution',
+      'streaming',
+      'nativeResume',
+      'fileRead',
+      'search',
+      'toolEvents',
+    ]) {
+      assert.equal(compatibility.capabilities[key].effective, true, key)
+    }
+    assert.equal(
+      compatibility.capabilities.nativeSessionDiscovery.effective,
+      false,
+    )
   }
-  assert.equal(
-    compatibility.capabilities.nativeSessionDiscovery.effective,
-    false,
-  )
 
   for (const options of [
     probe,
-    { ...windows, probeVersion: async () => '2.1.328 (Claude Code)' },
+    { ...windows, probeVersion: async () => '2.1.326 (Claude Code)' },
+    { ...windows, probeVersion: async () => '2.2.0 (Claude Code)' },
     { ...windows, installation: { ...installation, launcherKind: 'wrapper' } },
     {
       ...windows,
@@ -98,6 +105,14 @@ test('uses the measured 2.1.327 Search contract for the Windows local Host nativ
     assert.equal(observation.compatibility.state, 'incompatible')
     assert.equal(observation.compatibility.capabilities.search.effective, false)
   }
+
+  const { compatibility: noResume } = await observeClaudeCodeInstallation({
+    ...windows,
+    probeHelp: async () => latestHelp.replace('--resume', '--other-resume'),
+  })
+  assert.equal(noResume.state, 'limited')
+  assert.equal(noResume.capabilities.search.effective, true)
+  assert.equal(noResume.capabilities.nativeResume.effective, false)
 })
 
 test('admits the latest REAL-validated profile despite its abbreviated tool help example', async () => {

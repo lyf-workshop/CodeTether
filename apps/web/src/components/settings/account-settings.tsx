@@ -1,12 +1,23 @@
-import { useMutation } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { LogOut, UserRound } from 'lucide-react'
 
 import { Button, Notice, SectionState, SettingsRow } from '@codetether/ui'
 import { useAccountSession } from '../../runtime/account/use-account-session'
+import {
+  useHostConnectionState,
+  useHostRuntime,
+} from '../../runtime/host/host-runtime-hooks'
+import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
 
 export function AccountSettings() {
   const { supabase, query } = useAccountSession()
+  const runtime = useHostRuntime()
+  const connectionState = useHostConnectionState()
+  const { data: onboarding } = useQuery({
+    ...onboardingQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
   const signOut = useMutation({
     mutationFn: async () => {
       if (supabase === undefined)
@@ -20,7 +31,14 @@ export function AccountSettings() {
   })
   return (
     <>
-      <h2 className="mb-5 text-xl font-semibold">账号</h2>
+      <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-xl font-semibold">账号</h2>
+        {onboarding !== undefined && onboarding.completedAt === undefined ? (
+          <Button asChild variant="secondary" size="sm">
+            <Link to="/onboarding">返回设置向导</Link>
+          </Button>
+        ) : null}
+      </div>
       {supabase === undefined ? (
         <AccountConfigurationNotice />
       ) : query.isError ? (

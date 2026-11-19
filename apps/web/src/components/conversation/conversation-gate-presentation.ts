@@ -16,6 +16,7 @@ import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
 import type { ComposerControlState } from './conversation-controls.js'
 import { isComposerEditableState } from './conversation-controls.js'
 import type {
+  ConversationApprovalViewModel,
   ConversationCapabilitiesViewModel,
   ConversationProjectBoundaryViewModel,
 } from './conversation-view-model.js'
@@ -123,9 +124,19 @@ interface ComposerGateInput {
   readonly capabilities: ConversationCapabilitiesViewModel
   readonly state: ComposerControlState
   readonly providerName: string
+  readonly approvalKind?: ConversationApprovalViewModel['kind']
   readonly machineKind?: MachineSummary['kind']
   readonly archived?: boolean
   readonly projectBoundary?: ConversationProjectBoundaryViewModel
+}
+
+const approvalGateTitles: Record<
+  ConversationApprovalViewModel['kind'],
+  string
+> = {
+  command: '等你批准一条命令',
+  'file-change': 'AI 工具请求修改文件',
+  unknown: '有操作等你批准',
 }
 
 /** Presentation over canonical controls only; it never admits or retries work. */
@@ -133,6 +144,7 @@ export function composerGatePresentation({
   capabilities,
   state,
   providerName,
+  approvalKind,
   machineKind,
   archived,
   projectBoundary,
@@ -204,7 +216,9 @@ export function composerGatePresentation({
   if (state === 'waiting')
     return {
       kind: 'waiting',
-      title: canPresentApproval ? '等你批准一条命令' : '这一轮正在等待处理',
+      title: canPresentApproval
+        ? approvalGateTitles[approvalKind ?? 'unknown']
+        : '这一轮正在等待处理',
       description: canPresentApproval
         ? `在上方批准或拒绝后，AI 工具会继续。${canInterrupt ? '也可以停止这一轮。' : stopExplanation}`
         : `请等待这一轮完成后再发送下一条消息。${stopExplanation}`,

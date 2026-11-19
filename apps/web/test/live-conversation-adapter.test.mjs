@@ -1,12 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createElement as h } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 
 import {
   createLiveConversationDetailSource,
   createLiveConversationViewModel,
 } from '../.tmp/test-dist/components/conversation/live-conversation-adapter.js'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const timestamp = '2026-08-26T12:00:00.000Z'
+const { PendingActionDock } = loadWebComponent(
+  'components/conversation/pending-action-dock.tsx',
+)
 
 test('maps one Host read model to the frozen read-only Conversation ViewModel', () => {
   const viewModel = createLiveConversationViewModel(
@@ -76,6 +82,25 @@ test('maps every pending Approval and enables only advertised live controls', ()
     ['approval_live01', 'approval_live02'],
   )
 })
+
+for (const [kind, title] of [
+  ['command', '执行命令'],
+  ['file-change', '文件变更等待审批'],
+  ['unknown', '操作等待审批'],
+]) {
+  test(`the Approval Dock renders the item title for ${kind}`, () => {
+    const viewModel = createLiveConversationViewModel(
+      conversation({
+        status: 'waiting',
+        pendingApprovals: [{ ...approval(), kind }],
+      }),
+    )
+    const markup = renderToStaticMarkup(
+      h(PendingActionDock, { approvals: viewModel.pendingApprovals }),
+    )
+    assert.ok(markup.includes(`>${title}</h3>`), markup)
+  })
+}
 
 test('presents a Provider-owned Claude effort label without changing durable identity', () => {
   const claudeBootstrap = bootstrap('claude-code')

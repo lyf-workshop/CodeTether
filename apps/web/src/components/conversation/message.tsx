@@ -9,7 +9,10 @@ import {
   type AgentId,
 } from '@codetether/ui'
 
-import type { ConversationMessageViewModel } from './conversation-view-model'
+import type {
+  ConversationMessageViewModel,
+  ConversationTurnHeaderViewModel,
+} from './conversation-view-model'
 import { MessageMarkdown } from './message-markdown'
 
 interface MessageProps {
@@ -18,30 +21,25 @@ interface MessageProps {
   className?: string
 }
 
-interface AgentMessageProps extends MessageProps {
-  agent: AgentId
-  projectRootPath?: string
-}
-
 export function UserMessage({ message, children, className }: MessageProps) {
   return (
     <article
       aria-label={`你在 ${message.time} 发送的消息`}
       className={cn(
-        'flex min-w-0 gap-3 rounded-md border border-border/60 bg-surface-muted/35 px-3 py-3',
+        'grid min-w-0 grid-cols-[auto_minmax(0,1fr)] gap-3 rounded-lg bg-timeline-message px-5 py-4',
         className,
       )}
     >
       <span className="grid size-8 shrink-0 place-items-center rounded-full bg-text-primary text-background">
         <UserRound aria-hidden="true" className="size-4" />
       </span>
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
         <header className="flex items-center justify-between gap-3">
           <span className="text-md font-semibold text-text-primary">你</span>
           <time className="text-xs text-text-muted">{message.time}</time>
         </header>
         {message.body.length > 0 ? (
-          <p className="mt-2 whitespace-pre-wrap break-words text-base font-regular leading-normal text-text-primary">
+          <p className="mt-2 whitespace-pre-wrap break-words text-timeline-message-size leading-normal text-text-primary">
             {message.body}
           </p>
         ) : null}
@@ -51,53 +49,73 @@ export function UserMessage({ message, children, className }: MessageProps) {
   )
 }
 
+export function AgentTurnHeader({
+  agent,
+  header,
+  turn,
+}: {
+  agent: AgentId
+  header: ConversationTurnHeaderViewModel
+  turn?: boolean
+}) {
+  return (
+    <header
+      data-turn-header={turn || undefined}
+      className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3"
+    >
+      <AgentIdentityMark agent={agent} className="size-8 rounded-sm text-sm" />
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-md font-semibold text-text-primary">
+          {agentDefinitions[agent].name}
+        </span>
+        {header.status === 'interrupted' ? (
+          <span className="text-xs text-text-muted">已中断</span>
+        ) : header.status === undefined ? null : (
+          <StatusBadge
+            status={header.status}
+            showIcon={false}
+            className="h-5 border-transparent bg-transparent px-1 text-xs"
+          />
+        )}
+        <time className="ml-auto shrink-0 text-xs text-text-muted">
+          {header.time}
+        </time>
+      </div>
+    </header>
+  )
+}
+
+export function AgentMessageBody({
+  message,
+  projectRootPath,
+}: {
+  message: ConversationMessageViewModel
+  projectRootPath?: string
+}) {
+  return (
+    <MessageMarkdown messageId={message.id} projectRootPath={projectRootPath}>
+      {message.body}
+    </MessageMarkdown>
+  )
+}
+
 export function AgentMessage({
   agent,
   message,
-  children,
-  className,
   projectRootPath,
-}: AgentMessageProps) {
-  const agentDefinition = agentDefinitions[agent]
-  const hasExecution = Boolean(children)
-
+}: {
+  agent: AgentId
+  message: ConversationMessageViewModel
+  projectRootPath?: string
+}) {
   return (
     <article
-      aria-label={`${agentDefinition.name} 在 ${message.time} 的工作记录`}
-      data-status={message.status}
-      className={cn(
-        'relative flex min-w-0 gap-3 px-1 py-3',
-        hasExecution
-          ? 'border-y border-border/50'
-          : 'rounded-sm bg-surface-muted/25 px-3',
-        className,
-      )}
+      aria-label={`${agentDefinitions[agent].name} 在 ${message.time} 的工作记录`}
+      className="min-w-0 rounded-lg bg-timeline-message px-5 py-4"
     >
-      <AgentIdentityMark agent={agent} className="size-8 rounded-sm text-sm" />
-      <div className="min-w-0 flex-1">
-        <header className="flex min-w-0 items-center gap-2">
-          <span className="text-md font-semibold text-text-primary">
-            {agentDefinition.name}
-          </span>
-          {message.status ? (
-            <StatusBadge
-              status={message.status}
-              showIcon={false}
-              className="h-5 border-transparent bg-transparent px-1 text-xs"
-            />
-          ) : null}
-          <time className="ml-auto shrink-0 text-xs text-text-muted">
-            {message.time}
-          </time>
-        </header>
-        {message.body.length > 0 ? (
-          <MessageMarkdown projectRootPath={projectRootPath}>
-            {message.body}
-          </MessageMarkdown>
-        ) : null}
-        {children ? (
-          <div className="mt-3 min-w-0 overflow-hidden">{children}</div>
-        ) : null}
+      <AgentTurnHeader agent={agent} header={message} />
+      <div className="mt-2 min-w-0 pl-11">
+        <AgentMessageBody message={message} projectRootPath={projectRootPath} />
       </div>
     </article>
   )

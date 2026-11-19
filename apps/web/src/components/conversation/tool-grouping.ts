@@ -58,6 +58,20 @@ export function groupRunExecutions(
   return groups
 }
 
+export function routineToolGroupLabel(
+  executions: readonly ToolExecution[],
+): string {
+  const kind = executions[0]?.tool.presentationKind
+  const sameKind = executions.every(
+    (execution) => execution.tool.presentationKind === kind,
+  )
+  if (sameKind && kind === 'read-file')
+    return `读取 ${executions.length} 个文件`
+  if (sameKind && kind === 'git-status')
+    return `检查 ${executions.length} 次 Git 状态`
+  return `已完成 ${executions.length} 个操作`
+}
+
 export function isRoutineCompletedTool(
   tool: ConversationToolViewModel,
 ): boolean {

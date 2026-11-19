@@ -51,8 +51,8 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
   assert.match(inspector, /conversation\.capabilities\.supportsDiff/u)
   assert.match(inspector, /conversation\.capabilities\.supportsShell/u)
   assert.match(inspector, /conversation\.capabilities\.supportsToolOutput/u)
-  assert.match(inspector, /requestedTab === 'changes'/u)
-  assert.match(inspector, /requestedTab === 'terminal'/u)
+  assert.match(inspector, /resolveConversationInspectorTab/u)
+  assert.match(inspector, /!supportsDiff && viewedFiles\.length > 0/u)
   assert.doesNotMatch(inspector, /provider === 'claude-code'/u)
   assert.match(
     gate,

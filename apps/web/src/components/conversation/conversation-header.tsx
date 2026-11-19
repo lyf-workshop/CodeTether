@@ -1,5 +1,3 @@
-import { Link } from '@tanstack/react-router'
-import { ChevronRight, FolderOpen, Monitor } from 'lucide-react'
 import { AgentBadge, Badge } from '@codetether/ui'
 
 import type {
@@ -31,59 +29,27 @@ export function ConversationHeader({
   connectionIndicator,
   context,
 }: ConversationHeaderProps) {
-  const contextClassName =
-    'inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-sm bg-surface-inset px-2 py-1 text-sm text-text-secondary outline-none hover:bg-surface-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring'
   return (
-    <header className="mb-6 w-full min-w-0 border-b border-border pt-3 pb-5">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
-        <h1
-          title={conversation.title}
-          className="min-w-0 flex-1 break-words text-2xl leading-snug font-semibold text-text-primary"
-        >
-          {conversation.title}
-        </h1>
-      </div>
-      <div
-        aria-label="会话所属设备和项目"
-        className="mt-3 flex min-w-0 flex-wrap items-center gap-1.5"
+    <header className="w-full min-w-0 border-b border-border pt-3 pb-4">
+      <h1
+        title={conversation.title}
+        className="min-w-0 truncate text-2xl leading-snug font-semibold text-text-primary"
       >
-        {context === undefined ? (
-          <span className="text-sm text-text-secondary">
-            {conversation.machine}
-          </span>
-        ) : (
-          <>
-            <Link
-              to="/devices/$machineId"
-              params={{ machineId: context.machineId }}
-              className={contextClassName}
-              title={context.machineName}
-            >
-              <Monitor aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="truncate">{context.machineName}</span>
-            </Link>
-            <ChevronRight
-              aria-hidden="true"
-              className="size-3 text-text-muted"
-            />
-            <Link
-              to="/projects/$projectId"
-              params={{ projectId: context.projectId }}
-              search={{ machineId: context.machineId }}
-              className={contextClassName}
-              title={context.projectPath}
-            >
-              <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
-              <span className="truncate">{context.projectName}</span>
-            </Link>
-          </>
-        )}
-        <span className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-sm bg-surface-inset px-2 py-1 text-sm text-text-secondary">
-          <AgentBadge agent={conversation.agent} size="sm" />
-          {context?.reasoning === undefined ? null : (
-            <span className="truncate">· 推理强度：{context.reasoning}</span>
-          )}
+        {conversation.title}
+      </h1>
+      <div
+        aria-label="会话模型设置"
+        className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-text-secondary"
+      >
+        <AgentBadge agent={conversation.agent} size="sm" />
+        <span className="min-w-0 truncate" title={conversation.model}>
+          {conversation.model}
         </span>
+        {context?.reasoning === undefined ? null : (
+          <span className="min-w-0 truncate">
+            · 推理强度：{context.reasoning}
+          </span>
+        )}
         {context?.importedFrom === undefined ? null : (
           <Badge variant="outline">从 {context.importedFrom} 导入</Badge>
         )}

@@ -28,7 +28,8 @@ import type {
   ConversationViewModel,
 } from './conversation-view-model.js'
 import { presentProjectPaths } from './message-presentation.js'
-import { createToolPresentation } from './tool-presentation.js'
+import { projectViewedFiles } from './conversation-viewed-files.js'
+import { createTimelineToolPresentation } from './tool-presentation.js'
 import {
   deriveLiveControlAvailability,
   type ComposerDisabledPresentation,
@@ -269,6 +270,23 @@ export function createLiveConversationViewModel(
           model.updatedAt,
       ),
       blocks: projectTimeline(model, provider.displayName, machineName),
+      turnHeaders: Object.fromEntries(
+        model.turns.map((turn) => [
+          turn.id,
+          {
+            time: formatActivityTime(turn.startedAt),
+            status:
+              turn.status === 'interrupted'
+                ? 'interrupted'
+                : runStatus(
+                    turn,
+                    model.pendingApprovals.some(
+                      (approval) => approval.turnId === turn.id,
+                    ),
+                  ),
+          },
+        ]),
+      ),
       ...(nativeHistory === undefined
         ? {}
         : {
@@ -279,6 +297,7 @@ export function createLiveConversationViewModel(
           }),
     },
     changes: { files, totals },
+    viewedFiles: projectViewedFiles(model.tools, presentationRoot),
     terminal: {
       ...(model.terminal.command === undefined
         ? {}
@@ -394,12 +413,8 @@ function projectTurnTimeline(
       continue
     }
     if (activity.kind === 'tool') {
-      const displayCommand = presentProjectPaths(
-        activity.tool.command ?? activity.tool.name,
-        model.cwd,
-      )
-      const presentation = createToolPresentation({
-        command: displayCommand,
+      const presentation = createTimelineToolPresentation({
+        command: activity.tool.command ?? activity.tool.name,
         ...(activity.tool.kind === undefined
           ? {}
           : { kind: activity.tool.kind }),
@@ -408,8 +423,29 @@ function projectTurnTimeline(
           ? {}
           : { outputSummary: activity.tool.outputSummary }),
       })
-      const failureSummary =
-        activity.tool.status === 'failed' ? presentation.subtitle : undefined
+      const failureSummary = presentation.failureSummary
+      const displaySubject =
+        presentation.subject === undefined
+          ? undefined
+          : presentProjectPaths(presentation.subject, model.cwd)
+      const editChanges =
+        activity.tool.kind === 'edit'
+          ? model.changes.filter(
+              (change) =>
+                change.turnId === turn.id &&
+                change.itemId === activity.tool.itemId,
+            )
+          : []
+      const delta =
+        editChanges.length === 0
+          ? undefined
+          : editChanges.reduce(
+              (totals, change) => ({
+                additions: totals.additions + change.additions,
+                deletions: totals.deletions + change.deletions,
+              }),
+              { additions: 0, deletions: 0 },
+            )
       executionTime ??= activity.tool.timestamp
       executions.push({
         kind: 'tool',
@@ -420,12 +456,26 @@ function projectTurnTimeline(
           title:
             activity.tool.status === 'failed'
               ? presentation.title
-              : (presentation.subtitle ?? presentation.title),
+              : presentProjectPaths(
+                  presentation.subtitle ?? presentation.title,
+                  model.cwd,
+                ),
           ...(activity.tool.status === 'failed' ||
           presentation.subtitle === undefined
             ? {}
             : { description: presentation.title }),
           status: activity.tool.status,
+          ...(displaySubject === undefined ? {} : { subject: displaySubject }),
+          displayCommand: presentation.displayCommand,
+          ...(activity.tool.output === undefined
+            ? {}
+            : { output: activity.tool.output }),
+          ...(activity.tool.outputTruncated ? { outputTruncated: true } : {}),
+          ...(activity.tool.durationMs === undefined
+            ? {}
+            : { durationMs: activity.tool.durationMs }),
+          ...(failureSummary === undefined ? {} : { failureSummary }),
+          ...(delta === undefined ? {} : { delta }),
           ...(failureSummary !== undefined
             ? { outputSummary: failureSummary }
             : activity.tool.outputSummary === undefined

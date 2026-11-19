@@ -17,6 +17,8 @@ import type {
 export const TERMINAL_OUTPUT_MAX_BYTES = 128 * 1024
 export const MESSAGE_OUTPUT_MAX_BYTES = 512 * 1024
 
+export const TOOL_ROW_OUTPUT_MAX_BYTES = 4 * 1024
+
 const TOOL_OUTPUT_SUMMARY_MAX_CHARACTERS = 512
 const USER_INPUT_ORDER = -1
 const FINAL_MESSAGE_ORDER = Number.MAX_SAFE_INTEGER
@@ -71,6 +73,11 @@ export interface ToolReadModel {
   readonly description?: string
   readonly status: ProjectedItemStatus
   readonly outputSummary?: string
+  readonly output?: string
+  readonly outputTruncated?: boolean
+  /** The observed Tool start, separate from the fallback activity timestamp. */
+  readonly startedAt?: string
+  readonly durationMs?: number
   readonly timestamp: string
   readonly completedAt?: string
   readonly order: number
@@ -464,6 +471,7 @@ export function applyHostEvent(
           ? {}
           : { description: event.payload.summary }),
         status: 'running',
+        startedAt: event.timestamp,
         timestamp: event.timestamp,
         order:
           index < 0
@@ -523,7 +531,11 @@ export function applyHostEvent(
         event.payload.stream,
         event.timestamp,
       )
-      const outputSummary = summarizeOutput(terminal.text)
+      const output = retainUtf8Tail(
+        `${currentTool?.output ?? ''}${event.payload.output}`,
+        TOOL_ROW_OUTPUT_MAX_BYTES,
+      )
+      const outputSummary = summarizeOutput(output.text)
       const tool: ToolReadModel = {
         id,
         turnId,
@@ -538,6 +550,13 @@ export function applyHostEvent(
           : { description: currentTool.description }),
         status: 'running',
         ...(outputSummary === undefined ? {} : { outputSummary }),
+        ...(output.text.length === 0 ? {} : { output: output.text }),
+        ...(currentTool?.outputTruncated || output.truncated
+          ? { outputTruncated: true }
+          : {}),
+        ...(currentTool?.startedAt === undefined
+          ? {}
+          : { startedAt: currentTool.startedAt }),
         timestamp: currentTool?.timestamp ?? event.timestamp,
         order: currentTool?.order ?? event.seq,
       }
@@ -566,6 +585,15 @@ export function applyHostEvent(
         event.payload.summary === undefined
           ? current?.outputSummary
           : summarizeOutput(event.payload.summary)
+      const fallbackOutput =
+        current?.output === undefined
+          ? retainUtf8Tail(
+              event.payload.summary ?? '',
+              TOOL_ROW_OUTPUT_MAX_BYTES,
+            )
+          : undefined
+      const output = current?.output ?? fallbackOutput?.text
+      const durationMs = elapsedToolTime(current?.startedAt, event.timestamp)
       const tool: ToolReadModel = {
         id,
         turnId,
@@ -583,6 +611,14 @@ export function applyHostEvent(
           : { description: current.description }),
         status: event.payload.success === false ? 'failed' : 'completed',
         ...(outputSummary === undefined ? {} : { outputSummary }),
+        ...(output === undefined || output.length === 0 ? {} : { output }),
+        ...(current?.outputTruncated || fallbackOutput?.truncated
+          ? { outputTruncated: true }
+          : {}),
+        ...(current?.startedAt === undefined
+          ? {}
+          : { startedAt: current.startedAt }),
+        ...(durationMs === undefined ? {} : { durationMs }),
         timestamp: current?.timestamp ?? event.timestamp,
         completedAt: event.timestamp,
         order: current?.order ?? event.seq,
@@ -825,11 +861,13 @@ function projectConversationRecord(
   const retainedTurns = runtime?.turns ?? (activeTurn ? [activeTurn] : [])
   const turns = retainedTurns.map(projectTurn)
   const messages = projectSnapshotMessages(runtime, retainedTurns)
-  const tools = (runtime?.tools ?? []).map(projectSnapshotTool).sort(byOrder)
+  const terminal = projectSnapshotTerminal(runtime?.terminal)
+  const tools = (runtime?.tools ?? [])
+    .map((tool) => projectSnapshotTool(tool, terminal))
+    .sort(byOrder)
   const changes = (runtime?.changes ?? [])
     .map(projectSnapshotChange)
     .sort(byOrder)
-  const terminal = projectSnapshotTerminal(runtime?.terminal)
   const activeTurnId =
     record.activeTurnId === undefined ? undefined : String(record.activeTurnId)
   const currentTurn =
@@ -1016,11 +1054,19 @@ function projectSnapshotMessages(
 
 function projectSnapshotTool(
   tool: SnapshotRuntime['tools'][number],
+  terminal: TerminalReadModel,
 ): ToolReadModel {
   const turnId = String(tool.turnId)
   const itemId = String(tool.itemId)
+  const id = itemKey(turnId, itemId)
+  const matchesTerminal = terminal.toolId === id && terminal.text.length > 0
+  const output = retainUtf8Tail(
+    matchesTerminal ? terminal.text : (tool.outputSummary ?? ''),
+    TOOL_ROW_OUTPUT_MAX_BYTES,
+  )
+  const durationMs = elapsedToolTime(tool.startedAt, tool.completedAt)
   return {
-    id: itemKey(turnId, itemId),
+    id,
     turnId,
     itemId,
     name: tool.name,
@@ -1031,6 +1077,12 @@ function projectSnapshotTool(
     ...(tool.outputSummary === undefined
       ? {}
       : { outputSummary: summarizeOutput(tool.outputSummary) }),
+    ...(output.text.length === 0 ? {} : { output: output.text }),
+    ...(output.truncated || (matchesTerminal && terminal.truncated)
+      ? { outputTruncated: true }
+      : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    startedAt: tool.startedAt,
     timestamp: tool.startedAt,
     ...(tool.completedAt === undefined
       ? {}
@@ -1350,6 +1402,15 @@ function retainUtf8Head(
 
 function isUtf8ContinuationByte(value: number | undefined): boolean {
   return value !== undefined && (value & 0xc0) === 0x80
+}
+
+function elapsedToolTime(
+  startedAt: string | undefined,
+  completedAt: string | undefined,
+): number | undefined {
+  if (startedAt === undefined || completedAt === undefined) return undefined
+  const elapsed = Date.parse(completedAt) - Date.parse(startedAt)
+  return Number.isFinite(elapsed) && elapsed > 0 ? elapsed : undefined
 }
 
 function summarizeOutput(output: string): string | undefined {

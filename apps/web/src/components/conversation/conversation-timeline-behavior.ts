@@ -1,3 +1,42 @@
+import type {
+  ConversationTimelineBlockViewModel,
+  ConversationTurnHeaderViewModel,
+} from './conversation-view-model.js'
+
+interface ConversationTimelineTurnGroup {
+  readonly id: string
+  readonly header: ConversationTurnHeaderViewModel
+  readonly blocks: readonly ConversationTimelineBlockViewModel[]
+}
+
+/** The canonical projection keeps each retained Turn's ordered blocks adjacent. */
+export function groupTimelineTurns(
+  blocks: readonly ConversationTimelineBlockViewModel[],
+  headers:
+    Readonly<Record<string, ConversationTurnHeaderViewModel>> | undefined,
+): readonly ConversationTimelineTurnGroup[] {
+  const turns = new Map<string, ConversationTimelineBlockViewModel[]>()
+  for (const block of blocks) {
+    const previous = turns.get(block.turnId)
+    if (previous === undefined) turns.set(block.turnId, [block])
+    else previous.push(block)
+  }
+  return Array.from(turns, ([id, turnBlocks]) => {
+    const lastRun = turnBlocks.findLast((block) => block.kind === 'agent-run')
+    const tail = lastRun ?? turnBlocks.at(-1)!
+    const fallback =
+      tail.kind === 'agent-run'
+        ? { status: tail.status, time: tail.time }
+        : {
+            time: tail.message.time,
+            ...(tail.message.status === undefined
+              ? {}
+              : { status: tail.message.status }),
+          }
+    return { id, header: headers?.[id] ?? fallback, blocks: turnBlocks }
+  })
+}
+
 export type TimelineUpdateKind =
   'initial' | 'content' | 'approval' | 'viewport-resize'
 

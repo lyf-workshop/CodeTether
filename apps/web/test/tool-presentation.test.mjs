@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { createToolPresentation } from '../.tmp/test-dist/components/conversation/tool-presentation.js'
+import {
+  createTimelineToolPresentation,
+  createToolPresentation,
+} from '../.tmp/test-dist/components/conversation/tool-presentation.js'
 
 test('classifies direct and safely unwrapped PowerShell commands', () => {
   assert.deepEqual(present('git status --short'), {
@@ -217,6 +220,83 @@ test('distinguishes the exact Windows sandbox launch diagnostic from other faile
       outputSummary: 'Process exited with code 1',
     }).subtitle,
     '命令已退出，退出码 1',
+  )
+})
+
+test('timeline previews plain, wrapped, and compound commands lexically', () => {
+  const subject = (command) =>
+    createTimelineToolPresentation({
+      command,
+      kind: 'shell',
+      status: 'running',
+    })
+
+  assert.equal(
+    subject('node --test test/check.mjs').subject,
+    'node --test test/check.mjs',
+  )
+  const wrapped = subject(
+    'powershell.exe -NoProfile -Command "& { git status --short; Write-Output \'a;b\'; pnpm test }"',
+  )
+  assert.equal(
+    wrapped.displayCommand,
+    "git status --short; Write-Output 'a;b'; pnpm test",
+  )
+  assert.equal(wrapped.subject, 'git status --short 等 3 条')
+  assert.equal(
+    subject(
+      "Write-Output $(Get-Content 'fixtures.txt' | Select-Object -First 1)\nnode --test",
+    ).subject,
+    "Write-Output $(Get-Content 'fixtures.txt' | Select-Object -First 1) 等 2 条",
+  )
+  assert.equal(
+    subject("& 'C:\\Program Files\\node.exe' --test && git status").subject,
+    "& 'C:\\Program Files\\node.exe' --test 等 2 条",
+  )
+})
+
+test('timeline keeps canonical tool subjects and renders only verified metadata', () => {
+  assert.equal(
+    createTimelineToolPresentation({
+      command: 'Read a.txt',
+      kind: 'read',
+      status: 'completed',
+    }).subject,
+    'a.txt',
+  )
+  assert.equal(
+    createTimelineToolPresentation({
+      command: 'Edit a.txt',
+      kind: 'edit',
+      status: 'completed',
+    }).subject,
+    'a.txt',
+  )
+  assert.equal(
+    createTimelineToolPresentation({
+      command: 'Grep sample in fixtures',
+      kind: 'search',
+      status: 'completed',
+    }).subject,
+    'sample in fixtures',
+  )
+  const attempted = createTimelineToolPresentation({
+    command: 'node --test',
+    kind: 'shell',
+    status: 'failed',
+    outputSummary: 'Process exited with code 9',
+  })
+  assert.equal(attempted.subject, 'node --test')
+  assert.equal(attempted.failureSummary, '命令执行失败')
+  assert.equal(
+    createTimelineToolPresentation({
+      command: 'node --test',
+      kind: 'shell',
+      status: 'failed',
+      outputSummary:
+        'Failed to create unified exec process: registered Core process has no package identity',
+    }).failureSummary,
+    'Windows 沙箱无法启动命令',
   )
 })
 

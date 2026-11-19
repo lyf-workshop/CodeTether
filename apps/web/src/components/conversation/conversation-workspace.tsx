@@ -141,7 +141,7 @@ export function ConversationWorkspace({
   return (
     <section
       aria-label="会话工作区"
-      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto_auto] bg-background"
+      className="grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto_auto] bg-timeline-background"
     >
       <ConversationTimeline
         header={

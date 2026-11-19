@@ -91,7 +91,7 @@ test('Timeline exposes focusable Turn and Diff anchors without changing durable 
   )
   assert.match(
     timeline,
-    /'data-turn-anchor': block\.turnId,[\s\S]*?role: 'group',[\s\S]*?'aria-label': `会话轮次：/u,
+    /data-turn-anchor=\{id\}[\s\S]*?role="group"[\s\S]*?aria-label=\{`会话轮次：/u,
   )
   assert.match(timeline, /target\.focus\(\{ preventScroll: true \}\)/u)
   assert.match(timeline, /该轮次不在当前保留的历史中/u)

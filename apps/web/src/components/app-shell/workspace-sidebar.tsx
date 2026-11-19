@@ -29,11 +29,14 @@ import {
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
+import { isOfflineRemoteComputer } from '../machines/machine-presentation'
+import { OfflineComputersGroup } from '../machines/offline-computers-group'
 import { useWorkspaceTreeExpansion } from './use-workspace-tree-expansion'
 import {
   toggleWorkspaceMachine,
   toggleWorkspaceProject,
   workspaceDeviceGroups,
+  type WorkspaceDeviceGroup,
 } from './workspace-sidebar-model'
 import { WorkspaceDeviceSection } from './workspace-device-section'
 import { WorkspaceProjectSection } from './workspace-project-section'
@@ -101,9 +104,49 @@ export function WorkspaceSidebar({
     machinesQuery.data ?? [],
     projectsQuery.data ?? [],
   )
+  const offlineGroups = groups.filter(({ machine }) =>
+    isOfflineRemoteComputer(machine),
+  )
   const pending =
     projectsQuery.data === undefined || machinesQuery.data === undefined
   const failed = projectsQuery.isError || machinesQuery.isError
+
+  function renderDevice(group: WorkspaceDeviceGroup) {
+    const { machine, projects } = group
+    return (
+      <WorkspaceDeviceSection
+        key={machine.machineId}
+        group={group}
+        active={activeMachineId === machine.machineId}
+        expanded={!revealedExpansion.collapsedMachineIds.has(machine.machineId)}
+        onExpandedChange={() =>
+          setExpansion(
+            toggleWorkspaceMachine(revealedExpansion, machine.machineId),
+          )
+        }
+        onAddProject={onAddProject}
+      >
+        {projects.map((entry) => (
+          <WorkspaceProjectSection
+            key={entry.key}
+            entry={entry}
+            machine={machine}
+            active={
+              activeProjectId === entry.project.projectId &&
+              activeMachineId === machine.machineId
+            }
+            currentConversationId={currentConversationId}
+            currentConversation={currentConversation}
+            expanded={revealedExpansion.expandedProjectKeys.has(entry.key)}
+            onExpandedChange={() =>
+              setExpansion(toggleWorkspaceProject(revealedExpansion, entry.key))
+            }
+            onNewConversation={onNewConversation}
+          />
+        ))}
+      </WorkspaceDeviceSection>
+    )
+  }
 
   return (
     <aside
@@ -218,53 +261,15 @@ export function WorkspaceSidebar({
                 </p>
               ) : null}
               <div className="space-y-1">
-                {groups.map((group) => (
-                  <WorkspaceDeviceSection
-                    key={group.machine.machineId}
-                    group={group}
-                    active={activeMachineId === group.machine.machineId}
-                    expanded={
-                      !revealedExpansion.collapsedMachineIds.has(
-                        group.machine.machineId,
-                      )
-                    }
-                    onExpandedChange={() =>
-                      setExpansion(
-                        toggleWorkspaceMachine(
-                          revealedExpansion,
-                          group.machine.machineId,
-                        ),
-                      )
-                    }
-                    onAddProject={onAddProject}
-                  >
-                    {group.projects.map((entry) => (
-                      <WorkspaceProjectSection
-                        key={entry.key}
-                        entry={entry}
-                        machine={group.machine}
-                        active={
-                          activeProjectId === entry.project.projectId &&
-                          activeMachineId === group.machine.machineId
-                        }
-                        currentConversationId={currentConversationId}
-                        currentConversation={currentConversation}
-                        expanded={revealedExpansion.expandedProjectKeys.has(
-                          entry.key,
-                        )}
-                        onExpandedChange={() =>
-                          setExpansion(
-                            toggleWorkspaceProject(
-                              revealedExpansion,
-                              entry.key,
-                            ),
-                          )
-                        }
-                        onNewConversation={onNewConversation}
-                      />
-                    ))}
-                  </WorkspaceDeviceSection>
-                ))}
+                {groups
+                  .filter(({ machine }) => !isOfflineRemoteComputer(machine))
+                  .map(renderDevice)}
+                <OfflineComputersGroup
+                  count={offlineGroups.length}
+                  surface="sidebar"
+                >
+                  {offlineGroups.map(renderDevice)}
+                </OfflineComputersGroup>
               </div>
             </>
           )}

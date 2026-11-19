@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 
 import { Button, Notice } from '@codetether/ui'
+import type { MachineSummary } from '@codetether/protocol'
 
 import {
   useHostConnectionState,
@@ -15,8 +16,12 @@ import {
   MachinesErrorState,
   MachinesLoadingState,
 } from './machine-page-states'
-import { sortMachinesForDisplay } from './machine-presentation'
+import {
+  isOfflineRemoteComputer,
+  sortMachinesForDisplay,
+} from './machine-presentation'
 import { MachineSummaryCard } from './machine-summary-card'
+import { OfflineComputersGroup } from './offline-computers-group'
 import {
   AuthorizedMobileDevices,
   AuthorizedMobileDevicesList,
@@ -33,6 +38,7 @@ export function MachinesPage() {
     enabled: connectionState === 'connected',
   })
   const machines = sortMachinesForDisplay(machinesQuery.data ?? [])
+  const offlineComputers = machines.filter(isOfflineRemoteComputer)
   const projectsQuery = useQuery({
     ...projectListQueryOptions(runtime),
     enabled: connectionState === 'connected',
@@ -48,6 +54,22 @@ export function MachinesPage() {
       void machinesQuery.refetch()
       void projectsQuery.refetch()
     }
+  }
+
+  function renderCards(computers: readonly MachineSummary[]) {
+    return (
+      <div className="grid min-w-0 gap-4 sm:grid-cols-2 desktop:grid-cols-3">
+        {computers.map((machine) => (
+          <MachineSummaryCard
+            key={machine.machineId}
+            machine={machine}
+            projects={projectsQuery.data}
+            projectError={projectsQuery.isError}
+            hostConnected={connectionState === 'connected'}
+          />
+        ))}
+      </div>
+    )
   }
 
   return (
@@ -128,16 +150,16 @@ export function MachinesPage() {
                 : '当前显示最近读取的项目记录。'}
             </Notice>
           ) : null}
-          <div className="grid min-w-0 gap-4 sm:grid-cols-2 desktop:grid-cols-3">
-            {machines.map((machine) => (
-              <MachineSummaryCard
-                key={machine.machineId}
-                machine={machine}
-                projects={projectsQuery.data}
-                projectError={projectsQuery.isError}
-                hostConnected={connectionState === 'connected'}
-              />
-            ))}
+          <div className="space-y-4">
+            {renderCards(
+              machines.filter((machine) => !isOfflineRemoteComputer(machine)),
+            )}
+            <OfflineComputersGroup
+              count={offlineComputers.length}
+              surface="devices"
+            >
+              {renderCards(offlineComputers)}
+            </OfflineComputersGroup>
           </div>
         </div>
       )}

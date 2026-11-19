@@ -218,6 +218,9 @@ export function AuthorizedMobileDevicesList({
       >
         手机和平板
       </h2>
+      <p className="mb-3 text-sm text-text-secondary">
+        账号用于将手机或平板与电脑配对。其他电脑也可以直接配对，无需账号。
+      </p>
       {stale && !unavailable ? (
         <p role="status" className="mb-3 text-sm text-text-secondary">
           暂时无法更新，以下是上次读取的设备记录。

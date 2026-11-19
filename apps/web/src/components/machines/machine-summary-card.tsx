@@ -103,6 +103,11 @@ export function MachineSummaryCard({
           <p className="mt-1 text-sm text-text-muted">
             {machineSubtitleLabel(machine)}
           </p>
+          {machine.kind === 'local' ? (
+            <p className="mt-1 text-sm text-text-secondary">
+              这台电脑无需账号即可使用。
+            </p>
+          ) : null}
         </div>
         <StatusTag tone={machineConnectionTone(machine.connectionState)}>
           {machineConnectionStateLabel(machine.connectionState)}

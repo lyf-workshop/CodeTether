@@ -1,4 +1,4 @@
-# Task: W0 Small Fixes (Host Stop, First-Run Sign-In, Approval Wording)
+# Task: W0 Small Fixes (Host Stop, First-Run Sign-In, Approval Wording, Offline Computers)
 
 **Where it runs.** On Windows. The Owner develops only on Windows for now (AD-13).
 
@@ -7,11 +7,12 @@
 
 **Branch and worktree.** Start from the current `origin/main` after `feat/d2-model-control` has merged (fetch first). Create branch `fix/w0-small-fixes` in worktree `D:/Projects/Software/agenthub-work/fix-w0-small-fixes`. If B3a merges while you work, merge `main` into your branch; both change `conversation-gate-presentation.ts`.
 
-**Why this task exists.** W0 and W0b found three small problems that each confuse the user at a specific moment:
+**Why this task exists.** W0 and W0b found four small problems that each confuse the user at a specific moment:
 
 - when the local service stops
 - on the very first launch
 - when an Approval asks to change files
+- when someone who uses only this computer sees remote computers they do not use
 
 Each fix is small and needs no design note.
 
@@ -50,17 +51,40 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - `unknown`: neutral wording
    - **Tests:** one for each kind, in the gate presentation and in the Approval dock's title.
    - **Not here:** showing the paths and the patch before the decision. That needs Host and adapter changes and is decided in the W17 design note.
-4. **Quality gate:**
+4. **Offline remote computers stay out of the way** (W0-04; the Owner, 2026-11-18). This replaces D3a's goal 9.
+   - **Today:**
+     - The devices page and the sidebar list two paired remote computers. Both are offline, because remote work is postponed.
+     - They cannot be unpaired while offline: the app must reach a computer to revoke its trust. The Owner also wants to keep the pairing for later.
+     - Next to them, the account and this computer's status are mixed together, so someone who uses only this computer has to work out what each one means.
+   - **Change:**
+     - **Devices page:**
+       - This computer comes first, with one line saying it works without an account.
+       - Where the account appears, say what it is for: pairing phones and other computers.
+       - Offline remote computers move into one row, such as "其他电脑 · 2 台离线", closed by default. Opening it shows them as today, with their detail pages and actions.
+     - **Sidebar:** offline remote computers move into one group, closed by default, the same way.
+     - **Online remote computers:** a remote computer that is online shows as it does today, outside the group.
+     - **No remote computers:** no group appears.
+     - **Open or closed:** whether the group is open is UI state for this viewer (Zustand, or storage wrapped in try/catch), never Host data.
+   - **Limits:**
+     - No change to pairing, trust, Host data or what the Host reports.
+     - Nothing is deleted, and no remote request is made.
+   - **Tests:**
+     - two offline remote computers: the group is closed and shows 2
+     - opening the group shows both
+     - an online remote computer stays outside the group
+     - with no remote computers, no group appears
+5. **Quality gate:**
    - `pnpm typecheck`, `pnpm lint`, `pnpm build` and `pnpm test`
    - `cargo test` in `apps/desktop/src-tauri`
    - `pnpm format:check` for the files you changed
 
 **Should:**
 
-5. **Real-device checks** with a development build on this computer:
+6. **Real-device checks** with a development build on this computer:
    - **Goal 1:** stop only the development build's own Host process, then use the restart action.
    - **Goal 2:** use an empty data folder and an empty WebView2 folder. Opening the account page is enough. Do not sign in unless the Owner is present and agrees.
    - **Goal 3:** a scratch conversation whose Turn asks for a file change.
+   - **Goal 4:** a development build's own database has no paired computers. Use the tests here; the check with the Owner's two offline computers happens at alpha.4 acceptance.
 
 ## Known facts
 
@@ -75,6 +99,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
   - An Approval record has `kind: 'command' | 'file-change' | 'unknown'` (`packages/protocol/src/records.ts:301`).
   - The dock uses the summary as its detail (`apps/web/src/components/conversation/pending-action-dock-model.ts:69`) and renders it at `pending-action-dock.tsx:186`.
   - W0b's screenshot: `w0b-windows-desktop-audit/screenshots/j3-recovery-dock.png`.
+- **W0-04's evidence:** `D:/Projects/Software/agenthub-archive/w0-windows-desktop-audit-report.md`, finding W0-04 (`j11-account-settled.json`, `j1-first-native.png`). The sidebar's computer sections are in `apps/web/src/components/app-shell/workspace-device-section.tsx`; the devices page sorts with `sortMachinesForDisplay` (`apps/web/src/components/machines/machines-page.tsx`).
+- **D3a follows this task.** D3a restyles the same devices page (status wording, page header). It starts after this task has merged and keeps this goal's order and grouping.
 - **The scope rule for native features.** The Out of Scope list in AGENTS.md limits native features to the accepted Phase 4 boundaries. This prompt authorizes exactly one addition: relaunching the app from the dialog that reports a stopped local service. It does not authorize a general restart command or any other native command.
 
 ## Boundaries
@@ -103,6 +129,7 @@ Write to `D:/Projects/Software/agenthub-archive/w0-small-fixes-report.md`:
 - **Host stop:** the new dialog text and action, its tests, and a screenshot.
 - **First-run sign-in:** the entry, its tests, and a screenshot from an empty profile.
 - **Approval wording:** the text for each kind, its tests, and a screenshot of a file-change Approval.
+- **Offline computers:** the devices page and sidebar with the group closed and open, and the tests.
 - **Gates:** results for TypeScript and Rust, with any failures verbatim.
 - **Commits:** your commits and the pushed remote commit.
 - **Docs:** documentation changes you think are needed.

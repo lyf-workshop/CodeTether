@@ -80,13 +80,6 @@ Before starting, confirm this file has 4 second-level headings and that the last
 
 7. **One disclosure style** (finding 15). Replace the native `<details>` triangles ("会话信息", "查看详细状态", "技术详情") with one disclosure built on the Lucide chevrons used elsewhere. It must be keyboard operable and expose `aria-expanded`.
 8. **Aligned AI-tool list** (finding 16). On the computer page, name, version and status sit in fixed columns, so they stay aligned whatever the tool name's length.
-9. **This computer comes first** (W0-04, added 2026-11-18).
-   - **Today:** someone who uses only this computer sees the account, remote computers and AI-tool health side by side, and must work out what each one means. W0 saw an account that was not signed in, this computer online and two remote computers offline.
-   - **Change:**
-     - On the devices page, show this computer first, with one line saying it works without an account.
-     - Say what the account is for, pairing phones and other computers, where the account appears.
-     - Remote computers keep their current information, below this computer.
-   - **Limits:** wording and order only. No new data, and no change to pairing or sign-in.
 
 ## Known facts
 
@@ -109,7 +102,7 @@ Line numbers refer to `4801ef1`.
   - `apps/web/src/components/machines/machines-page.tsx:57` titles the page "电脑".
 - **Primitives.** `packages/ui` has no tests (assessment backlog). Add tests for what you add there.
 - **Screenshots.** The review's screenshots are in `C:\Users\Administrator\AppData\Local\Temp\claude\f1eed4d30b5bb503\60ba83ab-1cea-4a54-a949-667ddf3e701e\scratchpad\ui-review\shots\` on the Windows PC (02-devices, 03-device-local, 07-inbox, 09b-new-conversation-project, 14-onboarding, 15-about, 17-add-device, 19-archived). That folder is temporary; capture your own baseline.
-- **W0-04's evidence:** `D:/Projects/Software/agenthub-archive/w0-windows-desktop-audit-report.md`, finding W0-04 (`j11-account-settled.json`, `j1-first-native.png`).
+- **W0-04 moved to the W0 small fixes** (`w0-small-fixes-prompt.md`, goal 4; the Owner, 2026-11-18). That task puts this computer first on the devices page and moves offline remote computers into a closed group, there and in the sidebar. Start D3a after it has merged, and keep that order and grouping.
 - **Demo data.** The README demo data shows two local projects, two completed Codex conversations and two open Attention items. A paired remote computer, if one is available, shows the offline and last-known states.
 
 ## Boundaries
@@ -141,7 +134,6 @@ Write to `<agenthub-archive>/d3a-desktop-consistency-report.md` (`D:/Projects/So
 - **Vocabulary:** the final table (label, tone, condition, precedence), and every surface that now uses it.
 - **Headers:** each page with its page type and content x position at 1440 px, before and after.
 - **Naming and navigation:** each change.
-- **This computer first:** the new order and wording of the devices page (goal 9).
 - **Screenshots:** before and after for Devices, computer detail, project, archived, Inbox, Settings › 关于与检查, Setup, Add Device and the New Conversation dialog, in the light theme, plus dark for Devices and the dialog.
 - **Gates:** results for each check, with failures quoted verbatim.
 - **Commits:** your commits and the pushed remote commit.

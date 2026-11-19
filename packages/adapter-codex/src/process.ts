@@ -12,6 +12,9 @@ const PARENT_CODEX_CONTROL_VARIABLES = new Set([
   'CODEX_PERMISSION_PROFILE',
   'CODEX_SESSION_ID',
   'CODEX_THREAD_ID',
+  // This marker selects the OpenAI desktop package's Registered Core runtime.
+  // An independently launched App Server must use its own runtime context.
+  'CODEX_WINDOWS_REGISTERED_CORE',
 ])
 
 const REMOTE_CODEX_ENVIRONMENT_VARIABLES = new Set([

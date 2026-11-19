@@ -129,6 +129,14 @@ Conversations organize Agent sessions, history, supported model/reasoning/permis
 - Retry is an explicit action with a new `actionId`.
 - When the outcome is uncertain, the message says so and offers no retry.
 
+**Approval wording (W0d, accepted 2026-11-19).** While one Approval waits, the Composer names its kind:
+
+- "等你批准一条命令" for a command
+- "AI 工具请求修改文件" for a file change
+- "有操作等你批准" otherwise, and whenever several wait
+
+What an Approval shows before the decision is unchanged; the W17 design note decides that.
+
 Within a Project, an empty Search field browses the ordinary active or archived Conversation index. A nonempty query searches all durable Conversation titles and canonical User inputs in that scope through the Host rather than filtering only the summaries already loaded in the browser. The query and active/archived view are URL state so refresh, Back/Forward, and deep links preserve the discovery context. Results explain whether the title or something the user previously asked matched and may show the durable public Agent; they do not expose a ranking score, full Prompt, private Provider session identity, or database detail.
 
 Search remains bounded and explicit: it requests 25 results at a time and loads another opaque-cursor page only when the user asks. An input match may navigate using the existing public Turn focus hint. If that Turn is older than the retained Conversation detail, CodeTether opens the real Conversation and explains that the matching history segment is not loaded; Search does not hydrate an owning Provider or invent older-Turn pagination.
@@ -377,6 +385,8 @@ The Previous conversations step is optional and treats no results, one Provider 
 **Phase 8B — Provider Lifecycle & Compatibility** is accepted and frozen at `89808b2f2ffaddf2ab26552671176a3e5487483d`. CodeTether identifies bounded Machine-local Codex and Claude Code installations, preserves a deterministic selected installation and immutable Conversation binding, distinguishes launchers from resolved executable revisions, and revalidates changed installations through capability contracts rather than version equality alone. Runtime compatibility, optional native-session discovery/resume support, and effective backend readiness remain separate. Provider removal or incompatibility blocks only execution that needs that installation; Projects, Conversations, historical Turns, Search, and organization remain available. Phase 8B observes but does not update, downgrade, reinstall, migrate, or switch Provider installations or backend profiles. See [`PHASE8B-PROVIDER-LIFECYCLE.md`](PHASE8B-PROVIDER-LIFECYCLE.md).
 
 **Phase 8C — Zero-Config Onboarding & Doctor** is accepted and frozen at `67c71f2e3ad390004cc60fe30925224a02aba485`. It composes the accepted Machine, Provider lifecycle, Project Location, native-session discovery/adoption, secure pairing, and Direct/Relay facts into a resumable setup flow and a permanent diagnostic surface. Ordinary users see computers, AI coding tools, projects, previous conversations, readiness, and targeted actions; internal installation, transport, trust, and diagnostic details remain behind progressive disclosure. Onboarding records flow progress only and never replaces product authority. Doctor reads component truth, distinguishes runtime compatibility from AI-service readiness, presents current versus last-known observations, and performs only explicit bounded checks or repairs. Local-only use requires no Relay setup, remote setup remains optional, and neither surface installs or switches Providers/backends, auto-imports sessions, weakens Machine trust, starts inference by default, or retries/replays work. See [`PHASE8C-ZERO-CONFIG-ONBOARDING-DOCTOR.md`](PHASE8C-ZERO-CONFIG-ONBOARDING-DOCTOR.md).
+
+**Signing in from the first launch (W0d, accepted 2026-11-19).** Every setup step offers "已有账号？登录", which opens the existing account page. While setup is unfinished, that page offers "返回设置向导". Setup still needs no account, and the sign-in flow is unchanged.
 
 The Phase 8D native historical transcript projection fixes the blank timeline of an explicitly adopted native Conversation without changing Phase 8A resume authority. Opening an adopted Conversation requests bounded, read-only, Provider-normalized historical pages and renders them before durable CodeTether Turns with a clear continuation boundary. Historical entries are not Turns and have no `actionId`, execution provenance, retry, Approval, Attention, notification, or replay semantics. Empty, partial, unsupported, unavailable, malformed, and remote-offline history remain distinct; transcript capability is independent from execution and native resume.
 

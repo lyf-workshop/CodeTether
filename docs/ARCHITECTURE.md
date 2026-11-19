@@ -897,6 +897,17 @@ In Desktop-managed mode, stdin EOF or channel error also requests the same grace
 
 Phase 4G.2 subclasses only the exact main-window handle for Windows power/session messages. `WM_QUERYENDSESSION` is an immediate memory-only allow response; only confirmed `WM_ENDSESSION` invokes a 2-second best-effort bounded drain and continues OS termination. Cancellation rolls back that process-memory lifecycle state. Tauri's later unpreventable `RunEvent::Exit` shares the same idempotent guard, so it cannot begin a second drain. These safeguards are not authority to terminate a process discovered by port number. Non-Windows packaging remains future validation; the portable EOF protocol is isolated from the Windows Job Object and Windows message implementations.
 
+**When the Host stops while the window is open (W0d, accepted 2026-11-19; `docs/reviews/w0-small-fixes.md`).** On Windows, a Host that exits after the window has opened gets its own task dialog. That includes a Host found dead after the computer resumes.
+
+- The dialog says that the local service stopped and that saved projects and conversations are kept.
+- It offers "重启 CodeTether" and the default "退出 CodeTether". Esc or closing the dialog exits.
+- Only an explicit restart choice relaunches the app:
+  - Rust first finishes the normal bounded owned shutdown and removes the tray icon.
+  - It then calls Tauri's restart, and the new process starts its Host as at a normal launch.
+  - It never restarts during a Windows session end.
+- A Host that exits before the window opens keeps the startup-failure text.
+- This dialog is the only place that can relaunch the app. There is no Web command, capability or general restart path.
+
 ### Native Security Boundary
 
 `withGlobalTauri` remains disabled. The `main` WebView capability contains only the reviewed application permissions for `allow-project-directory-picker` and `allow-attention-notifications`; `core:event:allow-listen` / `allow-unlisten`; the three focused, minimized, and visible window-state reads; and `notification:allow-is-permission-granted` / `allow-request-permission`. The application permissions expose only `pick_project_directory`, `deliver_attention_notification`, `log_notification_stage`, and `take_pending_notification_intent`. `log_notification_stage` accepts only a fixed stage enum and writes one bounded diagnostic line; it does not read or write product state. Tauri's built-in `tray-icon` feature is Rust-owned, its Explorer recovery remains inside the pinned Tauri 2.11.5 / `tray-icon` 0.24.2 implementation, and it adds no Web command or capability. Phase 4G.2 reuses event listen/unlisten only for the process-local resume signal. There is no `notification:default`, `notification:allow-notify`, plugin wildcard, shell, process, filesystem, clipboard, global-shortcut, app-exit, or generic native command permission. Browser mode receives unavailable native capabilities and never executes the dynamically imported Tauri core, event, window, or notification modules.

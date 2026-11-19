@@ -52,4 +52,4 @@ Against `main`, the branch changes only five files.
 
 ## Next
 
-Merge into `main` with a merge commit, with the Owner's approval to push `main`. It merges cleanly with `feat/b3a-send-speed`.
+Merged into `main` on 2026-11-18 (`49dcd89`), after B3a, with the Owner's approval.

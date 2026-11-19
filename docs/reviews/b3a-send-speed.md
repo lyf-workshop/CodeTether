@@ -55,4 +55,4 @@ Applied on `ux/design` with this review: the ROADMAP B3 row, and ARCHITECTURE's 
 
 ## Next
 
-Merge into `main` with a merge commit, with the Owner's approval to push `main`.
+Merged into `main` on 2026-11-18 (`8bedb8b`), with the Owner's approval.

@@ -179,6 +179,47 @@ test('keeps raw commands and reduces failure output to a stable short subtitle',
   )
 })
 
+test('distinguishes the exact Windows sandbox launch diagnostic from other failed commands', () => {
+  const failure = {
+    command: 'node --test',
+    kind: 'shell',
+    status: 'failed',
+  }
+  const launcherError =
+    'Failed to create unified exec process: registered Core process has no package identity'
+
+  assert.deepEqual(
+    createToolPresentation({ ...failure, outputSummary: launcherError }),
+    {
+      kind: 'command',
+      title: '执行命令',
+      subtitle: 'Windows 沙箱无法启动命令',
+      rawCommand: 'node --test',
+    },
+  )
+  assert.equal(
+    createToolPresentation({
+      ...failure,
+      outputSummary: 'registered Core process has no package identity',
+    }).subtitle,
+    '命令执行失败',
+  )
+  assert.equal(
+    createToolPresentation({
+      ...failure,
+      outputSummary: `AssertionError: ${launcherError}`,
+    }).subtitle,
+    '命令执行失败',
+  )
+  assert.equal(
+    createToolPresentation({
+      ...failure,
+      outputSummary: 'Process exited with code 1',
+    }).subtitle,
+    '命令已退出，退出码 1',
+  )
+})
+
 function present(command) {
   return createToolPresentation({ command, status: 'completed' })
 }

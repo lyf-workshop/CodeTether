@@ -175,6 +175,40 @@ test('normalizes command start, output, and completion fixtures', () => {
   ])
 })
 
+test('preserves the Windows sandbox launcher diagnostic in a failed command summary', () => {
+  const normalizer = new CodexEventNormalizer()
+  const launcherError =
+    'Failed to create unified exec process: registered Core process has no package identity'
+  const completed = normalize(normalizer, 'item/completed', {
+    threadId,
+    turnId,
+    item: {
+      id: 'command-1',
+      type: 'commandExecution',
+      command: 'node --version',
+      status: 'failed',
+      exitCode: -1,
+      processId: null,
+      aggregatedOutput: launcherError,
+    },
+  })
+
+  assert.deepEqual(completed.events.map(stripRaw), [
+    {
+      type: 'tool.completed',
+      provider: 'codex',
+      timestamp,
+      threadId,
+      turnId,
+      itemId: 'command-1',
+      kind: 'shell',
+      name: 'node --version',
+      success: false,
+      summary: launcherError,
+    },
+  ])
+})
+
 test('normalizes and de-duplicates file patch fixtures', () => {
   const normalizer = new CodexEventNormalizer()
   const params = {

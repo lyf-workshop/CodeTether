@@ -315,15 +315,35 @@ export class SupervisorTransportManager {
             query as never,
           ),
         getAction: (actionId) => {
+          const id = ActionIdSchema.parse(actionId)
+          const create = options.persistence.getConversationCreateAction(id)
           const turn = options.persistence.getTurnForStartAction(
-            ActionIdSchema.parse(actionId),
+            create === undefined ? id : supervisorFirstTurnActionId(id),
           )
-          if (turn === undefined) {
-            return {
-              protocolVersion: 1,
-              actionId,
-              status: 'not_found',
+          if (
+            turn === undefined ||
+            (create !== undefined &&
+              turn.conversationId !== create.conversationId)
+          ) {
+            const conversation =
+              create === undefined
+                ? undefined
+                : options.persistence.getConversation(create.conversationId)
+            if (
+              conversation?.status === 'creating' ||
+              options.service.isConversationCreateWithFirstTurnPending(id)
+            ) {
+              return { protocolVersion: 1, actionId, status: 'accepted' }
             }
+            if (conversation !== undefined) {
+              return {
+                protocolVersion: 1,
+                actionId,
+                status: 'completed',
+                conversationId: conversation.conversationId,
+              }
+            }
+            return { protocolVersion: 1, actionId, status: 'not_found' }
           }
           const terminal =
             turn.status === 'completed' ||
@@ -401,27 +421,13 @@ export class SupervisorTransportManager {
               ? {}
               : { reasoning: request.reasoning }),
           }
-          const created =
-            await options.service.createConversation(createRequest)
-          const conversationId = created.data.conversation.conversationId
-          const firstTurnActionId = ActionIdSchema.parse(
-            `act_${createHash('sha256')
-              .update(`${request.actionId}:first-turn`, 'utf8')
-              .digest('hex')}`,
-          )
-          const started = await options.service.startTurn(conversationId, {
-            actionId: firstTurnActionId,
-            input: request.input,
-          })
-          return {
-            protocolVersion: 1,
-            actionId: request.actionId,
-            status: started.status,
-            data: {
-              conversation: created.data.conversation,
-              turn: started.data.turn,
+          return await options.service.createConversationWithFirstTurn(
+            createRequest,
+            {
+              actionId: supervisorFirstTurnActionId(request.actionId),
+              input: request.input,
             },
-          }
+          )
         },
       },
       onSessionEstablished(grant, usedAt) {
@@ -1756,4 +1762,10 @@ function positiveIntegerField(
     throw new Error('Control Plane Supervisor response is invalid')
   }
   return Number(field)
+}
+
+function supervisorFirstTurnActionId(actionId: string) {
+  return ActionIdSchema.parse(
+    `act_${createHash('sha256').update(`${actionId}:first-turn`, 'utf8').digest('hex')}`,
+  )
 }

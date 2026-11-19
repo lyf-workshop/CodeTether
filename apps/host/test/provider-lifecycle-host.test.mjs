@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -19,6 +19,10 @@ import {
   HostServiceError,
   newEpoch,
 } from '../dist/api/host-service.js'
+import {
+  LocalProviderReadinessCache,
+  localProviderReadinessSample,
+} from '../dist/api/local-provider-readiness.js'
 import { MachineProviderRuntimeResolver } from '../dist/api/machine-provider-runtime-resolver.js'
 import { composeLocalHostLifecycleClose } from '../dist/api/local-codex-host.js'
 import { ProviderRegistry } from '../dist/api/provider-registry.js'
@@ -1118,6 +1122,7 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
   const machine = persistence.listMachines()[0]
   assert.ok(machine)
   let now = observedAt
+  let rewritesDuringObservation = 0
   const candidate = {
     launcherPath: executable,
     executable,
@@ -1143,40 +1148,47 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
       pathsInspected: 1,
       truncated: false,
     }),
-    observeCodex: async (options) => ({
-      installation: options.installation,
-      version: '0.149.1',
-      privateRevision: await options.fingerprint(),
-      compatibility: {
-        state: 'verified',
-        runtimeReadiness: 'ready',
-        contractVersion: 1,
-        capabilities: {
-          execution: supported,
-          streaming: supported,
-          nativeResume: supported,
-          nativeSessionDiscovery: supported,
-          fileRead: supported,
-          search: supported,
-          toolEvents: supported,
-          reasoningControl: supported,
+    observeCodex: async (options) => {
+      const privateRevision = await options.fingerprint()
+      if (rewritesDuringObservation > 0) {
+        await writeFile(executable, 'update-' + rewritesDuringObservation)
+        rewritesDuringObservation -= 1
+      }
+      return {
+        installation: options.installation,
+        version: '0.149.1',
+        privateRevision,
+        compatibility: {
+          state: 'verified',
+          runtimeReadiness: 'ready',
+          contractVersion: 1,
+          capabilities: {
+            execution: supported,
+            streaming: supported,
+            nativeResume: supported,
+            nativeSessionDiscovery: supported,
+            fileRead: supported,
+            search: supported,
+            toolEvents: supported,
+            reasoningControl: supported,
+          },
         },
-      },
-      backend: {
-        mode: 'first_party',
-        source: 'provider_settings',
-        hasBaseUrl: false,
-        hasApiKey: false,
-        hasAuthToken: false,
-        hasOAuthToken: true,
-        bedrockConfigured: false,
-        vertexConfigured: false,
-        configurationValid: true,
-        privateConfigurationRevision: 'staged-codex-backend',
-        readiness: 'unknown',
-      },
-      runtimeEnvironment: () => ({ PATH: '' }),
-    }),
+        backend: {
+          mode: 'first_party',
+          source: 'provider_settings',
+          hasBaseUrl: false,
+          hasApiKey: false,
+          hasAuthToken: false,
+          hasOAuthToken: true,
+          bedrockConfigured: false,
+          vertexConfigured: false,
+          configurationValid: true,
+          privateConfigurationRevision: 'staged-codex-backend',
+          readiness: 'unknown',
+        },
+        runtimeEnvironment: () => ({ PATH: '' }),
+      }
+    },
   })
   t.after(async () => {
     await coordinator.close().catch(() => undefined)
@@ -1188,6 +1200,7 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
   const acceptedObservedAt = selectedInstallation(
     persistence.getProviderLifecycle(machine.machineId, 'codex'),
   ).lastObservedAt
+  assert.equal(await coordinator.readiness.isCurrent('codex'), true)
 
   await writeFile(executable, '#!/bin/sh\nexit 2\n', 'utf8')
   const superseded = await coordinator.prepareRefresh('codex')
@@ -1214,6 +1227,7 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
 
   await staged.discard()
   assert.equal(coordinator.state('codex'), accepted)
+  assert.equal(await coordinator.readiness.isCurrent('codex'), false)
   assert.equal(
     selectedInstallation(
       persistence.getProviderLifecycle(machine.machineId, 'codex'),
@@ -1221,6 +1235,14 @@ test('discarded coordinator preparation neither replaces its cached runtime nor 
     acceptedObservedAt,
   )
   assert.throws(staged.commit, /Discarded Provider lifecycle refresh/u)
+
+  // Both full observations encounter a different digest after the probe.
+  now = '2026-10-06T12:02:00.000Z'
+  rewritesDuringObservation = 2
+  const unstable = await coordinator.refresh('codex')
+  assert.equal(rewritesDuringObservation, 0)
+  assert.equal(unstable.runtime.available, false)
+  assert.equal(await coordinator.readiness.isCurrent('codex'), false)
 })
 
 test('a missing selected installation never falls back to an available alternate or queues a Prompt', async (t) => {
@@ -2231,6 +2253,127 @@ test('concurrent local lifecycle refreshes coalesce and create no Conversation, 
   }
 })
 
+test('local create and Turns reuse readiness until the artifact, a start failure, or explicit recheck invalidates it', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-b3a-readiness-'))
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+  })
+  let executable = join(directory, 'codex-original.exe')
+  const originalTime = new Date('2026-10-01T10:00:00.000Z')
+  await writeFile(executable, 'original')
+  await utimes(executable, originalTime, originalTime)
+  const sample = localProviderReadinessSample(
+    async () => [executable],
+    new AbortController().signal,
+  )
+  const readiness = new LocalProviderReadinessCache()
+  let fixture
+  let fullChecks = 0
+  fixture = await createFixture(t, {
+    localProviderReadiness: readiness,
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      fullChecks += 1
+      const key = await sample()
+      if (key === undefined) {
+        throw new HostServiceError(
+          'runtime_unavailable',
+          'Executable unavailable',
+          503,
+        )
+      }
+      readiness.record(provider, [{ key, sample }])
+      return {
+        runtime: fixture.runtime,
+        lifecycle: fixture.persistence.getProviderLifecycle(
+          fixture.machineId,
+          provider,
+        ),
+      }
+    },
+  })
+  assert.equal(await readiness.isCurrent('codex'), false)
+  const created = await fixture.service.createConversation({
+    actionId: 'act_b3a_readiness_create',
+    machineId: fixture.machineId,
+    projectId: fixture.projectId,
+    provider: 'codex',
+  })
+  const conversationId = created.data.conversation.conversationId
+  assert.equal(fullChecks, 1)
+
+  const send = (step) =>
+    fixture.service.startTurn(conversationId, {
+      actionId: `act_b3a_readiness_turn_${step}`,
+      input: { type: 'text', text: 'Verify readiness reuse.' },
+    })
+  const sendAndComplete = async (step) => {
+    await send(step)
+    fixture.runtime.emit({
+      provider: 'codex',
+      type: 'turn.completed',
+      threadId: 'private-new-session-1',
+      turnId: `private-turn-${fixture.runtime.startTurnCalls.length}`,
+      timestamp: changedAt,
+      finalMessage: 'Done',
+    })
+  }
+  await sendAndComplete('first')
+  await sendAndComplete('warm')
+  await writeFile(executable, 'modified')
+  await utimes(executable, originalTime, originalTime)
+  await sendAndComplete('same_stamp')
+  assert.equal(fullChecks, 1)
+
+  const changedTime = new Date('2026-10-01T11:00:00.000Z')
+  await utimes(executable, changedTime, changedTime)
+  await sendAndComplete('mtime')
+  assert.equal(fullChecks, 2)
+
+  await writeFile(executable, 'different-length')
+  await utimes(executable, changedTime, changedTime)
+  await sendAndComplete('length')
+  assert.equal(fullChecks, 3)
+
+  executable = join(directory, 'codex-replaced.exe')
+  await writeFile(executable, 'different-length')
+  await utimes(executable, changedTime, changedTime)
+  await sendAndComplete('path')
+  assert.equal(fullChecks, 4)
+
+  const originalStart = fixture.runtime.startTurn
+  fixture.runtime.startTurn = async () => {
+    throw new Error('fixture start failed')
+  }
+  await assert.rejects(
+    send('failed'),
+    (error) => error.failure?.reason === 'provider_start_failed',
+  )
+  assert.equal(fullChecks, 4)
+  fixture.runtime.startTurn = originalStart
+  await sendAndComplete('after_failure')
+  assert.equal(fullChecks, 5)
+
+  await fixture.service.refreshMachineProviders(fixture.machineId, {
+    actionId: 'act_b3a_readiness_recheck',
+  })
+  assert.equal(fullChecks, 6)
+
+  const admitted = fixture.runtime.startTurnCalls.length
+  await rm(executable)
+  await assert.rejects(send('missing'), { code: 'runtime_unavailable' })
+  assert.equal(fullChecks, 7)
+  assert.equal(fixture.runtime.startTurnCalls.length, admitted)
+
+  await mkdir(executable)
+  assert.equal(await sample(), undefined)
+  await assert.rejects(send('not_readable_file'), {
+    code: 'runtime_unavailable',
+  })
+  assert.equal(fullChecks, 8)
+  assert.equal(fixture.runtime.startTurnCalls.length, admitted)
+})
+
 test('local Conversation creation holds Provider handoff ownership through native session binding', async (t) => {
   const nativeStartGate = deferred()
   const replacement = new TrackingRuntime(installationAId, revisionA2)
@@ -3052,6 +3195,7 @@ async function createFixture(t, options = {}) {
     runtime,
     persistence,
     providerLifecycles: [publicInitialLifecycle],
+    localProviderReadiness: options.localProviderReadiness,
     ...(options.discovery === undefined
       ? {}
       : { providerSessionDiscoveries: [options.discovery] }),

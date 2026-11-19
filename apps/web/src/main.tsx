@@ -2,6 +2,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import './styles.css'
+import { conversationDrafts } from './components/conversation/conversation-drafts'
 import { LocalSupervisorPresenceCoordinator } from './runtime/account/local-supervisor-presence'
 import { nativeCapabilities } from './runtime/native/native-capabilities'
 import { getThemeController } from './runtime/theme/theme-preference'
@@ -54,6 +55,8 @@ async function renderApp() {
     )
     return
   }
+
+  conversationDrafts.pruneExpired()
 
   const [
     { QueryClientProvider },

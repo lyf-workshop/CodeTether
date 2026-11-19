@@ -81,11 +81,12 @@ export class JsonRpcLineTooLongError extends CodexProtocolError {
 
 export class JsonRpcRemoteError extends CodexProtocolError {
   override readonly name: string = 'JsonRpcRemoteError'
+  readonly missingResumeThread: boolean
 
   constructor(
     readonly method: string,
     readonly code: number,
-    _message: string,
+    message: string,
     readonly data?: unknown,
   ) {
     const codexErrorInfo = isRecord(data) ? data.codexErrorInfo : undefined
@@ -93,6 +94,12 @@ export class JsonRpcRemoteError extends CodexProtocolError {
     super(`Codex App Server rejected ${method} (${String(code)}).`, {
       failureReason,
     })
+    this.missingResumeThread =
+      method === 'thread/resume' &&
+      code === -32_600 &&
+      failureReason === 'provider_error' &&
+      typeof message === 'string' &&
+      /^no rollout found for thread id\b/u.test(message)
     logCodexFailure(codexErrorInfo, failureReason)
   }
 }

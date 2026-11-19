@@ -1,3 +1,4 @@
+import { realpath } from 'node:fs/promises'
 import { isAbsolute, normalize } from 'node:path'
 
 import {
@@ -7,6 +8,7 @@ import {
   discoverClaudeCodeInstallations,
   fingerprintClaudeCodeInstallation,
   observeClaudeCodeInstallation,
+  resolveClaudeCodeLauncher,
   type ClaudeCodeAvailableDetection,
   type ClaudeCodeInstallationCandidate,
   type ClaudeCodeInstallationObservation,
@@ -17,6 +19,7 @@ import {
   discoverCodexInstallations,
   fingerprintCodexInstallation,
   observeCodexInstallation,
+  resolveCodexNpmLauncherExecutable,
   type CodexInstallationCandidate,
   type CodexInstallationObservation,
 } from '@codetether/adapter-codex'
@@ -56,6 +59,13 @@ import {
   claudeCodeReasoningOptions,
 } from './claude-code-host-runtime.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
+import {
+  LocalProviderReadinessCache,
+  localProviderReadinessSample,
+  observeWithLocalProviderReadiness,
+  type LocalProviderReadiness,
+  type LocalProviderReadinessCheck,
+} from './local-provider-readiness.js'
 import { UNAVAILABLE_PROVIDER_CAPABILITIES } from './provider-registry.js'
 import { UnavailableAgentRuntime } from './unavailable-agent-runtime.js'
 
@@ -99,6 +109,7 @@ interface ObservedInstallation {
   readonly candidate:
     CodexInstallationCandidate | ClaudeCodeInstallationCandidate
   readonly runtimeEnvironment: () => NodeJS.ProcessEnv
+  readonly readiness?: LocalProviderReadinessCheck
 }
 
 interface ObservedInstallationScan {
@@ -114,6 +125,8 @@ interface ObservedInstallationScan {
 export class LocalProviderLifecycleCoordinator {
   readonly #options: LocalProviderLifecycleCoordinatorOptions
   readonly #abort = new AbortController()
+  readonly #readiness = new LocalProviderReadinessCache()
+  readonly readiness: LocalProviderReadiness = this.#readiness
   readonly #states = new Map<AgentProvider, LocalProviderLifecycleState>()
   readonly #refreshes = new Map<
     AgentProvider,
@@ -459,7 +472,7 @@ export class LocalProviderLifecycleCoordinator {
             ? configuredCodexInstallationId
             : undefined
     }
-    const absent = [...previousInstallations.values()]
+    const absent: ObservedInstallation[] = [...previousInstallations.values()]
       .filter(
         (known) =>
           !observed.some(
@@ -528,6 +541,17 @@ export class LocalProviderLifecycleCoordinator {
       timestamp,
       providerProbeFailed,
     )
+    // An adopted local session can be bound to a ready non-selected installation.
+    const executionInstallations = installations
+      .slice(0, MAXIMUM_INSTALLATIONS_PER_PROVIDER)
+      .filter(
+        ({ durable }) =>
+          durable.installationId === selectedInstallationId ||
+          localInstallationExecutionReady(provider, durable),
+      )
+    const readinessChecks = executionInstallations.flatMap(({ readiness }) =>
+      readiness === undefined ? [] : [readiness],
+    )
     const sessionDiscovery = this.#sessionDiscoveryFor(provider, selected)
     const state: LocalProviderLifecycleState = {
       runtime,
@@ -566,6 +590,13 @@ export class LocalProviderLifecycleCoordinator {
           ...(sessionDiscovery === undefined ? {} : { sessionDiscovery }),
         }
         this.#states.set(provider, committedState)
+        this.#readiness.record(
+          provider,
+          selected?.readiness !== undefined &&
+            readinessChecks.length === executionInstallations.length
+            ? readinessChecks
+            : [],
+        )
         disposition = 'committed'
         this.#preparations.delete(prepared)
         return persisted
@@ -608,13 +639,40 @@ export class LocalProviderLifecycleCoordinator {
     })
     const observed = await observeLocalProviderCandidates(
       discovery.installations,
-      async (candidate) => await this.#stableCodexObservation(candidate),
+      async (candidate) =>
+        await observeWithLocalProviderReadiness(
+          localProviderReadinessSample(async (signal) => {
+            const launcher = await realpath(candidate.launcherPath)
+            if (
+              launcher !==
+                (candidate.launcherResolutionPath ?? candidate.executable) ||
+              (candidate.launcherKind === 'npm_shim' &&
+                (await resolveCodexNpmLauncherExecutable(
+                  candidate.launcherPath,
+                  this.#options.platform ?? process.platform,
+                  signal,
+                )) !== candidate.executable)
+            ) {
+              throw new Error('Codex launcher resolution changed')
+            }
+            return [launcher, candidate.executable]
+          }, this.#abort.signal),
+          async () => await this.#stableCodexObservation(candidate),
+        ),
       this.#abort.signal,
     )
     return {
-      installations: observed.map(({ candidate, observation }) =>
-        this.#codexInstallation(candidate, observation, previous, timestamp),
-      ),
+      installations: observed.map(({ candidate, observation }) => ({
+        ...this.#codexInstallation(
+          candidate,
+          observation.observation,
+          previous,
+          timestamp,
+        ),
+        ...(observation.readiness === undefined
+          ? {}
+          : { readiness: observation.readiness }),
+      })),
       truncated: discovery.truncated,
     }
   }
@@ -637,13 +695,46 @@ export class LocalProviderLifecycleCoordinator {
     })
     const observed = await observeLocalProviderCandidates(
       discovery.installations,
-      async (candidate) => await this.#stableClaudeObservation(candidate),
+      async (candidate) =>
+        await observeWithLocalProviderReadiness(
+          localProviderReadinessSample(async (signal) => {
+            const launcher = await resolveClaudeCodeLauncher({
+              executablePath: candidate.launcherPath,
+              environment: this.#options.environment,
+              platform: this.#options.platform,
+              signal,
+            })
+            if (
+              launcher.executable !== candidate.launcher.executable ||
+              launcher.sourcePath !== candidate.launcher.sourcePath ||
+              launcher.prefixArguments.join('\u0000') !==
+                candidate.launcher.prefixArguments.join('\u0000')
+            ) {
+              throw new Error('Claude launcher resolution changed')
+            }
+            return [
+              launcher.launcherPath,
+              launcher.executable,
+              launcher.sourcePath,
+              ...launcher.prefixArguments.filter(isAbsolute),
+            ]
+          }, this.#abort.signal),
+          async () => await this.#stableClaudeObservation(candidate),
+        ),
       this.#abort.signal,
     )
     return {
-      installations: observed.map(({ candidate, observation }) =>
-        this.#claudeInstallation(candidate, observation, previous, timestamp),
-      ),
+      installations: observed.map(({ candidate, observation }) => ({
+        ...this.#claudeInstallation(
+          candidate,
+          observation.observation,
+          previous,
+          timestamp,
+        ),
+        ...(observation.readiness === undefined
+          ? {}
+          : { readiness: observation.readiness }),
+      })),
       truncated: discovery.truncated,
     }
   }

@@ -1,8 +1,15 @@
 interface DraftStorage {
+  readonly length?: number
+  key?(index: number): string | null
   getItem(key: string): string | null
   setItem(key: string, value: string): void
   removeItem(key: string): void
 }
+
+const draftPrefix = 'composer-draft-'
+const draftTimestampKey = (conversationId: string) =>
+  'composer-drafts-updated:' + conversationId
+const draftLifetimeMs = 30 * 24 * 60 * 60 * 1000
 
 /** UI-only, unsubmitted text scoped to an exact conversation. */
 export function createConversationDraftStore(
@@ -12,7 +19,7 @@ export function createConversationDraftStore(
   const memory = new Map<string, string>()
   const pending = new Map<string, ReturnType<typeof setTimeout>>()
   const unsynced = new Set<string>()
-  const key = (conversationId: string) => `composer-draft-${conversationId}`
+  const key = (conversationId: string) => draftPrefix + conversationId
 
   const cancelPending = (conversationId: string) => {
     const timer = pending.get(conversationId)
@@ -22,9 +29,8 @@ export function createConversationDraftStore(
 
   const clear = (conversationId: string) => {
     cancelPending(conversationId)
-    // Retain an empty tombstone if storage is disabled or removal fails, so a
-    // stale stored prompt cannot reappear in this application session.
-    memory.set(conversationId, '')
+    memory.delete(conversationId)
+    // Keep the unsynced marker when removal fails so stale stored text stays hidden.
     try {
       const storage = getStorage()
       if (storage === undefined) {
@@ -32,6 +38,7 @@ export function createConversationDraftStore(
         return
       }
       storage.removeItem(key(conversationId))
+      storage.removeItem(draftTimestampKey(conversationId))
       unsynced.delete(conversationId)
     } catch {
       // Optional storage must not prevent editing or clearing a draft.
@@ -40,6 +47,32 @@ export function createConversationDraftStore(
   }
 
   return {
+    pruneExpired(now = Date.now()): void {
+      try {
+        const storage = getStorage()
+        if (storage?.length === undefined || storage.key === undefined) return
+        const keys = Array.from({ length: storage.length }, (_, index) =>
+          storage.key?.(index),
+        )
+        for (const storedKey of keys) {
+          if (storedKey == null || !storedKey.startsWith(draftPrefix)) continue
+          const conversationId = storedKey.slice(draftPrefix.length)
+          if (pending.has(conversationId) || unsynced.has(conversationId))
+            continue
+          const timestampKey = draftTimestampKey(conversationId)
+          const storedTimestamp = storage.getItem(timestampKey)
+          const timestamp = Number(storedTimestamp)
+          if (!storedTimestamp || !Number.isFinite(timestamp)) {
+            // Old installations stored text alone. Start aging it today.
+            storage.setItem(timestampKey, String(now))
+          } else if (now - timestamp > draftLifetimeMs) {
+            clear(conversationId)
+          }
+        }
+      } catch {
+        // Storage is optional during startup as well as during editing.
+      }
+    },
     read(conversationId: string): string {
       const cached = memory.get(conversationId)
       // A local unsaved edit or failed storage operation owns the current text.
@@ -65,6 +98,7 @@ export function createConversationDraftStore(
       memory.set(conversationId, value)
       unsynced.add(conversationId)
       cancelPending(conversationId)
+      const editedAt = Date.now()
       pending.set(
         conversationId,
         setTimeout(() => {
@@ -73,6 +107,7 @@ export function createConversationDraftStore(
           try {
             const storage = getStorage()
             if (storage === undefined) return
+            storage.setItem(draftTimestampKey(conversationId), String(editedAt))
             storage.setItem(key(conversationId), value)
             unsynced.delete(conversationId)
           } catch {

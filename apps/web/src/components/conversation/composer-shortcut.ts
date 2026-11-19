@@ -3,7 +3,10 @@ export const COMPOSER_SEND_SHORTCUT_EVENT = 'composer-send-shortcut-change'
 
 export type ComposerSendShortcut = 'enter' | 'ctrl-enter'
 
+let sessionShortcut: ComposerSendShortcut | undefined
+
 export function readComposerSendShortcut(): ComposerSendShortcut {
+  if (sessionShortcut !== undefined) return sessionShortcut
   if (typeof window === 'undefined') return 'enter'
   try {
     return window.localStorage.getItem(COMPOSER_SEND_SHORTCUT_KEY) ===
@@ -16,6 +19,12 @@ export function readComposerSendShortcut(): ComposerSendShortcut {
 }
 
 export function writeComposerSendShortcut(value: ComposerSendShortcut): void {
-  window.localStorage.setItem(COMPOSER_SEND_SHORTCUT_KEY, value)
-  window.dispatchEvent(new Event(COMPOSER_SEND_SHORTCUT_EVENT))
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COMPOSER_SEND_SHORTCUT_KEY, value)
+    sessionShortcut = undefined
+  } catch {
+    sessionShortcut = value
+  }
+  window.dispatchEvent(new window.Event(COMPOSER_SEND_SHORTCUT_EVENT))
 }

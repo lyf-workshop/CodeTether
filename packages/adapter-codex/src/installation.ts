@@ -302,6 +302,30 @@ export function defaultKnownPaths(
       ]
 }
 
+/** Resolves an already observed npm launcher without running a Provider probe. */
+export async function resolveCodexNpmLauncherExecutable(
+  launcherPath: string,
+  platform: NodeJS.Platform,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  const io = createCodexInstallationIoDeadline(
+    DEFAULT_CANDIDATE_TIMEOUT_MS,
+    signal,
+  )
+  try {
+    const canonicalLauncher = await io.run(() => realpath(launcherPath))
+    return await resolveOfficialNpmExecutable(
+      launcherPath,
+      canonicalLauncher,
+      platform,
+      process.arch,
+      io,
+    )
+  } finally {
+    io.dispose()
+  }
+}
+
 async function resolveCodexLauncher(
   launcherPath: string,
   platform: NodeJS.Platform,

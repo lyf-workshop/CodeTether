@@ -29,7 +29,8 @@ test('conversation drafts save after the debounce and reload only from their exa
   const reloaded = createConversationDraftStore(() => storage)
   assert.equal(reloaded.read('conv_draft01'), '尚未发送\n第二行')
   assert.equal(reloaded.read('conv_absent01'), '')
-  assert.equal(data.size, 2)
+  assert.equal(data.size, 4)
+  assert.ok(Number(data.get('composer-drafts-updated:conv_draft01')) > 0)
   first.clear('conv_draft01')
   assert.equal(first.read('conv_draft01'), '')
   assert.equal(
@@ -37,6 +38,43 @@ test('conversation drafts save after the debounce and reload only from their exa
     '',
   )
   assert.equal(first.read('conv_draft02'), '另一个会话')
+  assert.equal(data.has('composer-drafts-updated:conv_draft01'), false)
+})
+
+test('startup cleans only drafts older than 30 days and dates drafts from old installations', () => {
+  const day = 24 * 60 * 60 * 1000
+  const now = 100 * day
+  const data = new Map([
+    ['composer-draft-conv_old01', 'old'],
+    ['composer-drafts-updated:conv_old01', String(now - 30 * day - 1)],
+    ['composer-draft-conv_old02', 'another old one'],
+    ['composer-drafts-updated:conv_old02', String(now - 31 * day)],
+    ['composer-draft-conv_limit', 'at the boundary'],
+    ['composer-drafts-updated:conv_limit', String(now - 30 * day)],
+    ['composer-draft-conv_recent', 'recent'],
+    ['composer-drafts-updated:conv_recent', String(now - day)],
+    ['composer-draft-conv_legacy', 'saved before timestamp support'],
+    ['composer-send-shortcut', 'ctrl-enter'],
+  ])
+  const drafts = createConversationDraftStore(() => ({
+    get length() {
+      return data.size
+    },
+    key: (index) => [...data.keys()][index] ?? null,
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  }))
+  drafts.pruneExpired(now)
+  assert.equal(drafts.read('conv_old01'), '')
+  assert.equal(drafts.read('conv_old02'), '')
+  assert.equal(data.has('composer-drafts-updated:conv_old01'), false)
+  assert.equal(data.has('composer-drafts-updated:conv_old02'), false)
+  assert.equal(drafts.read('conv_limit'), 'at the boundary')
+  assert.equal(drafts.read('conv_recent'), 'recent')
+  assert.equal(drafts.read('conv_legacy'), 'saved before timestamp support')
+  assert.equal(data.get('composer-drafts-updated:conv_legacy'), String(now))
+  assert.equal(data.get('composer-send-shortcut'), 'ctrl-enter')
 })
 
 test('optional or throwing localStorage never loses an in-memory draft or blocks clearing', () => {

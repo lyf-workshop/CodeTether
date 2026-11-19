@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
+import { JsonRpcRemoteError } from '@codetether/adapter-codex'
 import { machineTransportLimits } from '@codetether/machine-transport'
 
 import { ProviderConversationUnavailableError } from '../dist/api/agent-runtime.js'
@@ -1083,6 +1084,93 @@ test('graceful close declines Provider but expires pending Approval only on rest
   }
 })
 
+test('first Turn after restart replaces only an unwritten local Codex Thread', async () => {
+  const environment = await createEnvironment()
+  let first
+  let second
+  try {
+    first = await createService(
+      environment,
+      '55555555-5555-4555-8555-555555555551',
+    )
+    const created = await createConversation(
+      first.service,
+      environment.workspace,
+      'act_empty_restart_create',
+    )
+    const conversationId = created.data.conversation.conversationId
+    const old = first.store.getConversation(conversationId)
+    assert.equal(old.providerSessionMaterialized, false)
+    assert.equal(first.store.countTurns(conversationId), 0)
+    await first.service.close()
+    first = undefined
+
+    const runtime = new FakeRuntime()
+    runtime.resumeError = missingCodexThread(old.providerThreadId)
+    const allocate = runtime.startConversation.bind(runtime)
+    runtime.startConversation = async (options) => ({
+      ...(await allocate(options)),
+      providerThreadId: 'provider-thread-after-restart',
+    })
+    second = await createService(
+      environment,
+      '55555555-5555-4555-8555-555555555552',
+      runtime,
+    )
+    runtime.beforeTurnReturn = ({ options }) => {
+      assert.equal(
+        second.store.getConversation(conversationId).providerThreadId,
+        options.providerThreadId,
+      )
+    }
+    const started = await startTurn(
+      second.service,
+      conversationId,
+      'act_empty_restart_first_turn',
+      'First message after restart',
+    )
+    const replay = await startTurn(
+      second.service,
+      conversationId,
+      'act_empty_restart_first_turn',
+      'First message after restart',
+    )
+    const current = second.store.getConversation(conversationId)
+    assert.equal(replay.data.turn.turnId, started.data.turn.turnId)
+    assert.equal(runtime.resumeCalls.length, 1)
+    assert.equal(runtime.resumeCalls[0].providerThreadId, old.providerThreadId)
+    assert.equal(runtime.conversationCalls.length, 1)
+    assert.equal(runtime.conversationCalls[0].model, old.model)
+    assert.equal(runtime.turnCalls.length, 1)
+    assert.equal(
+      runtime.turnCalls[0].options.providerThreadId,
+      current.providerThreadId,
+    )
+    assert.equal(current.providerThreadId, 'provider-thread-after-restart')
+    assert.equal(second.store.countTurns(conversationId), 1)
+    assert.equal(current.providerSessionMaterialized, true)
+    assert.equal(current.provider, old.provider)
+    assert.equal(current.machineId, old.machineId)
+    assert.equal(current.projectId, old.projectId)
+    assert.equal(current.model, old.model)
+    assert.equal(current.currentModel, old.currentModel)
+  } finally {
+    await first?.service.close()
+    await second?.service.close()
+    await removeEnvironment(environment.directory)
+  }
+})
+
+function missingCodexThread(providerThreadId) {
+  return new ProviderConversationUnavailableError('codex', providerThreadId, {
+    cause: new JsonRpcRemoteError(
+      'thread/resume',
+      -32_600,
+      `no rollout found for thread id ${providerThreadId}`,
+    ),
+  })
+}
+
 test('missing Provider Thread preserves local history and returns a specific safe error', async () => {
   const environment = await createEnvironment()
   try {
@@ -1111,10 +1199,7 @@ test('missing Provider Thread preserves local history and returns a specific saf
     await first.service.close()
 
     const runtime = new FakeRuntime()
-    runtime.resumeError = new ProviderConversationUnavailableError(
-      'codex',
-      'provider-thread-1',
-    )
+    runtime.resumeError = missingCodexThread('provider-thread-1')
     const second = await createService(
       environment,
       '66666666-6666-4666-8666-666666666666',
@@ -1132,6 +1217,11 @@ test('missing Provider Thread preserves local history and returns a specific saf
         error.code === 'provider_session_lost',
     )
     assert.equal(runtime.turnCalls.length, 0)
+    assert.equal(runtime.conversationCalls.length, 0)
+    assert.equal(
+      second.store.getConversation(conversationId).providerThreadId,
+      'provider-thread-1',
+    )
     const after = second.service.getConversation(conversationId)
     assert.equal(after.runtime.turns.length, 2)
     assert.equal(after.runtime.turns[0].status, 'completed')

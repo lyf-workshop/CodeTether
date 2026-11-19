@@ -187,9 +187,8 @@ test('submitting and disconnected states never imply a second send or automatic 
     state: 'unavailable',
     providerName: 'Codex',
   })
-  assert.equal(pending.kind, 'submitting')
+  assert.equal(pending, undefined)
   assert.equal(unavailable.kind, 'unavailable')
-  assert.equal(pending.canInterrupt, false)
   assert.equal(unavailable.canInterrupt, false)
 })
 

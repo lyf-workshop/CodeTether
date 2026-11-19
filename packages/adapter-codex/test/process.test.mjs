@@ -297,6 +297,7 @@ test('child App Server does not inherit a parent Codex control context', () => {
     CODEX_PERMISSION_PROFILE: 'parent-permissions',
     CODEX_SESSION_ID: 'parent-session',
     CODEX_THREAD_ID: 'parent-thread',
+    CODEX_WINDOWS_REGISTERED_CORE: '1',
   })
 
   assert.deepEqual(environment, {
@@ -311,6 +312,7 @@ test('control variable matching is case-insensitive on Windows-style input', () 
     sanitizeCodexChildEnvironment({
       Path: 'runtime-path',
       codex_session_id: 'parent-session',
+      Codex_Windows_Registered_Core: '1',
     }),
     { Path: 'runtime-path' },
   )

@@ -5,6 +5,7 @@ import {
 import {
   ConversationIdSchema,
   formatLastEventId,
+  type ActionId,
   type ApprovalDecision,
   type AdoptProviderSessionRequest,
   type AdoptProviderSessionResponse,
@@ -54,6 +55,7 @@ import {
   type ConversationOrganizationMutationClient,
 } from './conversation-organization-actions.js'
 import {
+  clearArchivedConversationDrafts,
   invalidateConversationDurableQueries,
   invalidateConversationProductQueries,
 } from './conversation-index-sync.js'
@@ -342,12 +344,20 @@ export class HostRuntime {
     return () => this.#appliedEventListeners.delete(listener)
   }
 
-  startTurn(conversationId: string, text: string) {
-    return this.#actions.startTurn(conversationId, text)
+  startTurn(
+    conversationId: string,
+    text: string,
+    onActionId?: (actionId: ActionId) => void,
+  ) {
+    return this.#actions.startTurn(conversationId, text, onActionId)
   }
 
-  startNewTurn(conversationId: string, text: string) {
-    return this.#actions.startNewTurn(conversationId, text)
+  startNewTurn(
+    conversationId: string,
+    text: string,
+    onActionId?: (actionId: ActionId) => void,
+  ) {
+    return this.#actions.startNewTurn(conversationId, text, onActionId)
   }
 
   async updateConversationModel(
@@ -969,6 +979,7 @@ export class HostRuntime {
     if (expectedEpoch !== undefined && snapshot.epoch !== expectedEpoch) {
       throw new Error('Host snapshot epoch does not match bootstrap epoch')
     }
+    clearArchivedConversationDrafts(snapshot.conversations)
     replaceHostProjection(this.#queryClient, projectSnapshot(snapshot))
     this.#actions.adoptHostEpoch(snapshot.epoch)
     this.#attentionActions.adoptHostEpoch(snapshot.epoch)

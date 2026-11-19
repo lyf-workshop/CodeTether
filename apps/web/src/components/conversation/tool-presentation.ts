@@ -47,7 +47,12 @@ export function createToolPresentation({
         : classifyCommand(executable, tokens)
       : classifyCanonicalTool(kind, inspectedCommand)
   const failure =
-    status === 'failed' ? summarizeToolFailure(outputSummary) : undefined
+    status === 'failed'
+      ? summarizeToolFailure(
+          outputSummary,
+          kind === 'shell' || kind === undefined,
+        )
+      : undefined
   const subtitle = failure ?? classification.subtitle
 
   return {
@@ -205,8 +210,18 @@ function readFileTarget(tokens: readonly CommandToken[]): string | undefined {
   return undefined
 }
 
-function summarizeToolFailure(output: string | undefined): string {
+function summarizeToolFailure(
+  output: string | undefined,
+  command: boolean,
+): string {
   const normalized = output?.replace(/\s+/gu, ' ').trim() ?? ''
+  if (
+    command &&
+    normalized ===
+      'Failed to create unified exec process: registered Core process has no package identity'
+  ) {
+    return 'Windows 沙箱无法启动命令'
+  }
   if (normalized.length === 0) return '命令执行失败'
   if (
     /cannot find (?:the )?path|path (?:was )?not found|pathnotfound|no such file|\benoent\b/iu.test(

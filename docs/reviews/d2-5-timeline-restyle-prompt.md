@@ -2,7 +2,7 @@
 
 **Where it runs.** On Windows. Real Codex and Claude Code runs on this computer are needed for the before-and-after screenshots.
 
-**Branch and worktree.** Start from the current `origin/main` after task 5 (D2 model-control integration) has been merged (fetch first). Create branch `feat/d2-5-timeline` in worktree `D:/Projects/Software/agenthub-work/feat-d2-5-timeline`.
+**Branch and worktree.** Start from the current `origin/main` after `feat/b3a-send-speed` and `fix/w0-11-windows-sandbox` have merged (fetch first). Task 5 is already in `main`. B3a changed `conversation-timeline.tsx` and the W0-11 fix changed `tool-presentation.ts`, so start from both. W0d runs at the same time and changes `conversation-gate-presentation.ts` and the devices page; if it merges first, merge `main` into your branch. Create branch `feat/d2-5-timeline` in worktree `D:/Projects/Software/agenthub-work/feat-d2-5-timeline`.
 
 **Why this task exists.** The conversation is the center of the product, but today it does not say what the agent did. Command rows show the last line of output instead of the command, diffs lose their indentation, and every Turn repeats its header three times. 10 §3.4 already designs the fix; the desktop UI review confirmed the problems on the running app.
 
@@ -122,7 +122,7 @@ Line numbers refer to `4801ef1`; task 5 will have moved some of them.
     - In J13 (`j13-tool-output-complete.png`), two rows both read "执行命令" and "命令执行失败". One command never started because the Windows sandbox failed; the other was a test that ran and failed with TAP output.
     - Only the "工具输出" panel showed the PowerShell-wrapped command and the latest output. The Turn still read "已完成".
     - Acceptance shows both rows on one screen. Each shows its unwrapped command, its own status and bounded output. An exit code comes only from a trusted field.
-    - The W0-11 task (`w0-11-windows-sandbox-prompt.md`) makes the sandbox case distinguishable in the data. If it has merged, render that label.
+    - The sandbox failure in J13 came from how the audit started the app, and the W0-11 fix removes it (`w0-11-windows-sandbox.md`). Its label "Windows 沙箱无法启动命令" stays. For acceptance, use a real failing test next to a command that fails for another reason, such as a missing file.
   - **Goal 3 (W0-14, High).** A real three-file diff (`j5-changes-normal.png`, `j5-changes-1100.png`) uses the proportional font, and at 1100 px long test lines run out of view. Dark mode was not re-checked; check both themes.
   - **Goal 4 (W0-15).** In J13, the preview, the command group and the summary each show the avatar, "Codex", the time and "已完成". While TA ran (`j3-live-normal.png`), an earlier message read "已完成" next to a work record reading "运行中".
   - **Goal 6 (W0-16).** The inspector opens on "文件". Both tabs list the same three files, and the panel repeats the tab's title. "变更" shows a red "-0" when nothing was deleted (`j5-files-normal.png`, `j5-changes-normal.png`). Accept with a real change that deletes no lines.

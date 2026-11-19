@@ -1203,6 +1203,71 @@ Current and last-known lifecycle truth remain distinct. A remote transport outag
 
 New and adopted Conversations acquire one private immutable installation binding. Pre-8B Conversations remain readable and bind conservatively only when an exact current selected installation is established at a legitimate execution boundary. Discovery, validation, native resume, and new execution then use that same installation identity and revision; Node rejects a stale expected revision before Provider work. An active Turn keeps its already-owned process even if the on-disk executable changes, and no lifecycle refresh can migrate it, choose another installation, defer a Prompt, create another `actionId`, or replay uncertain work. See [`PHASE8B-PROVIDER-LIFECYCLE.md`](PHASE8B-PROVIDER-LIFECYCLE.md) for the complete state model, probe/cache rules, backend semantics, privacy, and later-phase boundaries.
 
+**Readiness cache (B3a, accepted 2026-11-18; `docs/reviews/b3a-send-speed.md`).** A local start no longer repeats the full lifecycle check.
+
+- The Host keeps the result of the last full check that passed, per Provider and per Host process (`apps/host/src/api/local-provider-readiness.ts`). It is keyed by the execution artifact's resolved path, size and modification time.
+- Creating a Conversation and starting a Turn reuse that result after a cheap metadata read.
+- The full check, with its before-and-after fingerprint, runs when:
+  - the key changes, or the file cannot be read
+  - the previous start on that Provider failed
+  - the user asks for a re-check
+  - the Host has no result yet
+- A file replaced with the same size and modification time goes undetected (Owner decision, 03 B3). The cache is not kept across Host restarts.
+- While another Turn runs on the same Provider, a start that misses the cache is refused with `409`. It never replaces the runtime that owns that Turn.
+
+**An empty Codex Conversation after a restart (W0-18, B3a).**
+
+- Codex writes a thread only at its first Turn. If the Host restarts before then, `thread/resume` reports that no rollout exists.
+- The Host then starts a new thread and records the new binding before it sends the Prompt. It does so only for a local Conversation that was created in CodeTether, was never written by Codex, and has exactly one Turn, still starting.
+- A Conversation with any earlier Turn keeps its native session, or fails as before.
+
+**The App Server's environment.** Before it starts the App Server, CodeTether removes the parent process's Codex control variables. Since W0-11 (`docs/reviews/w0-11-windows-sandbox.md`), that includes `CODEX_WINDOWS_REGISTERED_CORE`. Otherwise, a CodeTether started from inside the OpenAI desktop app's environment would make a stand-alone Codex select that app's packaged runtime, and every sandboxed command would fail to start.
+
+## Model and reasoning control
+
+D2 was merged on 2026-11-18 (`docs/reviews/d2-model-control.md`).
+
+**Changing the model.** `PATCH /api/v1/conversations/:conversationId/model` changes the model or reasoning setting for the next Turn of the same Conversation.
+
+- The Provider, the Machine, the native session and earlier Turns never change.
+- It requires an available owning Machine, a Provider that advertises model selection, and a model or effort from that Provider's catalog.
+- A Conversation with an active Turn refuses it with `409`. That includes a Turn admitted while the catalog was being read.
+- An archived Conversation refuses both the change and the catalog refresh.
+- A successful change returns the updated Conversation summary. It publishes `conversation.updated` only once the change is durable.
+
+**Storage.** Migration 026 (`conversation_model_switching`) adds nullable `current_model` and `current_reasoning` columns to `conversations`. Existing local rows inherit their previous selection.
+
+- A switch updates these settings and the next-Turn configuration in one statement.
+- It advances `updated_at` without changing `last_activity_at`.
+- Turn rows and the native session stay untouched.
+- `ProviderDescriptor.availableModels` projects the same bounded catalog as `models`.
+
+**Reading the catalog.** `POST /api/v1/conversations/:conversationId/models/refresh` reads it.
+
+- **Codex:** the Host asks the App Server's `model/list`, which starts the App Server if it is not running. Each later `turn/start` carries the selected model and a compatible effort.
+- **Claude Code:** the adapter exposes the fixed aliases `opus`, `sonnet` and `haiku`. It passes the selected model and effort as structured CLI arguments; no Prompt enters argv. The launch profile otherwise stays restricted to Read, Glob and Grep under `dontAsk`.
+
+**When the desktop reads it.**
+
+- Once, when a local Conversation opens and first accepts input.
+- Again whenever the user opens the model picker.
+- A remote Conversation reads it only from the picker.
+
+**An unusable model.**
+
+- If a catalog was read successfully and does not contain the stored model, the Composer says "不在此账号的可用模型中". An unreadable catalog shows no warning.
+- A Turn that the App Server rejects with `model_not_found` fails as `provider_model_unavailable`. That failure leaves execution health intact, and its failure card opens the model picker.
+- Remote computers report the same failure as `provider_error`, because the frozen machine-transport reason list is unchanged.
+
+**Remote computers.** The remote part was authorized on 2026-11-09 and arrived with the merge. It is not extended while remote work is postponed (AD-13).
+
+- An authenticated Node answers an explicit, bounded `provider.models.list` request for the exact Machine, Provider installation and revision. The Host keeps that catalog only in memory.
+- A remote change checks a fresh Node catalog and re-checks Turn ownership after that read. Node validates the selection again before execution.
+- An older Node that does not advertise model selection cannot enter this path.
+- Supervisor `conversation.models.refresh` and `conversation.updateModel` require a `supervisor_control` grant and exact Machine, Project and Conversation scope. They are idempotent by `actionId`.
+- `machine.get` caps each Provider's model list at 50 entries. If the response is still too large, it falls back to a compact form within the frame budget.
+- None of this admits generic RPC, arbitrary commands, Provider switching, or rewriting earlier Turns.
+
 ## Zero-config onboarding and Doctor
 
 The exact local Codex execution runtime is deferred until an admitted native

@@ -5,7 +5,7 @@
 - Never stop, replace or reconfigure the installed app or its Host on `127.0.0.1:4317`.
 - Run any development build with its own Host port, `CODETETHER_DATA_DIR`, database and WebView2 data folder.
 
-**Branch and worktree.** Start from the current `origin/main` after `feat/d2-model-control` has merged (fetch first). Create branch `fix/w0-small-fixes` in worktree `D:/Projects/Software/agenthub-work/fix-w0-small-fixes`. If B3a merges while you work, merge `main` into your branch; both change `conversation-gate-presentation.ts`.
+**Branch and worktree.** Start from the current `origin/main` after `feat/b3a-send-speed` and `fix/w0-11-windows-sandbox` have merged (fetch first). Task 5 is already in `main`. Create branch `fix/w0-small-fixes` in worktree `D:/Projects/Software/agenthub-work/fix-w0-small-fixes`. D2.5 runs at the same time; if it merges first, merge `main` into your branch.
 
 **Why this task exists.** W0 and W0b found four small problems that each confuse the user at a specific moment:
 

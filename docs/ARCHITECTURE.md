@@ -785,6 +785,23 @@ Phase 4D keeps durable and live normalized data intact and derives only render-t
 
 Long titles and paths are constrained with truncation and full-text affordances; unsupported Composer and primary-navigation controls are hidden rather than simulated. Product copy uses CodeTether/user language, while Host, Runtime, projection, and provider terms remain valid internal architecture vocabulary.
 
+**Timeline restyle (D2.5, accepted 2026-11-19; `docs/reviews/d2-5-timeline-restyle.md`; merges after the alpha.4 tag).**
+
+- **Highlighting.** Fenced code is highlighted with `refractor` 5.0.0 (Prism grammars). It is pinned, and each of the ten languages loads lazily.
+  - Its syntax tree is converted to plain text tokens with a fixed set of semantic tones, and React renders them.
+  - No HTML string from the highlighter reaches the DOM, so the Markdown boundary above is unchanged.
+- **Tool output.** The browser projection keeps up to 4 KiB (a UTF-8 tail) of output per Tool for the expanded row.
+  - It derives the duration from the Tool's observed start and completion events.
+  - Exit codes and search result counts are not shown, because the normalized events carry no trusted field for them.
+  - After a reload, only the Tool in the Host's bounded terminal snapshot gets its tail back. The other rows show the Host's bounded output summary.
+- **Headers.** A Turn's one header takes its status and time from the Turn.
+- **Grouping.** The grouping rule is unchanged. A group of one kind is titled by its kind.
+- **Colors.** The timeline colors of 10 §3.4 are named tokens in `packages/ui`, defined for both themes. Components use no hex values.
+- **Inspector.**
+  - "变更" appears only for Providers that report diffs.
+  - "已查看文件" appears only when read or search events carry paths.
+  - The panel opens on the first tab with content.
+
 ## Phase 4E.1 Durable Conversation Organization
 
 Migration 005 extends the existing `conversations` table with `title_source`, `pinned_at`, and `archived_at`, replaces the old Project/activity index with partial active/archived ordering indexes, and adds a lightweight Project/title index for later bounded title lookup. Existing titles backfill as `generated`; no historical Turn is scanned and no provider identity, snapshot, Attention row, activity timestamp, or Project relationship is rewritten. `titleSource` is either `generated` or `manual`; nullable timestamps are the sole Pin and Archive truth, and Archive atomically clears Pin. Migration 005 itself introduced no FTS or Search service; the later Phase 4F.1 read model is described below.

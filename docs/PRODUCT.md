@@ -137,6 +137,24 @@ Conversations organize Agent sessions, history, supported model/reasoning/permis
 
 What an Approval shows before the decision is unchanged; the W17 design note decides that.
 
+**The conversation timeline (D2.5, accepted 2026-11-19; ships in the release after alpha.4).**
+
+- Each Turn shows the AI tool's avatar, name, status and time once.
+- Each tool row names its kind and what it acted on:
+  - a command, without the PowerShell wrapper; a compound command shows its first command and "等 N 条"
+  - a read, with its path
+  - an edit, with its path and changed-line count
+  - a search, with its query
+- The right side of a row shows status and duration, never a line of output.
+- Every row expands, by mouse or keyboard, to the full command and its recent output. A failed row starts expanded.
+- Diffs use a monospace font, tint added and removed lines, and scroll sideways.
+- Fenced code shows its language, line numbers and Copy, and is highlighted. A block over 30 lines shows its first 10 and last 5 lines until expanded.
+- The location appears once, in the breadcrumb. The title area keeps the Provider, model and reasoning.
+- The inspector:
+  - Codex on this computer gets one "变更" tab.
+  - Claude Code gets "已查看文件" only when its reads and searches name paths.
+  - The inspector opens on the first tab with content.
+
 Within a Project, an empty Search field browses the ordinary active or archived Conversation index. A nonempty query searches all durable Conversation titles and canonical User inputs in that scope through the Host rather than filtering only the summaries already loaded in the browser. The query and active/archived view are URL state so refresh, Back/Forward, and deep links preserve the discovery context. Results explain whether the title or something the user previously asked matched and may show the durable public Agent; they do not expose a ranking score, full Prompt, private Provider session identity, or database detail.
 
 Search remains bounded and explicit: it requests 25 results at a time and loads another opaque-cursor page only when the user asks. An input match may navigate using the existing public Turn focus hint. If that Turn is older than the retained Conversation detail, CodeTether opens the real Conversation and explains that the matching history segment is not loaded; Search does not hydrate an owning Provider or invent older-Turn pagination.
@@ -387,6 +405,13 @@ The Previous conversations step is optional and treats no results, one Provider 
 **Phase 8C — Zero-Config Onboarding & Doctor** is accepted and frozen at `67c71f2e3ad390004cc60fe30925224a02aba485`. It composes the accepted Machine, Provider lifecycle, Project Location, native-session discovery/adoption, secure pairing, and Direct/Relay facts into a resumable setup flow and a permanent diagnostic surface. Ordinary users see computers, AI coding tools, projects, previous conversations, readiness, and targeted actions; internal installation, transport, trust, and diagnostic details remain behind progressive disclosure. Onboarding records flow progress only and never replaces product authority. Doctor reads component truth, distinguishes runtime compatibility from AI-service readiness, presents current versus last-known observations, and performs only explicit bounded checks or repairs. Local-only use requires no Relay setup, remote setup remains optional, and neither surface installs or switches Providers/backends, auto-imports sessions, weakens Machine trust, starts inference by default, or retries/replays work. See [`PHASE8C-ZERO-CONFIG-ONBOARDING-DOCTOR.md`](PHASE8C-ZERO-CONFIG-ONBOARDING-DOCTOR.md).
 
 **Signing in from the first launch (W0d, accepted 2026-11-19).** Every setup step offers "已有账号？登录", which opens the existing account page. While setup is unfinished, that page offers "返回设置向导". Setup still needs no account, and the sign-in flow is unchanged.
+
+**Offline computers (W0d round 2, accepted 2026-11-19).** The devices page lists this computer first, and says it works without an account.
+
+- Remote computers that are offline go into one group, "其他电脑 · N 台离线", on the devices page and in the sidebar.
+  - The group starts closed at each launch.
+  - Online computers stay outside it.
+- The phones-and-tablets section says the account is for pairing phones and tablets. Computers pair without one until E1 (04 E10).
 
 The Phase 8D native historical transcript projection fixes the blank timeline of an explicitly adopted native Conversation without changing Phase 8A resume authority. Opening an adopted Conversation requests bounded, read-only, Provider-normalized historical pages and renders them before durable CodeTether Turns with a clear continuation boundary. Historical entries are not Turns and have no `actionId`, execution provenance, retry, Approval, Attention, notification, or replay semantics. Empty, partial, unsupported, unavailable, malformed, and remote-offline history remain distinct; transcript capability is independent from execution and native resume.
 

@@ -446,6 +446,8 @@ They are not shown greyed out once a real control exists. Revised 2026-11-14 (AD
 
 ### 3.4 Timeline Restyling (I5)
 
+**Status:** implemented by D2.5, accepted 2026-11-19 (`docs/reviews/d2-5-timeline-restyle.md`). It merges after the alpha.4 tag. The report maps each hex value below to a named token.
+
 #### Overall Layout
 
 - Increase maximum width from 740px to 800px.

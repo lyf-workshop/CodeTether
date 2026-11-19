@@ -4,7 +4,12 @@
 
 **Branch and worktree.**
 
-- Start from `origin/main` after `fix/w0-small-fixes` (W0d) has merged. Fetch first, with tags.
+- Fetch first, with tags.
+- **Merge W0d first,** if `origin/main` does not yet contain `fix/w0-small-fixes` (accepted 2026-11-19 at `27c759a`; `w0-small-fixes.md`):
+  - In a clean worktree on `main`, merge `origin/fix/w0-small-fixes` with a merge commit. The branch already contains `main`, so no conflict is expected; stop on any conflict.
+  - On the merge commit, run `pnpm typecheck`, `pnpm lint`, `pnpm build`, `pnpm test`, and `cargo test --locked` in `apps/desktop/src-tauri`.
+  - Push `main`. This push needs the Owner's approval; the starting message may give it.
+- Then start from that `origin/main`.
 - Create branch `release/v0.1.0-alpha.4` in worktree `E:/Projects/Software/agenthub/release-v0.1.0-alpha.4`. D: ran out of space during the alpha.3 gates.
 
 **Why this task exists.**
@@ -249,7 +254,7 @@ Write to `D:/Projects/Software/agenthub-archive/release-v0.1.0-alpha.4-report.md
 - **Start check:** the five merges, the installed build, SSH, and the free space.
 - **Release branch:** its commits, the version change, and the full CHANGELOG entry.
 - **Gates:** the result of each check, with any failures verbatim.
-- **`main` and the tag:** the remote commits.
+- **`main` and the tag:** the W0d merge commit, and the remote commits.
 - **Signing:** whether the password was stored in this run or reused, and the key path's folder. Never the password or the key.
 - **Signed build:** the build ID, the match counts, each file with its size and SHA-256, the content of `latest.json`, and the key-ID comparison.
 - **Backup:** its location, the integrity check, and the checksums.

@@ -30,13 +30,13 @@ const diffLineDefinitions = {
   addition: {
     prefix: '+',
     ariaLabel: '新增',
-    rowClassName: 'bg-success-muted/15 text-text-secondary',
+    rowClassName: 'bg-success-muted text-success-text',
     prefixClassName: 'text-success-text',
   },
   deletion: {
     prefix: '-',
     ariaLabel: '删除',
-    rowClassName: 'bg-danger-muted/15 text-text-secondary',
+    rowClassName: 'bg-danger-muted text-danger-text',
     prefixClassName: 'text-danger-text',
   },
 } satisfies Record<
@@ -67,7 +67,7 @@ export function DiffCard({
       {...props}
     >
       <header className="flex min-h-10 min-w-0 items-center justify-between gap-3 border-b border-border/70 px-3">
-        <code className="min-w-0 truncate font-sans text-xs font-medium text-text-secondary">
+        <code className="min-w-0 truncate font-mono text-xs font-medium text-text-secondary">
           {fileName}
         </code>
         <Badge
@@ -80,9 +80,9 @@ export function DiffCard({
       <pre
         tabIndex={0}
         aria-label={`${fileName} 的变更`}
-        className="w-full min-w-0 overflow-x-auto py-3 font-sans text-xs font-regular focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="w-full min-w-0 overflow-x-auto whitespace-pre py-3 font-mono text-xs font-regular focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
-        <code className="block min-w-max font-sans">
+        <code className="block min-w-max font-mono">
           {lines.map((line, index) => {
             const definition = diffLineDefinitions[line.kind]
 
@@ -117,7 +117,9 @@ export function DiffCard({
                 >
                   {definition.prefix}
                 </span>
-                <span>{line.content || '\u00a0'}</span>
+                <span className="whitespace-pre [overflow-wrap:normal]">
+                  {line.content || '\u00a0'}
+                </span>
               </span>
             )
           })}

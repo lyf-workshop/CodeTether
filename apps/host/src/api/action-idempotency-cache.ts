@@ -58,6 +58,11 @@ export class ActionIdempotencyCache {
     return this.#entries.size
   }
 
+  isPending(actionId: ActionId, operation: string): boolean {
+    const entry = this.#entries.get(actionId)
+    return entry?.operation === operation && !entry.settled
+  }
+
   execute<T>(
     actionId: ActionId,
     operation: string,

@@ -48,6 +48,7 @@ import {
   type LocalProviderLifecycleCoordinatorOptions,
   type LocalProviderLifecycleState,
 } from './local-provider-lifecycle-coordinator.js'
+import type { LocalProviderReadiness } from './local-provider-readiness.js'
 import { HostStartupTimeline } from './startup-timeline.js'
 import { safeErrorNameForLog } from './safe-log.js'
 import {
@@ -217,6 +218,7 @@ export async function startLocalCodexHost(
         ? undefined
         : async (provider) =>
             await lifecycleCoordinator.prepareRefresh(provider),
+      lifecycleCoordinator?.readiness,
     )
     if (lifecycleCoordinator === undefined) return runningHost
     timeline.mark('PROVIDER_DISCOVERY_START')
@@ -417,6 +419,7 @@ export async function startLocalCodexHostWithRuntime(
   refreshLocalProviderLifecycle?: (
     provider: AgentHostRuntime['provider'],
   ) => Promise<LocalProviderLifecycleState>,
+  localProviderReadiness?: LocalProviderReadiness,
 ): Promise<RunningLocalCodexHost> {
   const runtimes = Array.isArray(runtime) ? runtime : [runtime]
   let service: HostService | undefined
@@ -474,6 +477,9 @@ export async function startLocalCodexHostWithRuntime(
       ...(refreshLocalProviderLifecycle === undefined
         ? {}
         : { refreshLocalProviderLifecycle }),
+      ...(localProviderReadiness === undefined
+        ? {}
+        : { localProviderReadiness }),
     })
     await service.registerInitialProjectRoots(
       options.allowedWorkspaceRoots ?? [],

@@ -22,8 +22,10 @@ import { ClaudeJsonLineDecoder, parseClaudeJsonLine } from './jsonl.js'
 import { ClaudeStreamNormalizer } from './normalizer.js'
 import {
   CLAUDE_CODE_EFFORT_LEVELS,
+  CLAUDE_CODE_MODELS,
   type ClaudeCodeEffort,
   type ClaudeCodeLauncher,
+  type ClaudeCodeModel,
   type ClaudeCodeTurnResult,
 } from './types.js'
 
@@ -59,6 +61,7 @@ export interface ClaudeCodeTurnProcessOptions {
   readonly prompt: string
   readonly resume: boolean
   readonly effort?: ClaudeCodeEffort
+  readonly model?: ClaudeCodeModel
   readonly environment?: NodeJS.ProcessEnv
   readonly testedVersion?: string
   /** Node-only opt-in. Local Claude keeps direct-child ownership. */
@@ -117,6 +120,7 @@ const CLAUDE_ARGUMENT = Object.freeze({
   allowedTools: '--allowedTools',
   permissionMode: '--permission-mode',
   effort: '--effort',
+  model: '--model',
   noChrome: '--no-chrome',
   disableSlashCommands: '--disable-slash-commands',
 })
@@ -152,9 +156,11 @@ export function buildClaudeCodeArguments(options: {
   readonly sessionId: string
   readonly resume: boolean
   readonly effort?: ClaudeCodeEffort
+  readonly model?: ClaudeCodeModel
 }): string[] {
   validateSessionId(options.sessionId)
   validateEffort(options.effort)
+  validateModel(options.model)
   return [
     CLAUDE_ARGUMENT.print,
     CLAUDE_ARGUMENT.inputFormat,
@@ -176,6 +182,9 @@ export function buildClaudeCodeArguments(options: {
     ...(options.effort === undefined
       ? []
       : [CLAUDE_ARGUMENT.effort, options.effort]),
+    ...(options.model === undefined
+      ? []
+      : [CLAUDE_ARGUMENT.model, options.model]),
     CLAUDE_ARGUMENT.noChrome,
     CLAUDE_ARGUMENT.disableSlashCommands,
   ]
@@ -530,6 +539,7 @@ export async function closeOwnedClaudeProcess(
 function validateTurnOptions(options: ClaudeCodeTurnProcessOptions): void {
   validateSessionId(options.sessionId)
   validateEffort(options.effort)
+  validateModel(options.model)
   if (!isAbsolute(options.cwd)) throw new TypeError('cwd must be absolute')
   if (options.turnId.length === 0 || options.turnId.length > 128) {
     throw new RangeError('turnId must contain between 1 and 128 characters')
@@ -550,6 +560,15 @@ function validateEffort(effort: string | undefined): void {
     !(CLAUDE_CODE_EFFORT_LEVELS as readonly string[]).includes(effort)
   ) {
     throw new TypeError('effort must be a supported Claude Code level')
+  }
+}
+
+function validateModel(model: string | undefined): void {
+  if (
+    model !== undefined &&
+    !CLAUDE_CODE_MODELS.some(({ id }) => id === model)
+  ) {
+    throw new TypeError('model must be a supported Claude Code alias')
   }
 }
 

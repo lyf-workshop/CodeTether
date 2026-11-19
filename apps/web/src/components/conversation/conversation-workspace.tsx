@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   ConversationIdSchema,
@@ -10,7 +10,10 @@ import { Button, agentDefinitions } from '@codetether/ui'
 import { Composer } from './composer'
 import { ConversationHeader } from './conversation-header'
 import { ConversationTimeline } from './conversation-timeline'
-import type { ConversationControls } from './conversation-controls'
+import type {
+  ComposerModelSettings,
+  ConversationControls,
+} from './conversation-controls'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationExecutionBoundaryViewModel,
@@ -32,6 +35,7 @@ interface ConversationWorkspaceProps {
   displayContext?: ConversationDisplayContext
   machineId?: MachineId
   controls: ConversationControls
+  modelSettings?: ComposerModelSettings
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
@@ -47,11 +51,13 @@ export function ConversationWorkspace({
   displayContext,
   machineId,
   controls,
+  modelSettings,
   targetChangeId,
   targetChangeRequestKey,
   targetTurnId,
   projectId,
 }: ConversationWorkspaceProps) {
+  const [modelControlRequest, setModelControlRequest] = useState(0)
   const wasArchivedRef = useRef(viewModel.archivedAt !== undefined)
   const conversationId = ConversationIdSchema.safeParse(viewModel.id)
   const organizationConversation =
@@ -152,6 +158,11 @@ export function ConversationWorkspace({
         machineId={machineId}
         projectId={projectId}
         projectRootPath={viewModel.projectRootPath}
+        onOpenModelControl={
+          controls.modelSwitch === undefined
+            ? undefined
+            : () => setModelControlRequest((value) => value + 1)
+        }
         retryController={controls?.failedTurnRetry}
         targetChangeId={targetChangeId}
         targetChangeRequestKey={targetChangeRequestKey}
@@ -173,6 +184,9 @@ export function ConversationWorkspace({
           conversationId={viewModel.id}
           capabilities={viewModel.capabilities}
           controller={controls.composer}
+          modelControlRequest={modelControlRequest}
+          modelSettings={modelSettings}
+          modelSwitchController={controls.modelSwitch}
           interruptController={controls.interrupt}
           context={displayContext}
           providerName={agentDefinitions[viewModel.agent].name}

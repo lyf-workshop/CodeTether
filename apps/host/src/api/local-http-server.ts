@@ -81,6 +81,10 @@ import {
   ReadRemoteConversationLiveQuerySchema,
   RenameConversationRequestSchema,
   RenameConversationResponseSchema,
+  RefreshConversationModelsRequestSchema,
+  RefreshConversationModelsResponseSchema,
+  UpdateConversationModelRequestSchema,
+  UpdateConversationModelResponseSchema,
   StartTurnRequestSchema,
   StartTurnResponseSchema,
   TurnIdSchema,
@@ -819,6 +823,64 @@ export class LocalHttpServer {
         url.pathname,
         /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/turns$/u,
       )
+      const supervisorConversationModelRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/model$/u,
+      )
+      const supervisorConversationModelsRefreshRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/remote-supervisor\/sessions\/([^/]+)\/machines\/([^/]+)\/projects\/([^/]+)\/conversations\/([^/]+)\/models\/refresh$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        supervisorConversationModelsRefreshRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        await this.#http.readValidatedBody(
+          request,
+          RefreshConversationModelsRequestSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.refreshRemoteConversationModels(
+            supervisorConversationModelsRefreshRoute[0]!,
+            {
+              machineId: supervisorConversationModelsRefreshRoute[1]!,
+              projectId: supervisorConversationModelsRefreshRoute[2]!,
+              conversationId: supervisorConversationModelsRefreshRoute[3]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+      if (
+        request.method === 'PATCH' &&
+        supervisorConversationModelRoute !== undefined &&
+        this.#supervisorTransport !== undefined
+      ) {
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateConversationModelRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          await this.#supervisorTransport.updateRemoteConversationModel(
+            supervisorConversationModelRoute[0]!,
+            {
+              ...body,
+              machineId: supervisorConversationModelRoute[1]!,
+              projectId: supervisorConversationModelRoute[2]!,
+              conversationId: supervisorConversationModelRoute[3]!,
+            },
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
       if (
         request.method === 'POST' &&
         supervisorConversationTurnRoute !== undefined &&
@@ -1821,6 +1883,60 @@ export class LocalHttpServer {
           )
           return
         }
+      }
+
+      const conversationModelRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/model$/u,
+      )
+      if (request.method === 'PATCH' && conversationModelRoute !== undefined) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationModelRoute[0],
+          'conversationId',
+        )
+        const body = await this.#http.readValidatedBody(
+          request,
+          UpdateConversationModelRequestSchema,
+        )
+        context.actionId = body.actionId
+        this.#http.writeJson(
+          response,
+          200,
+          UpdateConversationModelResponseSchema.parse(
+            await this.#service.updateConversationModel(conversationId, body),
+          ),
+          context.allowedOrigin,
+        )
+        return
+      }
+
+      const conversationModelsRefreshRoute = this.#http.matchPath(
+        url.pathname,
+        /^\/api\/v1\/conversations\/([^/]+)\/models\/refresh$/u,
+      )
+      if (
+        request.method === 'POST' &&
+        conversationModelsRefreshRoute !== undefined
+      ) {
+        const conversationId = this.#http.parseRouteId(
+          ConversationIdSchema,
+          conversationModelsRefreshRoute[0],
+          'conversationId',
+        )
+        await this.#http.readValidatedBody(
+          request,
+          RefreshConversationModelsRequestSchema,
+        )
+        this.#http.writeJson(
+          response,
+          200,
+          RefreshConversationModelsResponseSchema.parse(
+            await this.#service.refreshConversationModels(conversationId),
+          ),
+          context.allowedOrigin,
+        )
+        return
       }
 
       const conversationPin = this.#http.matchPath(

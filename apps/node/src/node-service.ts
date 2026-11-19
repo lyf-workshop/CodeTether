@@ -8,7 +8,11 @@ import {
   type CanonicalFailure,
   type NativeProviderSessionCandidate,
 } from '@codetether/agent-core'
-import { ClaudeCodeOwnedProcessCleanupError } from '@codetether/adapter-claude'
+import {
+  CLAUDE_CODE_MODELS,
+  CLAUDE_CODE_EFFORT_LEVELS,
+  ClaudeCodeOwnedProcessCleanupError,
+} from '@codetether/adapter-claude'
 import { CodexOwnedProcessCleanupError } from '@codetether/adapter-codex'
 import {
   ClaudeSessionHeartbeatMessageSchema,
@@ -33,6 +37,8 @@ import {
   ProviderSessionValidateMessageSchema,
   ProviderSessionTranscriptReadMessageSchema,
   ProviderSessionsDiscoverMessageSchema,
+  ProviderModelsListMessageSchema,
+  ProviderModelsListedMessageSchema,
   ProvidersDescribeMessageSchema,
   TrustRevokeMessageSchema,
   acceptMachineTlsOverStream,
@@ -59,6 +65,7 @@ import {
   type PairingTranscript,
   type PublicKeyFingerprint,
   type RemoteMachineMetadata,
+  type RemoteProviderModel,
 } from '@codetether/machine-transport'
 import { z } from 'zod'
 
@@ -88,6 +95,7 @@ const AuthenticatedRequestSchema = z.discriminatedUnion('type', [
   MachinePingMessageSchema,
   ProjectLocationValidateMessageSchema,
   ProvidersDescribeMessageSchema,
+  ProviderModelsListMessageSchema,
   ProviderSessionsDiscoverMessageSchema,
   ProviderSessionValidateMessageSchema,
   ProviderSessionTranscriptReadMessageSchema,
@@ -687,6 +695,14 @@ export class CodeTetherNodeService extends EventEmitter {
     this.#trackAuthenticatedConnection(trusted.controllerId, socket)
     const providerSessionDiscoveryAbort = new AbortController()
     const providerLifecycleAbort = new AbortController()
+    let modelCatalog:
+      | {
+          readonly provider: 'codex' | 'claude-code'
+          readonly installationId: string
+          readonly revision: string
+          readonly models: readonly RemoteProviderModel[]
+        }
+      | undefined
     const abortProviderOperations = (): void => {
       providerSessionDiscoveryAbort.abort()
       providerLifecycleAbort.abort()
@@ -822,6 +838,92 @@ export class CodeTetherNodeService extends EventEmitter {
             machineId: this.state.machine.machineId,
             nodeId: this.state.machine.nodeId,
             ...discovery,
+          })
+          continue
+        }
+        if (request.type === 'provider.models.list') {
+          this.#assertProviderSessionDiscoveryIdentity(request)
+          const cursor = request.cursor ?? 0
+          if (cursor === 0) {
+            const models =
+              request.provider === 'codex'
+                ? await this.#remoteCodexRunners.listAvailableModels(
+                    request.providerInstallationId,
+                    request.expectedInstallationRevision,
+                    providerLifecycleAbort.signal,
+                  )
+                : await this.#listClaudeModels(
+                    request,
+                    providerLifecycleAbort.signal,
+                  )
+            modelCatalog = {
+              provider: request.provider,
+              installationId: request.providerInstallationId,
+              revision: request.expectedInstallationRevision,
+              models,
+            }
+          } else if (
+            modelCatalog?.provider !== request.provider ||
+            modelCatalog.installationId !== request.providerInstallationId ||
+            modelCatalog.revision !== request.expectedInstallationRevision
+          ) {
+            throw new MachineTransportError(
+              'malformed_message',
+              'Provider model catalog cursor is not bound to this installation',
+              { peerAuthenticated: true },
+            )
+          }
+          const models = modelCatalog.models
+          if (cursor >= models.length && cursor !== 0) {
+            throw new MachineTransportError(
+              'malformed_message',
+              'Provider model catalog cursor is invalid',
+              { peerAuthenticated: true },
+            )
+          }
+          const page: RemoteProviderModel[] = []
+          for (
+            let index = cursor;
+            index < models.length && page.length < 8;
+            index += 1
+          ) {
+            const candidate = [...page, models[index]!]
+            const probe = {
+              type: 'provider.models.listed' as const,
+              protocolVersion: machineProtocolVersion,
+              requestId: request.requestId,
+              machineId: this.state.machine.machineId,
+              nodeId: this.state.machine.nodeId,
+              provider: request.provider,
+              providerInstallationId: request.providerInstallationId,
+              installationRevision: request.expectedInstallationRevision,
+              models: candidate,
+              ...(index + 1 < models.length ? { nextCursor: index + 1 } : {}),
+            }
+            if (!ProviderModelsListedMessageSchema.safeParse(probe).success) {
+              if (page.length === 0) {
+                throw new MachineTransportError(
+                  'malformed_message',
+                  'Provider model catalog entry exceeds its frame budget',
+                  { peerAuthenticated: true },
+                )
+              }
+              break
+            }
+            page.push(models[index]!)
+          }
+          const nextCursor = cursor + page.length
+          await connection.send({
+            type: 'provider.models.listed',
+            protocolVersion: machineProtocolVersion,
+            requestId: request.requestId,
+            machineId: this.state.machine.machineId,
+            nodeId: this.state.machine.nodeId,
+            provider: request.provider,
+            providerInstallationId: request.providerInstallationId,
+            installationRevision: request.expectedInstallationRevision,
+            models: page,
+            ...(nextCursor < models.length ? { nextCursor } : {}),
           })
           continue
         }
@@ -1041,6 +1143,28 @@ export class CodeTetherNodeService extends EventEmitter {
         'Provider session discovery did not match durable Node identity',
       )
     }
+  }
+
+  async #listClaudeModels(
+    request: z.infer<typeof ProviderModelsListMessageSchema>,
+    signal: AbortSignal,
+  ): Promise<readonly RemoteProviderModel[]> {
+    const installation =
+      await this.#providerLifecycle.resolveExecutableInstallation(
+        'claude-code',
+        request.providerInstallationId,
+        request.expectedInstallationRevision,
+        signal,
+      )
+    const reasoningOptions = installation.compatibility.capabilities
+      .reasoningControl.effective
+      ? [...CLAUDE_CODE_EFFORT_LEVELS]
+      : []
+    return CLAUDE_CODE_MODELS.map(({ id, name }) => ({
+      id,
+      name,
+      reasoningOptions,
+    }))
   }
 
   async #serveRemoteCodexSession(

@@ -63,6 +63,7 @@ export const HostErrorCodeSchema = z.enum([
   'not_found',
   'conflict',
   'unsupported',
+  'operation_not_allowed',
   'provider_error',
   'provider_not_installed',
   'provider_version_unsupported',

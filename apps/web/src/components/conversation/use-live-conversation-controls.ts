@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { ApprovalDecision } from '@codetether/protocol'
+import type { ApprovalDecision, ProviderDescriptor } from '@codetether/protocol'
 
 import type { ConversationReadModel } from '../../runtime/host/conversation-projection.js'
 import { canStartNewTurnAfterFailure } from '../../failures/failure-presentation.js'
@@ -20,11 +20,27 @@ import type { ConversationCapabilitiesViewModel } from './conversation-view-mode
 export function useLiveConversationControls(
   model: ConversationReadModel,
   capabilities: ConversationCapabilitiesViewModel,
+  machineKind: 'local' | 'remote' | undefined,
 ): ConversationControls {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const [submitPhase, setSubmitPhase] = useState<ComposerSubmitPhase>('idle')
   const [submitError, setSubmitError] = useState<string>()
+  const [modelSwitchPending, setModelSwitchPending] = useState(false)
+  const [modelSwitchError, setModelSwitchError] = useState<string>()
+  const modelSwitchGuard = useRef(false)
+  const [modelCatalog, setModelCatalog] = useState<{
+    readonly conversationId: string
+    readonly provider: ProviderDescriptor
+  }>()
+  const [modelCatalogLoading, setModelCatalogLoading] = useState<string>()
+  const modelCatalogGuard = useRef<
+    { readonly conversationId: string } | undefined
+  >(undefined)
+  const automaticModelCatalog = useRef({
+    conversationId: model.id,
+    started: false,
+  })
   const expectedTurnId = useRef<string | undefined>(undefined)
   const submitGuard = useRef(false)
   const retryGuard = useRef(false)
@@ -84,6 +100,7 @@ export function useLiveConversationControls(
     async (text: string): Promise<boolean> => {
       if (
         submitGuard.current ||
+        modelSwitchGuard.current ||
         retryGuard.current ||
         submitPhase !== 'idle' ||
         !capabilities.canCompose
@@ -126,6 +143,7 @@ export function useLiveConversationControls(
       )?.body
       if (
         submitGuard.current ||
+        modelSwitchGuard.current ||
         retryGuard.current ||
         submitPhase !== 'idle' ||
         !capabilities.canCompose ||
@@ -206,6 +224,85 @@ export function useLiveConversationControls(
     runtime,
   ])
 
+  const updateModel = useCallback(
+    async (selection: {
+      readonly model?: string
+      readonly reasoning?: string
+    }) => {
+      if (
+        modelSwitchGuard.current ||
+        submitGuard.current ||
+        retryGuard.current ||
+        submitPhase !== 'idle' ||
+        !capabilities.canCompose ||
+        (selection.model === undefined && selection.reasoning === undefined)
+      ) {
+        return
+      }
+      modelSwitchGuard.current = true
+      setModelSwitchPending(true)
+      setModelSwitchError(undefined)
+      try {
+        await runtime.updateConversationModel(model.id, selection)
+      } catch (error) {
+        setModelSwitchError(mutationErrorMessage(error, '更新模型设置'))
+      } finally {
+        modelSwitchGuard.current = false
+        setModelSwitchPending(false)
+      }
+    },
+    [capabilities.canCompose, model.id, runtime, submitPhase],
+  )
+
+  const refreshModels = useCallback(async () => {
+    if (
+      modelCatalogGuard.current?.conversationId === model.id ||
+      !capabilities.canCompose
+    )
+      return
+    const request = { conversationId: model.id }
+    modelCatalogGuard.current = request
+    setModelCatalogLoading(model.id)
+    setModelSwitchError(undefined)
+    try {
+      const response = await runtime.refreshConversationModels(model.id)
+      if (modelCatalogGuard.current !== request) return
+      if (response.provider.provider !== model.provider) {
+        setModelCatalog(undefined)
+        setModelSwitchError('模型列表与当前会话不匹配，请刷新后重试。')
+        return
+      }
+      setModelCatalog({ conversationId: model.id, provider: response.provider })
+    } catch (error) {
+      if (modelCatalogGuard.current !== request) return
+      setModelCatalog(undefined)
+      setModelSwitchError(mutationErrorMessage(error, '读取模型列表'))
+    } finally {
+      if (modelCatalogGuard.current === request) {
+        modelCatalogGuard.current = undefined
+        setModelCatalogLoading(undefined)
+      }
+    }
+  }, [capabilities.canCompose, model.id, model.provider, runtime])
+
+  useEffect(() => {
+    if (automaticModelCatalog.current.conversationId !== model.id) {
+      modelCatalogGuard.current = undefined
+      automaticModelCatalog.current = {
+        conversationId: model.id,
+        started: false,
+      }
+    }
+    if (
+      machineKind !== 'local' ||
+      !capabilities.canCompose ||
+      automaticModelCatalog.current.started
+    )
+      return
+    automaticModelCatalog.current.started = true
+    void refreshModels()
+  }, [capabilities.canCompose, machineKind, model.id, refreshModels])
+
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision): Promise<void> => {
       if (
@@ -261,6 +358,16 @@ export function useLiveConversationControls(
         ...(submitError === undefined ? {} : { error: submitError }),
         submit,
       },
+      modelSwitch: {
+        pending: modelSwitchPending,
+        loadingModels: modelCatalogLoading === model.id,
+        ...(modelCatalog?.conversationId === model.id
+          ? { catalog: modelCatalog.provider }
+          : {}),
+        ...(modelSwitchError === undefined ? {} : { error: modelSwitchError }),
+        update: updateModel,
+        refreshModels,
+      },
       interrupt: {
         pending: interruptingTurnId !== undefined,
         ...(interruptError === undefined ? {} : { error: interruptError }),
@@ -272,7 +379,10 @@ export function useLiveConversationControls(
         resolve: resolveApproval,
       },
       failedTurnRetry: {
-        enabled: capabilities.canCompose && submitPhase === 'idle',
+        enabled:
+          capabilities.canCompose &&
+          submitPhase === 'idle' &&
+          !modelSwitchPending,
         ...(capabilities.composerDisabled === undefined
           ? {}
           : { disabledReason: capabilities.composerDisabled.message }),
@@ -295,14 +405,21 @@ export function useLiveConversationControls(
       interrupt,
       interruptError,
       interruptingTurnId,
+      modelSwitchError,
+      modelSwitchPending,
+      modelCatalog,
+      model.id,
+      modelCatalogLoading,
       resolveApproval,
       retryError,
       retryErrorTurnId,
       retryFailedTurn,
       retryingTurnId,
+      refreshModels,
       submit,
       submitError,
       submitPhase,
+      updateModel,
     ],
   )
 }

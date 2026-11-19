@@ -140,14 +140,45 @@ test('Supervisor bounds the machine directory and retains both Providers and con
   const result = supervisorMachineDetail(detail)
   assertFitsFrame(result)
   assert.equal(result[supervisorReadTruncated], true)
+  const publicResult = JSON.parse(JSON.stringify(result))
+  delete publicResult._truncated
   GetMachineResponseSchema.parse({
-    ...JSON.parse(JSON.stringify(result)),
+    ...publicResult,
     projects: [],
     conversations: [],
   })
   assert.deepEqual(result.machine, machine)
   assert.deepEqual(result.connection, connection)
   assert.deepEqual(result.providerDiscovery, detail.providerDiscovery)
+
+  for (const name of ['model', '模型'.repeat(120)]) {
+    const modelDetail = {
+      ...detail,
+      providers: detail.providers.map((provider) => ({
+        ...provider,
+        models: undefined,
+        reasoningOptions: [],
+        availableModels: Array.from({ length: 64 }, (_, index) => ({
+          id: `model-${index}`,
+          name,
+        })),
+      })),
+    }
+    const projected = supervisorMachineDetail(modelDetail)
+    assertFitsFrame(projected)
+    assert.equal(projected._truncated, true)
+    for (const provider of projected.providers) {
+      assert.ok(provider.availableModels.length > 0)
+      assert.ok(provider.availableModels.length <= 50)
+      assert.deepEqual(
+        provider.availableModels,
+        modelDetail.providers[0].availableModels.slice(
+          0,
+          provider.availableModels.length,
+        ),
+      )
+    }
+  }
   assert.deepEqual(
     result.providers.map((row) => row.provider),
     ['codex', 'claude-code'],

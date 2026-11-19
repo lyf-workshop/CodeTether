@@ -41,6 +41,7 @@ import {
   PairingOfferMessageSchema,
   ProjectLocationValidatedMessageSchema,
   ProviderSessionsDiscoveredMessageSchema,
+  ProviderModelsListedMessageSchema,
   ProviderSessionValidatedMessageSchema,
   ProviderSessionTranscriptReadResultMessageSchema,
   ProvidersDescribedMessageSchema,
@@ -61,6 +62,7 @@ import {
   type RemoteClaudePrompt,
   type RemoteClaudeProviderIdentity,
   type RemoteProviderDescriptor,
+  type RemoteProviderModel,
   type RemoteMachineMetadata,
 } from './messages.js'
 import {
@@ -577,6 +579,40 @@ async function openRemoteCodexSessionWithConnection(
   }
 }
 
+export interface ListRemoteProviderModelsOptions {
+  readonly peer: TrustedRemotePeer
+  readonly controller: MachineControllerIdentity
+  readonly provider: AgentProvider
+  readonly providerInstallationId: ProviderInstallationId
+  readonly expectedInstallationRevision: ProviderInstallationRevision
+  readonly signal?: AbortSignal
+}
+
+export async function listRemoteProviderModels(
+  options: ListRemoteProviderModelsOptions,
+): Promise<readonly RemoteProviderModel[]> {
+  const connection = await connectTrustedRemoteMachine(options)
+  try {
+    return await connection.listRemoteProviderModels(options)
+  } finally {
+    connection.close()
+  }
+}
+
+export type ListRemoteProviderModelsOverStreamOptions =
+  ListRemoteProviderModelsOptions & { readonly stream: Duplex }
+
+export async function listRemoteProviderModelsOverStream(
+  options: ListRemoteProviderModelsOverStreamOptions,
+): Promise<readonly RemoteProviderModel[]> {
+  const connection = await connectTrustedRemoteMachineOverStream(options)
+  try {
+    return await connection.listRemoteProviderModels(options)
+  } finally {
+    connection.close()
+  }
+}
+
 interface OpenRemoteClaudeSessionBaseOptions {
   readonly peer: TrustedRemotePeer
   readonly controller: MachineControllerIdentity
@@ -792,6 +828,83 @@ export class AuthenticatedRemoteMachineConnection {
       providers: response.providers,
       observedAt: response.observedAt,
     }
+  }
+
+  async listRemoteProviderModels(options: {
+    readonly provider: AgentProvider
+    readonly providerInstallationId: ProviderInstallationId
+    readonly expectedInstallationRevision: ProviderInstallationRevision
+    readonly signal?: AbortSignal
+  }): Promise<readonly RemoteProviderModel[]> {
+    this.#assertGeneralPurpose()
+    const models: RemoteProviderModel[] = []
+    const seen = new Set<string>()
+    let cursor: number | undefined
+    for (let page = 0; page < 64; page += 1) {
+      const requestId = newMachineNonce()
+      await this.#connection.send({
+        type: 'provider.models.list',
+        protocolVersion: machineProtocolVersion,
+        requestId,
+        expectedMachineId: this.machine.machineId,
+        expectedNodeId: this.machine.nodeId,
+        provider: options.provider,
+        providerInstallationId: options.providerInstallationId,
+        expectedInstallationRevision: options.expectedInstallationRevision,
+        ...(cursor === undefined ? {} : { cursor }),
+      })
+      const response = await receiveCompatibleMachineMessage(
+        this.#connection,
+        z.union([ProviderModelsListedMessageSchema, MachineErrorMessageSchema]),
+        {
+          signal: options.signal,
+          timeoutMs: machineTransportLimits.providerSessionOpenTimeoutMs,
+        },
+      )
+      if (response.type === 'machine.error') {
+        throw remoteError(
+          response.code,
+          response.message,
+          true,
+          response.failure,
+        )
+      }
+      if (
+        response.requestId !== requestId ||
+        response.machineId !== this.machine.machineId ||
+        response.nodeId !== this.machine.nodeId ||
+        response.provider !== options.provider ||
+        response.providerInstallationId !== options.providerInstallationId ||
+        response.installationRevision !==
+          options.expectedInstallationRevision ||
+        (response.nextCursor !== undefined &&
+          response.nextCursor !== (cursor ?? 0) + response.models.length)
+      ) {
+        throw new MachineTransportError(
+          'identity_mismatch',
+          'Provider model catalog did not match the requested installation',
+          { peerAuthenticated: true },
+        )
+      }
+      for (const model of response.models) {
+        if (seen.has(model.id)) {
+          throw new MachineTransportError(
+            'malformed_message',
+            'Provider model catalog repeated an identity',
+            { peerAuthenticated: true },
+          )
+        }
+        seen.add(model.id)
+        models.push(model)
+      }
+      if (response.nextCursor === undefined) return models
+      cursor = response.nextCursor
+    }
+    throw new MachineTransportError(
+      'malformed_message',
+      'Provider model catalog exceeded its page bound',
+      { peerAuthenticated: true },
+    )
   }
 
   async discoverProviderSessions(options: {
@@ -1309,6 +1422,8 @@ export interface StartRemoteCodexTurnOptions {
   readonly actionId: MachineTransportActionId
   readonly turnId: MachineTransportTurnId
   readonly prompt: RemoteCodexPrompt
+  readonly model?: string
+  readonly reasoning?: string | null
   readonly signal?: AbortSignal
 }
 
@@ -1380,6 +1495,10 @@ export class RemoteCodexSession {
         turnId: options.turnId,
         providerThreadId: this.providerThreadId,
         prompt: options.prompt,
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.reasoning === undefined
+          ? {}
+          : { effort: options.reasoning }),
       })
       const response = await receiveCompatibleMachineMessage(
         this.#connection,
@@ -1643,6 +1762,8 @@ export interface StartRemoteClaudeTurnOptions {
   readonly actionId: MachineTransportActionId
   readonly turnId: MachineTransportTurnId
   readonly prompt: RemoteClaudePrompt
+  readonly model?: 'opus' | 'sonnet' | 'haiku'
+  readonly reasoning?: RemoteClaudeEffort | null
   readonly signal?: AbortSignal
 }
 
@@ -1710,6 +1831,10 @@ export class RemoteClaudeSession {
         turnId: options.turnId,
         providerSessionId: this.providerSessionId,
         prompt: options.prompt,
+        ...(options.model === undefined ? {} : { model: options.model }),
+        ...(options.reasoning === undefined
+          ? {}
+          : { effort: options.reasoning }),
       })
       const response = await receiveCompatibleMachineMessage(
         this.#connection,

@@ -79,8 +79,19 @@
   - the automatic refresh as fixed here
   - the Windows-only acceptance scope
 
+## Round 2 (`7d89a1f`, pushed 2026-11-18): accepted
+
+- **The must-fix is done as specified.**
+  - A local conversation reads the model list once per opening, when it first can compose. A Turn ending, a reconnect, or a failed first read does not trigger another read.
+  - A remote conversation, or one whose computer is not yet known, reads nothing on its own. Opening the picker still refreshes it.
+  - During a refresh the last list stays, so the warning does not flicker. A failed read or a list for the wrong Provider clears it.
+- **One addition, accepted.** The list and its loading state now belong to one conversation. A late answer is discarded after the user opens another conversation, so it cannot show the wrong list or error there.
+- **Tests.** Six tests in `apps/web/test/model-catalog-refresh.test.mjs` drive the real hook and Composer. They cover the five cases this review asked for, plus the late answer.
+- **Gates (as reported):** `pnpm test` 2,510 passed, 14 skipped, 0 failed. `cargo test` and the Android gate passed again.
+- **Left for later, as allowed.** The failure card still opens the picker with a synthetic key event. It works and is tested; D2.5 or a later Composer task can simplify it.
+- **The branch** still changes nothing under `AGENTS.md` or `docs/`, and merges into `main` (`9cb3e5b`) without conflicts.
+
 ## Next
 
-1. **Round 2:** make the must-fix on the same branch and re-run the gates, then push.
-2. **Review:** Claude Code reviews round 2.
-3. **Merge:** merge into `main` with a merge commit, with the Owner's approval to push `main`. B3a then starts from that `main`.
+1. **Round 2:** done and accepted (above).
+2. **Merge:** merge into `main` with a merge commit, with the Owner's approval to push `main`. B3a then starts from that `main`.

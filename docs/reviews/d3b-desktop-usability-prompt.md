@@ -49,6 +49,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - When something new is waiting, it shows as today, but below the conversation list.
      - In-app "打开" uses an in-app icon, not the external-link icon.
    - **Archived view:** its status filters exclude "运行中" and "等待批准", which can never match an archived conversation.
+   - **Empty state:** a project with no conversations does not suggest adjusting filters that are not set (hands-on review finding 11).
 4. **Primary actions where the eye starts** (finding 11).
    - On a computer's page, "添加项目" sits in the Projects section header, and "配对新设备" in the page header actions (D3a `PageHeader`). Neither stays at the bottom of the page.
    - On the devices overview, when open Attention exists, a banner reads "N 件事需要你处理" and links to the Inbox (02-01). It uses the Attention summary the sidebar badge already reads; there is no new request.
@@ -70,11 +71,12 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - Devices-overview project cards show running and waiting-for-approval counts instead of only "1 个会话" and a date.
    - The sidebar tree shows a status dot on each conversation that is running or waiting for approval (02-01).
    - Use only fields the existing reads already return. If a count would need one extra request per project, or more than the 100-conversation index provides, leave that count out and report it. Do not add a Host endpoint.
-7. **A quieter sidebar** (finding 14). Remove the per-project "查看已归档会话" row; the project page's archived view is the way in. Keep a link to it on the project page next to the conversation list.
-8. **Short names stay visible** (finding 17). In the New Conversation dialog and elsewhere, a short name such as the computer name is not truncated ("本地…") while a long path beside it keeps its full width. The path gives way first.
+7. **A quieter sidebar** (finding 14). Remove the per-project "查看已归档会话" row; the project page's archived view is the way in. An expanded project with no conversations shows no "还没有会话" filler row either (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 7). Keep a link to it on the project page next to the conversation list.
+8. **Short names stay visible** (finding 17). In the New Conversation dialog, the breadcrumb (at 800 px it reads "本… › v4-accep… › …") and elsewhere, a short name such as the computer name is not truncated ("本地…") while a long path beside it keeps its full width. The path gives way first.
 9. **No implementation detail in copy** (finding 18).
    - The command palette footer "这里只匹配已加载的标题" becomes user language, or goes.
    - The Add Project hint about offline computers appears only when the selected computer is a paired remote computer that can be offline, not for this computer.
+   - Failure copy: the repeated "AI 工具未能完成本轮工作。 本轮工作可能不完整。已保存的会话历史仍可查看。" (with its stray double space) says what failed and what to do next, and "请查看电脑详情中的执行状态" links to that page (hands-on review finding 9).
 
 ## Known facts
 

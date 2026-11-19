@@ -64,6 +64,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - The devices page title becomes "设备", matching the sidebar, breadcrumb and button. It lists computers and also "手机和平板".
    - The archived view's breadcrumb no longer repeats the project ("本地电脑 › weather-cli › 已归档会话", not "… › weather-cli › weather-cli").
    - Check the terminology table in 10 §3.1 against every page header and breadcrumb, and report any other mismatch you fixed.
+   - The New Conversation dialog's "思考强度" and the Composer's "推理" name the same setting; use one word. The local computer is "本地电脑" in the tree and on cards but "这台电脑" in sentences; pick one rule (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 8).
 5. **Navigation and status shown once** (finding 8, computer and project pages).
    - Computer and project pages drop the "返回设备" link; the breadcrumb is the way back. The project page's back link also skips the computer level.
    - The computer card says "在线" once.
@@ -79,7 +80,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
 **Should:**
 
 7. **One disclosure style** (finding 15). Replace the native `<details>` triangles ("会话信息", "查看详细状态", "技术详情") with one disclosure built on the Lucide chevrons used elsewhere. It must be keyboard operable and expose `aria-expanded`.
-8. **Aligned AI-tool list** (finding 16). On the computer page, name, version and status sit in fixed columns, so they stay aligned whatever the tool name's length.
+8. **The offline group opens for the current conversation** (W0d carried item, `w0-small-fixes.md`). When the current conversation belongs to an offline computer, the sidebar's offline group opens so the tree can show where the user is.
+9. **Aligned AI-tool list** (finding 16). On the computer page, name, version and status sit in fixed columns, so they stay aligned whatever the tool name's length.
 
 ## Known facts
 

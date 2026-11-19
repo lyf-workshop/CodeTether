@@ -126,23 +126,31 @@ test('machine/project/backend eligibility retains precedence over busy presentat
   }
 })
 
-test('an Approval gate describes actual canonical waiting state and preserves descriptor gate', () => {
-  const result = composerGatePresentation({
-    capabilities: {
-      ...available,
-      canCompose: false,
-      canInterrupt: true,
-      supportsInterrupt: true,
-      supportsApprovals: true,
-    },
-    state: 'waiting',
-    providerName: 'Codex',
-    machineKind: 'local',
+for (const [approvalKind, title] of [
+  ['command', '等你批准一条命令'],
+  ['file-change', 'AI 工具请求修改文件'],
+  ['unknown', '有操作等你批准'],
+  [undefined, '有操作等你批准'],
+]) {
+  test(`the waiting Composer uses the Approval wording for ${approvalKind ?? 'no single kind'}`, () => {
+    const result = composerGatePresentation({
+      capabilities: {
+        ...available,
+        canCompose: false,
+        canInterrupt: true,
+        supportsInterrupt: true,
+        supportsApprovals: true,
+      },
+      state: 'waiting',
+      providerName: 'Codex',
+      machineKind: 'local',
+      approvalKind,
+    })
+    assert.equal(result.kind, 'waiting')
+    assert.equal(result.title, title)
+    assert.equal(result.canInterrupt, true)
   })
-  assert.equal(result.kind, 'waiting')
-  assert.match(result.title, /批准/u)
-  assert.equal(result.canInterrupt, true)
-})
+}
 
 test('archive always blocks editing and offers restoration rather than a new execution', () => {
   const result = composerGatePresentation({

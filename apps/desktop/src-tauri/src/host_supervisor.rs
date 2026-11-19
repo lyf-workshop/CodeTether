@@ -1036,6 +1036,11 @@ fn handle_resume_health_failure(app: AppHandle, state: DesktopState, failure: Re
     };
     let failure_app = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
+        #[cfg(windows)]
+        if failure == ResumeHealthOutcome::HostExited {
+            handle_unexpected_host_exit(failure_app);
+            return;
+        }
         if !state.begin_failure_shutdown() {
             return;
         }
@@ -1043,7 +1048,7 @@ fn handle_resume_health_failure(app: AppHandle, state: DesktopState, failure: Re
             show_main_window_for_failure(&failure_app);
             show_runtime_failure(&failure_app, surface);
         }
-        thread::spawn(move || finish_owned_shutdown(state, failure_app, 1));
+        thread::spawn(move || finish_owned_shutdown(state, failure_app, ShutdownAction::Exit(1)));
     }) {
         eprintln!("[codetether:desktop] could not schedule resume failure handling: {error}");
         emergency_shutdown_after_event_loop_failure(&app, 1);
@@ -1065,7 +1070,14 @@ fn remove_tray_before_process_exit(app: &AppHandle) {
     }
 }
 
-fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShutdownAction {
+    Exit(i32),
+    #[cfg(windows)]
+    RestartAfterHostStop,
+}
+
+fn finish_owned_shutdown(state: DesktopState, app: AppHandle, action: ShutdownAction) -> ! {
     // This is a final process-level guard around the normal bounded Host
     // shutdown. If a platform process primitive itself stalls, exiting the
     // Desktop closes the Windows Job handle and still prevents an orphaned
@@ -1085,11 +1097,22 @@ fn finish_owned_shutdown(state: DesktopState, app: AppHandle, code: i32) -> ! {
             eprintln!("[codetether:desktop] owned Host shutdown was not confirmed clean");
         }
     }
-    let exit_code = shutdown_exit_code(outcome, code);
     state.allow_exit();
     // AppKit requires NSStatusItem removal on the main thread. Shutdown runs
     // on a worker so Host draining cannot block the native event loop.
     remove_tray_before_process_exit(&app);
+    let exit_code = match action {
+        ShutdownAction::Exit(code) => shutdown_exit_code(outcome, code),
+        #[cfg(windows)]
+        ShutdownAction::RestartAfterHostStop => {
+            if state.snapshot().system != SystemState::SessionEnding {
+                // Restart from this worker so Tauri delivers RunEvent::Exit
+                // and releases the single-instance guard before relaunching.
+                app.restart();
+            }
+            1
+        }
+    };
     // The Host and its owned process tree are fully drained at this point.
     // Exiting directly avoids a Windows/Tauri edge case where re-requesting
     // exit after preventing the original window-close event can leave a
@@ -1148,7 +1171,7 @@ pub(crate) fn request_app_quit(app: &AppHandle, code: i32) {
             return;
         }
         let state = state.inner().clone();
-        thread::spawn(move || finish_owned_shutdown(state, quit_app, code));
+        thread::spawn(move || finish_owned_shutdown(state, quit_app, ShutdownAction::Exit(code)));
     }) {
         eprintln!("[codetether:desktop] could not schedule explicit quit: {error}");
         emergency_shutdown_after_event_loop_failure(app, code);
@@ -1271,7 +1294,7 @@ fn emergency_shutdown_after_event_loop_failure(app: &AppHandle, code: i32) {
     }
     let state = state.inner().clone();
     let app = app.clone();
-    thread::spawn(move || finish_owned_shutdown(state, app, code));
+    thread::spawn(move || finish_owned_shutdown(state, app, ShutdownAction::Exit(code)));
 }
 
 fn handle_unexpected_host_exit(app: AppHandle) {
@@ -1287,12 +1310,28 @@ fn handle_unexpected_host_exit(app: AppHandle) {
         .and_then(|(_, observation)| observation.termination())
         .map(startup_failure_for_host_exit)
         .unwrap_or(StartupFailureKind::HostExited);
+    #[cfg(windows)]
+    let mut action = ShutdownAction::Exit(1);
+    #[cfg(not(windows))]
+    let action = ShutdownAction::Exit(1);
     if state.snapshot().system != SystemState::SessionEnding {
         show_main_window_for_failure(&app);
+        #[cfg(windows)]
+        {
+            let dialog = startup_error::HostExitDialog::new(
+                state.surface_initialized.load(Ordering::Acquire),
+                failure,
+            );
+            let window = app.get_webview_window("main");
+            if startup_error::show_host_exit(dialog, window.as_ref()) {
+                action = ShutdownAction::RestartAfterHostStop;
+            }
+        }
+        #[cfg(not(windows))]
         show_runtime_failure(&app, failure);
     }
     let state = state.inner().clone();
-    thread::spawn(move || finish_owned_shutdown(state, app, 1));
+    thread::spawn(move || finish_owned_shutdown(state, app, action));
 }
 
 fn finish_desktop_initialization(
@@ -1340,7 +1379,7 @@ fn finish_desktop_initialization(
         if state.snapshot().system != SystemState::SessionEnding {
             startup_error::show(failure);
         }
-        thread::spawn(move || finish_owned_shutdown(state, app, 1));
+        thread::spawn(move || finish_owned_shutdown(state, app, ShutdownAction::Exit(1)));
         return;
     }
     if let Some(delay) = smoke_exit_delay {
@@ -1358,7 +1397,7 @@ fn finish_startup_failure(app: AppHandle, state: DesktopState, failure: StartupF
     if state.snapshot().system != SystemState::SessionEnding {
         startup_error::show(failure);
     }
-    thread::spawn(move || finish_owned_shutdown(state, app, 1));
+    thread::spawn(move || finish_owned_shutdown(state, app, ShutdownAction::Exit(1)));
 }
 
 fn show_main_window_for_failure(app: &AppHandle) {

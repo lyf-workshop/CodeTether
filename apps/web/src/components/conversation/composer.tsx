@@ -34,6 +34,7 @@ import {
 } from '@codetether/ui'
 
 import type {
+  ConversationApprovalViewModel,
   ConversationCapabilitiesViewModel,
   ConversationProjectBoundaryViewModel,
 } from './conversation-view-model'
@@ -66,6 +67,7 @@ interface ComposerProps {
   interruptController?: InterruptController
   context?: ConversationDisplayContext
   providerName?: string
+  approvalKind?: ConversationApprovalViewModel['kind']
   agent?: AgentId
   modelControlRequest?: number
   model?: string
@@ -91,6 +93,7 @@ export function Composer({
   interruptController,
   context,
   providerName = 'AI 工具',
+  approvalKind,
   agent,
   model,
   modelControlRequest = 0,
@@ -118,6 +121,7 @@ export function Composer({
     machineKind: context?.machineKind,
     archived,
     projectBoundary,
+    approvalKind,
   })
   const canEdit = gate === undefined && controlState !== 'submitting'
   const optimisticSend = controller.optimisticSend

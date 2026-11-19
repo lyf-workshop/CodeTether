@@ -75,6 +75,12 @@ function machineSortRank(machine: MachineSummary): number {
   return 3
 }
 
+export function isOfflineRemoteComputer(
+  machine: Pick<MachineSummary, 'kind' | 'connectionState'>,
+): boolean {
+  return machine.kind === 'remote' && machine.connectionState === 'offline'
+}
+
 export function machineAvailabilityLabel(
   availability: MachineSummary['availability'],
 ): string {

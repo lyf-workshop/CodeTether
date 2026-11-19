@@ -200,6 +200,11 @@ export function ConversationWorkspace({
           interruptController={controls.interrupt}
           context={displayContext}
           providerName={agentDefinitions[viewModel.agent].name}
+          approvalKind={
+            viewModel.pendingApprovals.length === 1
+              ? viewModel.pendingApprovals[0]?.kind
+              : undefined
+          }
           agent={viewModel.agent}
           model={viewModel.model}
           previousUserInput={previousUserInput(viewModel.timeline)}

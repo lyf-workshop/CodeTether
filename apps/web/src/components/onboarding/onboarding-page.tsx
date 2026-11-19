@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
+import { Button } from '@codetether/ui'
 import type {
   DoctorReport,
   OnboardingProgress,
@@ -317,6 +318,15 @@ export function OnboardingPage() {
           >
             {stepLabels[onboarding.step]}
           </h1>
+          {onboarding.completedAt === undefined ? (
+            <div className="mb-4 flex justify-end">
+              <Button asChild variant="secondary" size="sm">
+                <Link to="/settings/$section" params={{ section: 'account' }}>
+                  已有账号？登录
+                </Link>
+              </Button>
+            </div>
+          ) : null}
           <OnboardingStepView
             doctor={doctor}
             machines={machines}

@@ -60,6 +60,123 @@ pub fn show_for_window<R: tauri::Runtime>(
 }
 
 #[cfg(windows)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostExitDialog {
+    Startup(StartupFailureKind),
+    Stopped,
+}
+
+#[cfg(windows)]
+impl HostExitDialog {
+    pub fn new(surface_initialized: bool, startup_failure: StartupFailureKind) -> Self {
+        if surface_initialized {
+            Self::Stopped
+        } else {
+            Self::Startup(startup_failure)
+        }
+    }
+
+    const fn title(self) -> &'static str {
+        match self {
+            Self::Startup(failure) => failure.title(),
+            Self::Stopped => "CodeTether 本地服务已停止",
+        }
+    }
+
+    const fn message(self) -> &'static str {
+        match self {
+            Self::Startup(failure) => failure.message(),
+            Self::Stopped => {
+                "已保存的项目和对话仍保留在这台电脑上。你可以重启 CodeTether，或安全退出。"
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+const RESTART_BUTTON_ID: i32 = 100;
+
+#[cfg(windows)]
+fn restart_selected(dialog_succeeded: bool, button: i32) -> bool {
+    dialog_succeeded && button == RESTART_BUTTON_ID
+}
+
+#[cfg(windows)]
+pub fn show_host_exit<R: tauri::Runtime>(
+    dialog: HostExitDialog,
+    window: Option<&tauri::WebviewWindow<R>>,
+) -> bool {
+    use windows_sys::Win32::UI::{
+        Controls::{
+            TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TASKDIALOGCONFIG_0, TD_ERROR_ICON,
+            TDF_ALLOW_DIALOG_CANCELLATION, TDF_POSITION_RELATIVE_TO_WINDOW, TaskDialogIndirect,
+        },
+        WindowsAndMessaging::IDCANCEL,
+    };
+
+    let owner = window.and_then(|window| window.hwnd().ok().map(|handle| handle.0));
+    if let HostExitDialog::Startup(failure) = dialog {
+        show_with_optional_owner(failure, owner);
+        return false;
+    }
+
+    let title = dialog.title();
+    let message = dialog.message();
+    eprintln!("[codetether:desktop] {title}: {message}");
+    if suppress_dialog() {
+        return false;
+    }
+
+    let title = wide(title);
+    let content = wide(message);
+    let restart = wide("重启 CodeTether");
+    let exit = wide("退出 CodeTether");
+    let buttons = [
+        TASKDIALOG_BUTTON {
+            nButtonID: RESTART_BUTTON_ID,
+            pszButtonText: restart.as_ptr(),
+        },
+        TASKDIALOG_BUTTON {
+            nButtonID: IDCANCEL,
+            pszButtonText: exit.as_ptr(),
+        },
+    ];
+    let config = TASKDIALOGCONFIG {
+        cbSize: size_of::<TASKDIALOGCONFIG>() as u32,
+        hwndParent: owner.unwrap_or(std::ptr::null_mut()),
+        dwFlags: TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW,
+        pszWindowTitle: title.as_ptr(),
+        pszContent: content.as_ptr(),
+        Anonymous1: TASKDIALOGCONFIG_0 {
+            pszMainIcon: TD_ERROR_ICON,
+        },
+        cButtons: buttons.len() as u32,
+        pButtons: buttons.as_ptr(),
+        nDefaultButton: IDCANCEL,
+        ..Default::default()
+    };
+    let mut button = 0;
+    // All strings and native button definitions live through this synchronous call.
+    let result = unsafe {
+        TaskDialogIndirect(
+            &config,
+            &mut button,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    if result < 0 {
+        eprintln!("[codetether:desktop] could not show the local service dialog: {result:#x}");
+        show_windows_message(
+            owner,
+            dialog.title(),
+            "已保存的项目和对话仍保留在这台电脑上。退出后，你可以重新打开 CodeTether。",
+        );
+    }
+    restart_selected(result >= 0, button)
+}
+
+#[cfg(windows)]
 type NativeWindow = windows_sys::Win32::Foundation::HWND;
 
 #[cfg(not(windows))]
@@ -70,25 +187,28 @@ fn show_with_optional_owner(kind: StartupFailureKind, owner: Option<NativeWindow
     #[cfg(not(windows))]
     let _ = owner;
     #[cfg(windows)]
-    if std::env::var_os("CODETETHER_DESKTOP_TEST_SUPPRESS_DIALOG").is_some() {
-        return;
+    if !suppress_dialog() {
+        show_windows_message(owner, kind.title(), kind.message());
     }
+}
 
-    #[cfg(windows)]
+#[cfg(windows)]
+fn suppress_dialog() -> bool {
+    std::env::var_os("CODETETHER_DESKTOP_TEST_SUPPRESS_DIALOG").is_some()
+}
+
+#[cfg(windows)]
+fn wide(text: &str) -> Vec<u16> {
+    text.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+fn show_windows_message(owner: Option<NativeWindow>, title: &str, message: &str) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+
+    let title = wide(title);
+    let message = wide(message);
     unsafe {
-        use std::iter;
-        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-
-        let title = kind
-            .title()
-            .encode_utf16()
-            .chain(iter::once(0))
-            .collect::<Vec<_>>();
-        let message = kind
-            .message()
-            .encode_utf16()
-            .chain(iter::once(0))
-            .collect::<Vec<_>>();
         MessageBoxW(
             owner.unwrap_or(std::ptr::null_mut()),
             message.as_ptr(),
@@ -101,6 +221,38 @@ fn show_with_optional_owner(kind: StartupFailureKind, owner: Option<NativeWindow
 #[cfg(test)]
 mod tests {
     use super::StartupFailureKind;
+
+    #[cfg(windows)]
+    #[test]
+    fn host_exit_message_depends_on_whether_desktop_opened() {
+        use super::HostExitDialog;
+
+        let startup = HostExitDialog::new(false, StartupFailureKind::HostExited);
+        assert_eq!(startup.title(), "CodeTether 启动失败");
+        assert_eq!(
+            startup.message(),
+            "CodeTether 本地服务意外退出。请重新启动 CodeTether。"
+        );
+        let stopped = HostExitDialog::new(true, StartupFailureKind::HostExited);
+        assert_eq!(stopped.title(), "CodeTether 本地服务已停止");
+        assert!(
+            stopped
+                .message()
+                .contains("已保存的项目和对话仍保留在这台电脑上。")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn host_stop_dialog_requires_explicit_restart_selection() {
+        use super::{RESTART_BUTTON_ID, restart_selected};
+        use windows_sys::Win32::UI::WindowsAndMessaging::IDCANCEL;
+
+        assert!(restart_selected(true, RESTART_BUTTON_ID));
+        assert!(!restart_selected(true, IDCANCEL));
+        assert!(!restart_selected(true, 0));
+        assert!(!restart_selected(false, RESTART_BUTTON_ID));
+    }
 
     #[test]
     fn startup_failures_are_specific_and_safe() {

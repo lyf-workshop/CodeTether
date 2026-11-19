@@ -523,6 +523,7 @@ function ConnectedLiveConversationDetail({
   const controls = useLiveConversationControls(
     conversation,
     source.conversation.capabilities,
+    machine?.kind,
   )
 
   return (

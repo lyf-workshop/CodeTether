@@ -20,6 +20,7 @@ import type { ConversationCapabilitiesViewModel } from './conversation-view-mode
 export function useLiveConversationControls(
   model: ConversationReadModel,
   capabilities: ConversationCapabilitiesViewModel,
+  machineKind: 'local' | 'remote' | undefined,
 ): ConversationControls {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
@@ -28,9 +29,18 @@ export function useLiveConversationControls(
   const [modelSwitchPending, setModelSwitchPending] = useState(false)
   const [modelSwitchError, setModelSwitchError] = useState<string>()
   const modelSwitchGuard = useRef(false)
-  const [modelCatalog, setModelCatalog] = useState<ProviderDescriptor>()
-  const [modelCatalogLoading, setModelCatalogLoading] = useState(false)
-  const modelCatalogGuard = useRef(false)
+  const [modelCatalog, setModelCatalog] = useState<{
+    readonly conversationId: string
+    readonly provider: ProviderDescriptor
+  }>()
+  const [modelCatalogLoading, setModelCatalogLoading] = useState<string>()
+  const modelCatalogGuard = useRef<
+    { readonly conversationId: string } | undefined
+  >(undefined)
+  const automaticModelCatalog = useRef({
+    conversationId: model.id,
+    started: false,
+  })
   const expectedTurnId = useRef<string | undefined>(undefined)
   const submitGuard = useRef(false)
   const retryGuard = useRef(false)
@@ -245,29 +255,53 @@ export function useLiveConversationControls(
   )
 
   const refreshModels = useCallback(async () => {
-    if (modelCatalogGuard.current || !capabilities.canCompose) return
-    modelCatalogGuard.current = true
-    setModelCatalog(undefined)
-    setModelCatalogLoading(true)
+    if (
+      modelCatalogGuard.current?.conversationId === model.id ||
+      !capabilities.canCompose
+    )
+      return
+    const request = { conversationId: model.id }
+    modelCatalogGuard.current = request
+    setModelCatalogLoading(model.id)
     setModelSwitchError(undefined)
     try {
       const response = await runtime.refreshConversationModels(model.id)
+      if (modelCatalogGuard.current !== request) return
       if (response.provider.provider !== model.provider) {
+        setModelCatalog(undefined)
         setModelSwitchError('模型列表与当前会话不匹配，请刷新后重试。')
         return
       }
-      setModelCatalog(response.provider)
+      setModelCatalog({ conversationId: model.id, provider: response.provider })
     } catch (error) {
+      if (modelCatalogGuard.current !== request) return
+      setModelCatalog(undefined)
       setModelSwitchError(mutationErrorMessage(error, '读取模型列表'))
     } finally {
-      modelCatalogGuard.current = false
-      setModelCatalogLoading(false)
+      if (modelCatalogGuard.current === request) {
+        modelCatalogGuard.current = undefined
+        setModelCatalogLoading(undefined)
+      }
     }
   }, [capabilities.canCompose, model.id, model.provider, runtime])
 
   useEffect(() => {
+    if (automaticModelCatalog.current.conversationId !== model.id) {
+      modelCatalogGuard.current = undefined
+      automaticModelCatalog.current = {
+        conversationId: model.id,
+        started: false,
+      }
+    }
+    if (
+      machineKind !== 'local' ||
+      !capabilities.canCompose ||
+      automaticModelCatalog.current.started
+    )
+      return
+    automaticModelCatalog.current.started = true
     void refreshModels()
-  }, [refreshModels])
+  }, [capabilities.canCompose, machineKind, model.id, refreshModels])
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision): Promise<void> => {
@@ -326,8 +360,10 @@ export function useLiveConversationControls(
       },
       modelSwitch: {
         pending: modelSwitchPending,
-        loadingModels: modelCatalogLoading,
-        ...(modelCatalog === undefined ? {} : { catalog: modelCatalog }),
+        loadingModels: modelCatalogLoading === model.id,
+        ...(modelCatalog?.conversationId === model.id
+          ? { catalog: modelCatalog.provider }
+          : {}),
         ...(modelSwitchError === undefined ? {} : { error: modelSwitchError }),
         update: updateModel,
         refreshModels,
@@ -372,6 +408,7 @@ export function useLiveConversationControls(
       modelSwitchError,
       modelSwitchPending,
       modelCatalog,
+      model.id,
       modelCatalogLoading,
       resolveApproval,
       retryError,

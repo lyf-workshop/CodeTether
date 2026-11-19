@@ -111,8 +111,7 @@ export function createConversationDisplayContext(
 }
 
 export interface ComposerGatePresentation {
-  readonly kind:
-    'running' | 'waiting' | 'submitting' | 'unavailable' | 'archived'
+  readonly kind: 'running' | 'waiting' | 'unavailable' | 'archived'
   readonly title: string
   readonly description: string
   readonly canInterrupt: boolean
@@ -186,13 +185,7 @@ export function composerGatePresentation({
         : { navigation: disabled.navigation }),
     }
   }
-  if (state === 'submitting')
-    return {
-      kind: 'submitting',
-      title: '正在发送消息',
-      description: '请稍候。CodeTether 不会重复发送这条消息。',
-      canInterrupt,
-    }
+  if (state === 'submitting') return undefined
   const stopExplanation =
     machineKind === 'remote'
       ? '在配对设备上运行的会话，这里不能停止。'

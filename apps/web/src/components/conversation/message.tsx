@@ -23,7 +23,7 @@ interface AgentMessageProps extends MessageProps {
   projectRootPath?: string
 }
 
-export function UserMessage({ message, className }: MessageProps) {
+export function UserMessage({ message, children, className }: MessageProps) {
   return (
     <article
       aria-label={`你在 ${message.time} 发送的消息`}
@@ -45,6 +45,7 @@ export function UserMessage({ message, className }: MessageProps) {
             {message.body}
           </p>
         ) : null}
+        {children}
       </div>
     </article>
   )

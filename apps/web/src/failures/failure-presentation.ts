@@ -295,6 +295,13 @@ const replayUnsafeReasons = new Set<CanonicalFailureReason>([
   'relay_channel_lost',
 ])
 
+export function isTurnFailureUncertain(failure: CanonicalFailure): boolean {
+  return (
+    failure.retryability === 'unknown' ||
+    replayUnsafeReasons.has(failure.reason)
+  )
+}
+
 export function executionFailurePresentation(
   error: HostError | undefined,
   context?: FailurePresentationContext,
@@ -371,7 +378,7 @@ export function canStartNewTurnAfterFailure(
 ): boolean {
   return (
     failure !== undefined &&
-    !replayUnsafeReasons.has(failure.reason) &&
+    !isTurnFailureUncertain(failure) &&
     failure.retryability === 'retry_now' &&
     failure.userAction === 'retry'
   )

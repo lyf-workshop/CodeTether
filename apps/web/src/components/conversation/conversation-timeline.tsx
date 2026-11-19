@@ -47,6 +47,7 @@ import { createToolPresentation } from './tool-presentation'
 import { groupRunExecutions } from './tool-grouping'
 import { presentProjectPaths } from './message-presentation'
 import { AgentMessage, UserMessage } from './message'
+import type { OptimisticMessage } from './optimistic-send'
 
 interface ConversationTimelineProps {
   readonly header?: ReactNode
@@ -60,6 +61,9 @@ interface ConversationTimelineProps {
   projectRootPath?: string
   onOpenModelControl?: () => void
   retryController?: FailedTurnRetryController
+  optimisticSend?: OptimisticMessage
+  composerFormId?: string
+  canRetrySend?: boolean
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
@@ -390,6 +394,9 @@ export function ConversationTimeline({
   projectId,
   projectRootPath,
   retryController,
+  optimisticSend,
+  composerFormId,
+  canRetrySend,
   onOpenModelControl,
   targetChangeId,
   targetChangeRequestKey,
@@ -397,6 +404,7 @@ export function ConversationTimeline({
 }: ConversationTimelineProps) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const followsLatest = useRef(true)
+  const lastSendAction = useRef<string | undefined>(undefined)
   const previousTimelineState = useRef<
     | {
         readonly activityVersion: string
@@ -409,6 +417,45 @@ export function ConversationTimeline({
   const waiting = pendingApprovals.length > 0
   const waitingRef = useRef(waiting)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
+  const showOptimisticRow =
+    optimisticSend !== undefined && optimisticSend.projectedTurnId === undefined
+  const hasMessages = timeline.blocks.length > 0 || showOptimisticRow
+  const sendStatus =
+    optimisticSend === undefined ||
+    optimisticSend.state === 'accepted' ||
+    (optimisticSend.state === 'sending' && !showOptimisticRow) ? null : (
+      <div
+        data-send-state={optimisticSend.state}
+        className="mt-2 flex flex-wrap items-center gap-1 text-xs text-text-secondary"
+      >
+        {optimisticSend.state === 'failed' ||
+        optimisticSend.state === 'uncertain' ? (
+          <span role="status" className="text-danger-text">
+            {optimisticSend.state === 'uncertain' ? '发送结果未确认' : '未发送'}
+            {optimisticSend.canRetry && composerFormId !== undefined
+              ? ' ·'
+              : ''}
+          </span>
+        ) : (
+          <span role="status">正在发送</span>
+        )}
+        {optimisticSend.state === 'failed' &&
+        optimisticSend.canRetry &&
+        composerFormId !== undefined ? (
+          <Button
+            type="submit"
+            form={composerFormId}
+            data-retry-action={optimisticSend.actionId}
+            variant="ghost"
+            size="sm"
+            disabled={canRetrySend !== true}
+            className="h-auto px-1 py-0 text-xs"
+          >
+            重试
+          </Button>
+        ) : null}
+      </div>
+    )
   const missingTurnTarget =
     targetTurnId !== undefined &&
     !timelineContainsTurn(timeline.blocks, targetTurnId)
@@ -420,7 +467,7 @@ export function ConversationTimeline({
     () => new Map(pendingApprovals.map((approval) => [approval.id, approval])),
     [pendingApprovals],
   )
-  const activityVersion = useMemo(
+  const canonicalActivityVersion = useMemo(
     () =>
       [
         timeline.nativeHistory === undefined
@@ -442,6 +489,10 @@ export function ConversationTimeline({
       ].join('|'),
     [timeline.blocks, timeline.nativeHistory],
   )
+  const activityVersion =
+    optimisticSend === undefined
+      ? canonicalActivityVersion
+      : `${canonicalActivityVersion}|${optimisticSend.actionId}:${optimisticSend.state}:${optimisticSend.projectedTurnId ?? ''}`
   const approvalVersion = useMemo(
     () => pendingApprovals.map((approval) => approval.id).join('|'),
     [pendingApprovals],
@@ -454,6 +505,16 @@ export function ConversationTimeline({
     viewport.scrollTop = viewport.scrollHeight
     setShowJumpToLatest(false)
   }, [])
+
+  const sendActionId = optimisticSend?.actionId
+  useLayoutEffect(() => {
+    if (
+      optimisticSend?.state === 'sending' &&
+      lastSendAction.current !== sendActionId
+    )
+      scrollToLatest()
+    lastSendAction.current = sendActionId
+  }, [optimisticSend?.state, scrollToLatest, sendActionId])
 
   const applyTimelineUpdate = useCallback(
     (update: TimelineUpdateKind, updateWaiting: boolean) => {
@@ -597,7 +658,7 @@ export function ConversationTimeline({
 
           {timeline.nativeHistory !== undefined &&
           timeline.nativeHistory.entries.length > 0 &&
-          timeline.blocks.length > 0 ? (
+          hasMessages ? (
             <div className="my-3 flex min-h-8 items-center gap-3 text-xs text-text-muted">
               <span className="h-px min-w-4 flex-1 bg-border/70" />
               <span className="shrink-0">在 CodeTether 中继续</span>
@@ -605,7 +666,7 @@ export function ConversationTimeline({
             </div>
           ) : null}
 
-          {timeline.blocks.length > 0 ? (
+          {hasMessages ? (
             <div
               className={
                 timeline.nativeHistory === undefined
@@ -621,10 +682,11 @@ export function ConversationTimeline({
                 if (block.kind === 'message') {
                   content =
                     block.message.author === 'user' ? (
-                      <UserMessage
-                        message={block.message}
-                        className="min-h-19"
-                      />
+                      <UserMessage message={block.message} className="min-h-19">
+                        {optimisticSend?.projectedTurnId === block.turnId
+                          ? sendStatus
+                          : null}
+                      </UserMessage>
                     ) : (
                       <AgentMessage
                         agent={agent}
@@ -665,7 +727,11 @@ export function ConversationTimeline({
                             failure={block.failure}
                             machineId={machineId}
                             projectId={projectId}
-                            retryController={retryController}
+                            retryController={
+                              optimisticSend?.projectedTurnId === block.turnId
+                                ? undefined
+                                : retryController
+                            }
                             onOpenModelControl={onOpenModelControl}
                             turnId={block.turnId}
                           />
@@ -705,6 +771,20 @@ export function ConversationTimeline({
                   </div>
                 )
               })}
+              {showOptimisticRow ? (
+                <UserMessage
+                  key={optimisticSend.actionId}
+                  message={{
+                    id: optimisticSend.actionId,
+                    author: 'user',
+                    body: optimisticSend.text,
+                    time: historicalTime(optimisticSend.timestamp),
+                  }}
+                  className="min-h-19"
+                >
+                  {sendStatus}
+                </UserMessage>
+              ) : null}
             </div>
           ) : timeline.nativeHistory === undefined ? (
             <p

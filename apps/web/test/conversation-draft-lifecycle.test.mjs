@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { QueryClient } from '@tanstack/react-query'
 import { CodeTetherResponseError } from '@codetether/client'
+import { createDom } from './fixtures/dom.mjs'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const { conversationDrafts } = loadWebComponent(
@@ -10,12 +11,31 @@ const { conversationDrafts } = loadWebComponent(
 const { ConversationOrganizationActions } = loadWebComponent(
   'runtime/host/conversation-organization-actions.ts',
 )
-const { invalidateConversationProductQueries } = loadWebComponent(
-  'runtime/host/conversation-index-sync.ts',
-)
+const {
+  clearArchivedConversationDrafts,
+  invalidateConversationProductQueries,
+} = loadWebComponent('runtime/host/conversation-index-sync.ts')
 const conversationId = 'conv_draft_lifecycle01'
 const otherId = 'conv_draft_lifecycle02'
 const timestamp = '2026-10-19T12:00:00.000Z'
+
+test('archive state recovered from a snapshot clears pending and stored draft text', async (t) => {
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const storage = dom.window.localStorage
+  storage.setItem('composer-draft-conv_archived', 'previous draft')
+  storage.setItem('composer-drafts-updated:conv_archived', '123')
+  conversationDrafts.write('conv_archived', 'more recent pending text')
+  storage.setItem('composer-draft-conv_active', 'separate conversation')
+  clearArchivedConversationDrafts([
+    { conversationId: 'conv_archived', archivedAt: timestamp },
+    { conversationId: 'conv_active' },
+  ])
+  assert.equal(conversationDrafts.read('conv_archived'), '')
+  assert.equal(storage.getItem('composer-draft-conv_archived'), null)
+  assert.equal(storage.getItem('composer-drafts-updated:conv_archived'), null)
+  assert.equal(conversationDrafts.read('conv_active'), 'separate conversation')
+})
 
 test('only an accepted archive summary clears its exact draft after the response, including an unmounted editor', async () => {
   let finish

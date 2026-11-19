@@ -1,4 +1,7 @@
-import type { HostEventEnvelope } from '@codetether/protocol'
+import type {
+  ConversationRecord,
+  HostEventEnvelope,
+} from '@codetether/protocol'
 import { ConversationUpdatedPayloadSchema } from '@codetether/protocol'
 import type { QueryClient } from '@tanstack/react-query'
 
@@ -28,6 +31,19 @@ export function shouldRefreshConversationIndex(
   return conversationIndexRefreshEvents.has(eventType)
 }
 
+/** Snapshot recovery can observe an archive without its original event. */
+export function clearArchivedConversationDrafts(
+  conversations: readonly Pick<
+    ConversationRecord,
+    'conversationId' | 'archivedAt'
+  >[],
+): void {
+  for (const conversation of conversations) {
+    if (conversation.archivedAt !== undefined)
+      conversationDrafts.clear(conversation.conversationId)
+  }
+}
+
 export function invalidateConversationProductQueries(
   queryClient: QueryClient,
   event: Pick<HostEventEnvelope, 'conversationId' | 'type'> & {
@@ -40,8 +56,8 @@ export function invalidateConversationProductQueries(
   // event. Clear UI text, not organization state, for cross-client archives.
   if (event.type === 'conversation.updated') {
     const payload = ConversationUpdatedPayloadSchema.safeParse(event.payload)
-    if (payload.success && payload.data.conversation.archivedAt !== undefined)
-      conversationDrafts.clear(payload.data.conversation.conversationId)
+    if (payload.success)
+      clearArchivedConversationDrafts([payload.data.conversation])
   }
 
   invalidateConversationDurableQueries(queryClient)

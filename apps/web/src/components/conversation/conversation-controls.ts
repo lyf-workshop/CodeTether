@@ -1,4 +1,5 @@
 import type {
+  ActionId,
   ApprovalDecision,
   CanonicalFailure,
   HostCapabilities,
@@ -14,6 +15,7 @@ import type {
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
 import { canonicalFailureActionPresentation } from '../../failures/failure-presentation.js'
 import type { ComposerSendShortcut } from './composer-shortcut.js'
+import type { OptimisticMessage } from './optimistic-send.js'
 
 type CanonicalFailureReason = CanonicalFailure['reason']
 
@@ -23,7 +25,8 @@ export type ComposerControlState =
 export interface ComposerController {
   readonly state: ComposerControlState
   readonly error?: string
-  submit(text: string): Promise<boolean>
+  readonly optimisticSend?: OptimisticMessage
+  submit(text: string, retryActionId?: ActionId): Promise<boolean>
 }
 
 export interface InterruptController {

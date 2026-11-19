@@ -113,3 +113,19 @@ test('exposes controlled reasons on Codex process and protocol failures', () => 
     /private|token/u,
   )
 })
+
+test('recognizes an unwritten Codex Thread without retaining the Provider message', () => {
+  const message = 'no rollout found for thread id private-thread-detail'
+  const missing = new JsonRpcRemoteError('thread/resume', -32_600, message)
+  assert.equal(missing.missingResumeThread, true)
+  assert.doesNotMatch(missing.message, /private-thread-detail/u)
+  assert.equal(
+    new JsonRpcRemoteError('thread/resume', -32_600, 'invalid request')
+      .missingResumeThread,
+    false,
+  )
+  assert.equal(
+    new JsonRpcRemoteError('turn/start', -32_600, message).missingResumeThread,
+    false,
+  )
+})

@@ -57,6 +57,7 @@ import {
 } from './composer-shortcut'
 
 interface ComposerProps {
+  formId?: string
   conversationId: string
   capabilities: ConversationCapabilitiesViewModel
   controller: ComposerController
@@ -76,6 +77,7 @@ interface ComposerProps {
 }
 
 export function Composer({
+  formId,
   conversationId,
   capabilities,
   controller,
@@ -102,6 +104,7 @@ export function Composer({
   const [value, setValue] = useState(() =>
     archived ? '' : conversationDrafts.read(conversationId),
   )
+  const [acceptedActionId, setAcceptedActionId] = useState<string>()
   const [sendShortcut, setSendShortcut] = useState(readComposerSendShortcut)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const restoreFocusRef = useRef(false)
@@ -116,12 +119,24 @@ export function Composer({
     archived,
     projectBoundary,
   })
-  const canEdit = gate === undefined
+  const canEdit = gate === undefined && controlState !== 'submitting'
+  const optimisticSend = controller.optimisticSend
+  // The Composer can reopen while its earlier submit handler is still pending.
+  if (
+    optimisticSend?.state === 'accepted' &&
+    optimisticSend.actionId !== acceptedActionId
+  ) {
+    setAcceptedActionId(optimisticSend.actionId)
+    if (value === optimisticSend.text) setValue('')
+  }
+  const editorValue =
+    controlState === 'submitting' && optimisticSend?.text === value ? '' : value
   const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
   const canSend =
     canEdit &&
     modelSwitchController?.pending !== true &&
-    value.trim().length > 0
+    value.trim().length > 0 &&
+    !(optimisticSend?.state === 'uncertain' && optimisticSend.text === value)
   const feedback =
     controller.error ??
     modelSwitchController?.error ??
@@ -238,12 +253,35 @@ export function Composer({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!canSend || submitActive.current) return
-    const submittedValue = value
+    if (submitActive.current) return
+    const retryAction =
+      (event.nativeEvent as SubmitEvent).submitter?.getAttribute(
+        'data-retry-action',
+      ) ?? undefined
+    const retry =
+      retryAction !== undefined &&
+      optimisticSend?.state === 'failed' &&
+      optimisticSend.canRetry &&
+      optimisticSend.actionId === retryAction
+        ? optimisticSend
+        : undefined
+    if (
+      retryAction === undefined
+        ? !canSend
+        : retry === undefined ||
+          !canEdit ||
+          modelSwitchController?.pending === true
+    )
+      return
+    const submittedValue = retry?.text ?? value
+    if (retry !== undefined && value === '') {
+      conversationDrafts.write(conversationId, submittedValue)
+      setValue(submittedValue)
+    }
     restoreFocusRef.current = document.activeElement === editorRef.current
     submitActive.current = true
     try {
-      const accepted = await controller.submit(submittedValue)
+      const accepted = await controller.submit(submittedValue, retry?.actionId)
       if (
         accepted &&
         conversationDrafts.read(conversationId) === submittedValue
@@ -312,9 +350,10 @@ export function Composer({
   return (
     <div className="min-w-0">
       <form
+        id={formId}
         aria-label="会话输入区"
-        data-composer-state={gate?.kind ?? 'ready'}
-        data-state={gate?.kind ?? 'ready'}
+        data-composer-state={gate?.kind ?? (canEdit ? 'ready' : 'submitting')}
+        data-state={gate?.kind ?? (canEdit ? 'ready' : 'submitting')}
         onSubmit={handleSubmit}
         className={cn(
           'min-w-0 overflow-hidden rounded-xl border border-border-strong bg-surface shadow-sm transition-colors focus-within:border-ring motion-reduce:transition-none',
@@ -431,7 +470,7 @@ export function Composer({
           <Textarea
             ref={editorRef}
             id="conversation-composer"
-            value={value}
+            value={editorValue}
             onChange={(event) => {
               if (!canEdit || submitActive.current) return
               const next = event.currentTarget.value
@@ -485,7 +524,7 @@ export function Composer({
               </span>
             </span>
             <span className="min-w-0 flex-1 text-center text-xs text-text-muted">
-              字数 {value.length}
+              字数 {editorValue.length}
             </span>
             <span title={sendUnavailableReason} className="shrink-0">
               <Button
@@ -515,7 +554,7 @@ export function Composer({
                 gate.kind === 'waiting' && 'bg-warning-muted text-warning-text',
               )}
             >
-              {gate.kind === 'running' || gate.kind === 'submitting' ? (
+              {gate.kind === 'running' ? (
                 <LoaderCircle className="size-4 motion-safe:animate-spin" />
               ) : (
                 <GateIcon className="size-4" />
@@ -578,7 +617,7 @@ export function Composer({
         {feedback ??
           (context?.readSearchOnly
             ? `${providerName} 在这里只读取和搜索文件，不会修改代码。`
-            : gate === undefined
+            : canEdit
               ? sendShortcut === 'enter'
                 ? '回车发送，Shift + 回车换行'
                 : 'Ctrl + 回车发送，回车换行'

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
@@ -1204,7 +1204,173 @@ test('isolated HostService and SQLite preserve B4a writes across Direct, Relay, 
   }
 })
 
-async function createDurableB4aHost(databasePath, workspace, epoch) {
+test('Supervisor create with first Turn rolls back only a newly created conversation without an admitted Turn', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'codetether-b4a-host-'))
+  const workspace = join(directory, 'workspace')
+  await mkdir(workspace)
+  let host
+  let fixture
+  try {
+    let nextThread = 0
+    host = await createDurableB4aHost(
+      join(directory, 'state.sqlite3'),
+      workspace,
+      '11111111-1111-4111-8111-111111111111',
+      {
+        startConversation: async () => ({
+          providerThreadId: `provider-thread-${++nextThread}`,
+        }),
+        startTurn: async ({ input }) => {
+          if (input === 'Reject after admission')
+            throw new Error('Provider failed')
+          return { providerTurnId: 'provider-turn-incumbent' }
+        },
+      },
+    )
+    const { service, store } = host
+    fixture = await controlActivationFixture(
+      {},
+      {
+        conversationStore: store,
+        serviceFactory: (identity) =>
+          new Proxy(service, {
+            get(target, property) {
+              if (property === 'getHostIdentity') return () => identity
+              const value = Reflect.get(target, property, target)
+              return typeof value === 'function' ? value.bind(target) : value
+            },
+          }),
+      },
+    )
+    const activation = fixture.activation(authorizationId)
+    fixture.addEvidence(activation, authorizationId)
+    await fixture.manager.activate(activation)
+    const { sessionId } = await fixture.connect(activation)
+    const machineId = service.listMachines().machines[0].machineId
+    const { project } = await fixture.manager.executeRemoteB1Operation(
+      sessionId,
+      {
+        operation: 'project.create',
+        machineId,
+        actionId: 'act_b3a_supervisor_create_project',
+        path: workspace,
+      },
+    )
+    const request = {
+      machineId,
+      projectId: project.projectId,
+      provider: 'codex',
+    }
+    const incumbent = await service.createConversation({
+      ...request,
+      actionId: 'act_b3a_supervisor_incumbent',
+    })
+    const incumbentId = incumbent.data.conversation.conversationId
+    assert.equal(
+      (await fixture.manager.getRemoteAction(sessionId, incumbent.actionId))
+        .status,
+      'completed',
+    )
+    const rejectedActionId = 'act_b3a_supervisor_preadmission'
+    const reservedActionId = `act_${createHash('sha256')
+      .update(`${rejectedActionId}:first-turn`, 'utf8')
+      .digest('hex')}`
+    const incumbentTurn = await service.startTurn(incumbentId, {
+      actionId: reservedActionId,
+      input: { type: 'text', text: 'Existing Turn' },
+    })
+    const { sessionId: lookupSessionId } = await fixture.connect(activation)
+    const reachedFirstTurn = Promise.withResolvers()
+    const releaseFirstTurn = Promise.withResolvers()
+    const startTurn = service.startTurn.bind(service)
+    service.startTurn = async (conversationId, turnRequest) => {
+      reachedFirstTurn.resolve(true)
+      await releaseFirstTurn.promise
+      return await startTurn(conversationId, turnRequest)
+    }
+    const rejected = assert.rejects(
+      fixture.manager.createRemoteConversation(sessionId, {
+        ...request,
+        actionId: rejectedActionId,
+        input: { type: 'text', text: 'Reject before admission' },
+      }),
+      { code: 'conflict' },
+    )
+    try {
+      const reached = await Promise.race([
+        reachedFirstTurn.promise,
+        rejected.then(() => false),
+      ])
+      assert.equal(reached, true)
+      const action = store.getConversationCreateAction(rejectedActionId)
+      assert.ok(action)
+      assert.equal(store.countTurns(action.conversationId), 0)
+      assert.equal(
+        (
+          await fixture.manager.getRemoteAction(
+            lookupSessionId,
+            rejectedActionId,
+          )
+        ).status,
+        'accepted',
+      )
+    } finally {
+      releaseFirstTurn.resolve()
+      await rejected
+    }
+    assert.equal(nextThread, 2)
+    assert.deepEqual(
+      store.listConversations().map(({ conversationId }) => conversationId),
+      [incumbentId],
+    )
+    assert.equal(
+      store.getTurnForStartAction(reservedActionId)?.turnId,
+      incumbentTurn.data.turn.turnId,
+    )
+    assert.equal(
+      (await fixture.manager.getRemoteAction(sessionId, rejectedActionId))
+        .status,
+      'not_found',
+    )
+
+    const admittedActionId = 'act_b3a_supervisor_admitted'
+    await assert.rejects(
+      fixture.manager.createRemoteConversation(sessionId, {
+        ...request,
+        actionId: admittedActionId,
+        input: { type: 'text', text: 'Reject after admission' },
+      }),
+    )
+    const admitted = store.getConversationCreateAction(admittedActionId)
+    assert.ok(admitted)
+    assert.equal(store.countTurns(admitted.conversationId), 1)
+    const result = await fixture.manager.getRemoteAction(
+      sessionId,
+      admittedActionId,
+    )
+    assert.equal(result.actionId, admittedActionId)
+    assert.equal(result.conversationId, admitted.conversationId)
+    assert.equal(result.status, 'failed')
+    assert.equal(store.getTurn(result.turnId)?.status, 'failed')
+  } finally {
+    if (fixture !== undefined) await fixture.close()
+    if (host !== undefined) {
+      await host.service.close().catch(() => undefined)
+      host.store.close()
+    }
+    const resolved = await realpath(directory)
+    assert.equal(dirname(resolved), await realpath(tmpdir()))
+    assert.match(basename(resolved), /^codetether-b4a-host-/u)
+    await rm(resolved, { recursive: true, force: true })
+  }
+})
+
+async function createDurableB4aHost(
+  databasePath,
+  workspace,
+  epoch,
+  runtimeOverrides = {},
+) {
   const store = ConversationStore.open({ databasePath })
   const runtime = {
     provider: 'codex',
@@ -1212,6 +1378,7 @@ async function createDurableB4aHost(databasePath, workspace, epoch) {
     subscribeFailures: () => () => undefined,
     subscribeApprovals: () => () => undefined,
     close: async () => undefined,
+    ...runtimeOverrides,
   }
   const service = new HostService({
     runtime,
@@ -1290,7 +1457,7 @@ test('revoking an old control pairing disconnects its lineage and preserves a ne
 
 async function controlActivationFixture(
   serviceOverrides = {},
-  { withRelay = false, serviceFactory } = {},
+  { withRelay = false, serviceFactory, conversationStore } = {},
 ) {
   const { privateKey, publicKey } = generateKeyPairSync('ec', {
     namedCurve: 'P-256',
@@ -1339,6 +1506,15 @@ async function controlActivationFixture(
   const manager = await SupervisorTransportManager.create({
     service,
     persistence: {
+      ...(conversationStore === undefined
+        ? {}
+        : {
+            getConversationCreateAction: (id) =>
+              conversationStore.getConversationCreateAction(id),
+            getTurnForStartAction: (id) =>
+              conversationStore.getTurnForStartAction(id),
+            getConversation: (id) => conversationStore.getConversation(id),
+          }),
       getHostPresenceConfiguration: () => undefined,
       getHostSupervisorAuthorizationEvidence: (id) => evidence.get(id),
       hasDurableHostSupervisorAuthorizationSuccessor: (id) =>

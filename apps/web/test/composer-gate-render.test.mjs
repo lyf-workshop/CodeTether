@@ -56,7 +56,7 @@ test('submitting keeps the mounted editor visible and readonly with Send disable
   assert.match(markup, /<textarea[^>]*readOnly=""/u)
   assert.match(markup, /aria-disabled="true"/u)
   assert.match(markup, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
-  assert.match(markup, /正在发送消息/u)
+  assert.doesNotMatch(markup, /正在发送消息/u)
   assert.doesNotMatch(markup, /演示/u)
 })
 

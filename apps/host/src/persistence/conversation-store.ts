@@ -3087,6 +3087,52 @@ export class ConversationStore {
     assertChanged(result.changes, 'Conversation', value.conversationId)
   }
 
+  /** Replaces a missing native ID only for the sole, still-unacknowledged Turn. */
+  replaceUnmaterializedLocalCodexSession(input: {
+    readonly conversationId: ConversationId
+    readonly turnId: TurnId
+    readonly previousThreadId: string
+    readonly replacementThreadId: string
+  }): void {
+    const conversationId = ConversationIdSchema.parse(input.conversationId)
+    const turnId = TurnIdSchema.parse(input.turnId)
+    const previous = parseBoundedText(
+      input.previousThreadId,
+      'Provider Thread ID',
+      4096,
+    )
+    const replacement = parseBoundedText(
+      input.replacementThreadId,
+      'Provider Thread ID',
+      4096,
+    )
+    const result = this.#statement(
+      `UPDATE conversations SET provider_thread_id = ?
+       WHERE conversation_id = ?
+         AND provider_thread_id = ?
+         AND provider_thread_id <> ?
+         AND provider = 'codex'
+         AND origin = 'codetether'
+         AND provider_session_materialized = 0
+         AND archived_at IS NULL
+         AND machine_id IN (SELECT machine_id FROM machines WHERE kind = 'local')
+         AND EXISTS (
+           SELECT 1 FROM turns
+           WHERE turns.conversation_id = conversations.conversation_id
+             AND turn_id = ? AND status = 'starting' AND provider_turn_id IS NULL
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM turns
+           WHERE turns.conversation_id = conversations.conversation_id AND turn_id <> ?
+         )`,
+    ).run(replacement, conversationId, previous, replacement, turnId, turnId)
+    if (result.changes === 0 || result.changes === 0n) {
+      throw new NativeProviderSessionBindingConflictError(
+        'Conversation is no longer eligible for first-Turn session recovery',
+      )
+    }
+  }
+
   getConversation(
     conversationId: ConversationId,
   ): DurableConversation | undefined {

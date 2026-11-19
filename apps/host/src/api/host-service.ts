@@ -14,6 +14,7 @@ import {
   type ProviderSessionResumeStatus,
   type ProviderSessionTranscriptReader,
 } from '@codetether/agent-core'
+import { JsonRpcRemoteError } from '@codetether/adapter-codex'
 import {
   ActionIdSchema,
   AdoptProviderSessionResponseSchema,
@@ -236,6 +237,7 @@ import {
   type AgentHostRuntime,
   type ProviderRuntimeInstallation,
 } from './agent-runtime.js'
+import type { LocalProviderReadiness } from './local-provider-readiness.js'
 import { ApprovalRegistry } from './approval-registry.js'
 import {
   listAttention,
@@ -307,6 +309,7 @@ import {
 } from './controller-relay-coordinator.js'
 
 const MAX_PENDING_PROVIDER_EVENTS = 512
+const CREATE_CONVERSATION_WITH_FIRST_TURN = 'conversation.createWithFirstTurn'
 const MAX_PENDING_PROVIDER_EVENT_BYTES = 4 * 1024 * 1024
 const MAX_DISCOVERED_NATIVE_SESSIONS = 1_000
 const PROVIDER_SESSION_ADAPTER_PAGE_SIZE = 100
@@ -406,6 +409,7 @@ export interface HostServiceOptions {
   readonly refreshUnavailableLocalProvider?: (
     provider: AgentProvider,
   ) => Promise<AgentHostRuntime>
+  readonly localProviderReadiness?: LocalProviderReadiness
   /** One Host-owned bounded lifecycle refresh authority per local Provider. */
   readonly refreshLocalProviderLifecycle?: (
     provider: AgentProvider,
@@ -462,6 +466,7 @@ export class HostService {
   readonly #refreshUnavailableLocalProvider?: (
     provider: AgentProvider,
   ) => Promise<AgentHostRuntime>
+  readonly #localProviderReadiness?: LocalProviderReadiness
   readonly #refreshLocalProviderLifecycle?: HostServiceOptions['refreshLocalProviderLifecycle']
   readonly #localProviderRefreshes = new Map<AgentProvider, Promise<void>>()
   readonly #localProviderHandoffGates = new Map<AgentProvider, ExclusiveGate>()
@@ -564,6 +569,7 @@ export class HostService {
     }
     this.#refreshUnavailableLocalProvider =
       options.refreshUnavailableLocalProvider
+    this.#localProviderReadiness = options.localProviderReadiness
     this.#refreshLocalProviderLifecycle = options.refreshLocalProviderLifecycle
     this.#maxConversations = positiveInteger(
       options.maxConversations,
@@ -1477,6 +1483,8 @@ export class HostService {
         this.#refreshLocalProviderForExplicitStart(
           this.#machines.localMachineId(),
           provider,
+          false,
+          true,
         ),
       ),
     )
@@ -1508,7 +1516,12 @@ export class HostService {
           const refreshResults = await Promise.allSettled(
             (['codex', 'claude-code'] as const).map(
               async (provider) =>
-                await this.#refreshLocalProviderForExplicitStart(id, provider),
+                await this.#refreshLocalProviderForExplicitStart(
+                  id,
+                  provider,
+                  false,
+                  true,
+                ),
             ),
           )
           const cleanupFailure = refreshResults.find(
@@ -3723,10 +3736,73 @@ export class HostService {
   async createConversation(
     request: CreateConversationRequest,
   ): Promise<CreateConversationResponse> {
+    return await this.#executeConversationCreate(request, {
+      operation: 'conversation.create',
+      input: request,
+      complete: (response) => response,
+    })
+  }
+
+  isConversationCreateWithFirstTurnPending(
+    actionId: CreateConversationRequest['actionId'],
+  ): boolean {
+    return this.#actions.isPending(
+      actionId,
+      CREATE_CONVERSATION_WITH_FIRST_TURN,
+    )
+  }
+
+  async createConversationWithFirstTurn(
+    request: CreateConversationRequest,
+    firstTurn: StartTurnRequest,
+  ) {
+    return await this.#executeConversationCreate(request, {
+      operation: CREATE_CONVERSATION_WITH_FIRST_TURN,
+      input: { request, firstTurn },
+      beforeCreate: () => this.#assertTurnInputFits(firstTurn.input.text),
+      complete: async (created, isNew) => {
+        const { conversation } = created.data
+        try {
+          const started = await this.startTurn(
+            conversation.conversationId,
+            firstTurn,
+          )
+          return {
+            protocolVersion,
+            actionId: request.actionId,
+            status: started.status,
+            data: { conversation, turn: started.data.turn },
+          }
+        } catch (error) {
+          if (this.#persistence !== undefined && isNew) {
+            this.#rollbackEmptySupervisorConversation(
+              this.#persistence,
+              conversation,
+              request.actionId,
+            )
+          }
+          throw error
+        }
+      },
+    })
+  }
+
+  async #executeConversationCreate<TResult>(
+    request: CreateConversationRequest,
+    action: {
+      readonly operation: string
+      readonly input: unknown
+      readonly beforeCreate?: () => void
+      readonly complete: (
+        response: CreateConversationResponse,
+        isNew: boolean,
+      ) => TResult | Promise<TResult>
+    },
+  ): Promise<TResult> {
     return await this.#executeAction(
       request.actionId,
-      'conversation.create',
-      request,
+      action.operation,
+      action.input,
       async () => {
         const requestDigest = conversationCreateRequestDigest(request)
         const priorAction =
@@ -3751,13 +3827,17 @@ export class HostService {
               503,
             )
           }
-          return {
-            protocolVersion,
-            actionId: request.actionId,
-            status: 'completed',
-            data: { conversation: conversationRecordFromDurable(existing) },
-          }
+          return await action.complete(
+            {
+              protocolVersion,
+              actionId: request.actionId,
+              status: 'completed',
+              data: { conversation: conversationRecordFromDurable(existing) },
+            },
+            false,
+          )
         }
+        action.beforeCreate?.()
         let machine: MachineSummary
         try {
           machine = this.#machines.get(request.machineId)
@@ -3767,10 +3847,10 @@ export class HostService {
         } catch (error) {
           throw machineServiceError(error)
         }
-        return await this.#withLocalProviderHandoff(
+        const created = await this.#withLocalProviderHandoff(
           machine.machineId,
           request.provider,
-          async () => {
+          async (): Promise<CreateConversationResponse> => {
             await this.#refreshLocalProviderForExplicitStart(
               machine.machineId,
               request.provider,
@@ -3929,6 +4009,9 @@ export class HostService {
                       : { reasoning: request.reasoning }),
                   })
                 } catch (error) {
+                  if (machine.machineId === this.#machines.localMachineId()) {
+                    this.#localProviderReadiness?.invalidate(request.provider)
+                  }
                   this.#rollbackCreatingConversation(conversationId)
                   if (
                     !this.#machineRuntimeAvailable(
@@ -4082,9 +4165,50 @@ export class HostService {
             }
           },
         )
+        return await action.complete(created, true)
       },
       false,
     )
+  }
+
+  #rollbackEmptySupervisorConversation(
+    store: ConversationStore,
+    created: ConversationRecord,
+    actionId: CreateConversationRequest['actionId'],
+  ): void {
+    const { conversationId } = created
+    const action = store.getConversationCreateAction(actionId)
+    const durable = store.getConversation(conversationId)
+    const runtime = this.#conversations.get(conversationId)
+    // The compound request owns only the pristine row that it just created.
+    // Retain anything another action touched or a Turn already admitted.
+    if (
+      this.#persistenceFailure !== undefined ||
+      action?.conversationId !== conversationId ||
+      durable === undefined ||
+      durable.status !== 'idle' ||
+      durable.providerSessionMaterialized ||
+      durable.updatedAt !== created.updatedAt ||
+      durable.lastActivityAt !== created.lastActivityAt ||
+      durable.title !== created.title ||
+      durable.titleSource !== created.titleSource ||
+      durable.model !== created.model ||
+      durable.reasoning !== created.reasoning ||
+      durable.pinnedAt !== undefined ||
+      durable.archivedAt !== undefined ||
+      this.#hydrations.has(conversationId) ||
+      (runtime !== undefined &&
+        (runtime.record !== created ||
+          !this.#canEvictRuntimeConversation(conversationId, runtime))) ||
+      store.countTurns(conversationId) !== 0
+    ) {
+      return
+    }
+    this.#writeDurable(() => {
+      store.deleteConversation(conversationId)
+    })
+    this.#evictRuntimeConversation(conversationId)
+    this.publisher.publishSnapshotBoundary(this.#timestamp())
   }
 
   async startTurn(
@@ -4122,26 +4246,7 @@ export class HostService {
             },
           }
         }
-        const inputBytes = Buffer.byteLength(request.input.text, 'utf8')
-        const inputRuntimeBytes = Buffer.byteLength(
-          JSON.stringify(request.input.text),
-          'utf8',
-        )
-        if (
-          inputBytes > this.#runtimeHistory.inputByteLimit ||
-          !this.#runtimeHistory.canRetainInput(request.input.text)
-        ) {
-          throw new HostServiceError(
-            'invalid_request',
-            'Turn input exceeds the Host runtime history byte limit',
-            422,
-            {
-              maxBytes: this.#runtimeHistory.inputByteLimit,
-              actualBytes: inputBytes,
-              runtimeEncodedBytes: inputRuntimeBytes,
-            },
-          )
-        }
+        this.#assertTurnInputFits(request.input.text)
         const runtimeConversation =
           this.#conversations.get(parsedConversationId)?.record
         const durableConversation =
@@ -4191,70 +4296,88 @@ export class HostService {
         } catch (error) {
           throw machineServiceError(error)
         }
-        const { admittedTransportGeneration, conversation } =
-          await this.#withLocalProviderHandoff(
-            conversationMachineId,
-            conversationProvider,
-            async () => {
-              await this.#refreshLocalProviderForExplicitStart(
-                conversationMachineId,
-                conversationProvider,
-                true,
-              )
-              this.#assertMachineRuntimeAvailable(
-                conversationMachineId,
-                conversationProvider,
-              )
-              const admittedTransportGeneration =
-                this.#remoteTransportGeneration(conversationMachineId)
-              assertProviderConfiguration(
-                this.#providerDescriptorsForMachine(conversationMachineId).find(
-                  (descriptor) => descriptor.provider === conversationProvider,
-                ),
-                durableConversation?.model ?? runtimeConversation?.model,
-                durableConversation?.reasoning ??
-                  runtimeConversation?.reasoning,
-              )
-              const releaseRuntimePin =
-                this.#pinRuntimeConversation(parsedConversationId)
-              try {
-                const conversation =
-                  await this.#ensureConversationHydrated(parsedConversationId)
-                if (conversation.record.archivedAt !== undefined) {
-                  throw archivedConversationControlError()
-                }
-                if (
-                  conversation.startingTurn ||
-                  conversation.record.activeTurnId !== undefined
-                ) {
-                  const failure = canonicalFailure(
-                    'conversation_busy',
-                    this.#timestamp(),
-                  )
-                  throw new HostServiceError(
-                    'conflict',
-                    'Conversation already has an active Turn',
-                    409,
-                    undefined,
-                    failure,
-                  )
-                }
-                this.#assertProviderInstallationCapabilities(
-                  conversation.record.machineId,
-                  conversation.record.provider,
-                  conversation.providerInstallationId,
-                  conversation.providerSession !== 'ready' &&
-                    conversation.providerSession !== 'uninitialized',
-                  conversation.record.provider === 'claude-code' &&
-                    conversation.record.reasoning !== undefined,
-                )
-                conversation.startingTurn = true
-                return { admittedTransportGeneration, conversation }
-              } finally {
-                releaseRuntimePin()
+        const {
+          admittedTransportGeneration,
+          conversation,
+          canRecoverFirstCodexTurn,
+        } = await this.#withLocalProviderHandoff(
+          conversationMachineId,
+          conversationProvider,
+          async () => {
+            await this.#refreshLocalProviderForExplicitStart(
+              conversationMachineId,
+              conversationProvider,
+              true,
+            )
+            this.#assertMachineRuntimeAvailable(
+              conversationMachineId,
+              conversationProvider,
+            )
+            const admittedTransportGeneration = this.#remoteTransportGeneration(
+              conversationMachineId,
+            )
+            assertProviderConfiguration(
+              this.#providerDescriptorsForMachine(conversationMachineId).find(
+                (descriptor) => descriptor.provider === conversationProvider,
+              ),
+              durableConversation?.model ?? runtimeConversation?.model,
+              durableConversation?.reasoning ?? runtimeConversation?.reasoning,
+            )
+            const releaseRuntimePin =
+              this.#pinRuntimeConversation(parsedConversationId)
+            try {
+              const conversation =
+                await this.#ensureConversationHydrated(parsedConversationId)
+              if (conversation.record.archivedAt !== undefined) {
+                throw archivedConversationControlError()
               }
-            },
-          )
+              if (
+                conversation.startingTurn ||
+                conversation.record.activeTurnId !== undefined
+              ) {
+                const failure = canonicalFailure(
+                  'conversation_busy',
+                  this.#timestamp(),
+                )
+                throw new HostServiceError(
+                  'conflict',
+                  'Conversation already has an active Turn',
+                  409,
+                  undefined,
+                  failure,
+                )
+              }
+              this.#assertProviderInstallationCapabilities(
+                conversation.record.machineId,
+                conversation.record.provider,
+                conversation.providerInstallationId,
+                conversation.providerSession !== 'ready' &&
+                  conversation.providerSession !== 'uninitialized',
+                conversation.record.provider === 'claude-code' &&
+                  conversation.record.reasoning !== undefined,
+              )
+              // The first Turn is inserted below. Prove the binding had no
+              // earlier work while admission is reserved for this request.
+              const canRecoverFirstCodexTurn =
+                conversation.providerSession === 'needs-resume' &&
+                conversation.origin === 'codetether' &&
+                conversation.record.provider === 'codex' &&
+                conversation.record.machineId ===
+                  this.#machines.localMachineId() &&
+                !conversation.providerSessionMaterialized &&
+                conversation.providerThreadId !== undefined &&
+                this.#persistence?.countTurns(parsedConversationId) === 0
+              conversation.startingTurn = true
+              return {
+                admittedTransportGeneration,
+                conversation,
+                canRecoverFirstCodexTurn,
+              }
+            } finally {
+              releaseRuntimePin()
+            }
+          },
+        )
         this.#touchConversation(conversation.record.conversationId)
         const timestamp = this.#timestamp()
         const turnId = newTurnId()
@@ -4357,6 +4480,7 @@ export class HostService {
             conversation,
             authorizedCwd,
             runtime,
+            canRecoverFirstCodexTurn ? turnId : undefined,
           )
           if (
             this.#remoteTransportLostSince(
@@ -5750,6 +5874,7 @@ export class HostService {
     conversation: ConversationState,
     authorizedCwd: string,
     runtime: AgentHostRuntime,
+    recoverEmptyTurnId?: TurnId,
   ): Promise<void> {
     if (conversation.providerSession === 'ready') {
       const providerThreadId = requireProviderThreadId(conversation)
@@ -5777,34 +5902,49 @@ export class HostService {
             }
       const wasUninitialized = conversation.providerSession === 'uninitialized'
       const existingProviderThreadId = conversation.providerThreadId
+      const startOptions = {
+        cwd: authorizedCwd,
+        ...(conversation.record.model === undefined
+          ? {}
+          : { model: conversation.record.model }),
+        ...(conversation.record.reasoning === undefined
+          ? {}
+          : { reasoning: conversation.record.reasoning }),
+        ...remoteContext,
+      }
+      let replacedThreadId: string | undefined
       const resumed = wasUninitialized
-        ? await runtime.startConversation({
-            cwd: authorizedCwd,
-            ...remoteContext,
-            ...(conversation.record.model === undefined
-              ? {}
-              : { model: conversation.record.model }),
-            ...(conversation.record.reasoning === undefined
-              ? {}
-              : { reasoning: conversation.record.reasoning }),
-          })
-        : await runtime.resumeConversation({
-            providerThreadId: requireProviderThreadId(conversation),
-            cwd: authorizedCwd,
-            providerSessionMaterialized:
-              conversation.providerSessionMaterialized,
-            ...(conversation.record.model === undefined
-              ? {}
-              : { model: conversation.record.model }),
-            ...(conversation.record.reasoning === undefined
-              ? {}
-              : { reasoning: conversation.record.reasoning }),
-            ...remoteContext,
-          })
+        ? await runtime.startConversation(startOptions)
+        : await runtime
+            .resumeConversation({
+              ...startOptions,
+              providerThreadId: requireProviderThreadId(conversation),
+              providerSessionMaterialized:
+                conversation.providerSessionMaterialized,
+            })
+            .catch(async (error: unknown) => {
+              if (
+                recoverEmptyTurnId === undefined ||
+                existingProviderThreadId === undefined ||
+                conversation.providerSessionMaterialized ||
+                !(error instanceof ProviderConversationUnavailableError) ||
+                error.provider !== 'codex' ||
+                error.providerThreadId !== existingProviderThreadId ||
+                !(error.cause instanceof JsonRpcRemoteError) ||
+                !error.cause.missingResumeThread
+              ) {
+                throw error
+              }
+              const replacement = await runtime.startConversation(startOptions)
+              replacedThreadId = existingProviderThreadId
+              return replacement
+            })
       acquiredProviderThreadId = resumed.providerThreadId
       if (
         resumed.providerThreadId.trim().length === 0 ||
+        replacedThreadId === resumed.providerThreadId ||
         (!wasUninitialized &&
+          replacedThreadId === undefined &&
           resumed.providerThreadId !== existingProviderThreadId)
       ) {
         throw new ProviderConversationUnavailableError(
@@ -5830,12 +5970,14 @@ export class HostService {
               candidate.providerThreadId === resumed.providerThreadId,
           ) === true
       ) {
+        if (replacedThreadId !== undefined) acquiredProviderThreadId = undefined
         throw new ProviderConversationUnavailableError(
           conversation.record.provider,
           resumed.providerThreadId,
         )
       }
       if (
+        replacedThreadId === undefined &&
         conversation.record.currentModel === undefined &&
         resumed.model !== undefined &&
         resumed.model !== conversation.record.model
@@ -5856,10 +5998,34 @@ export class HostService {
       // Prompt can cross the remote transport. A retry can therefore resume
       // rather than silently creating a second Provider Session.
       this.#writeDurable(() => {
-        this.#persistence?.updateConversation(
-          this.#durableConversation(conversation),
-        )
+        if (
+          replacedThreadId !== undefined &&
+          recoverEmptyTurnId !== undefined
+        ) {
+          this.#persistence?.replaceUnmaterializedLocalCodexSession({
+            conversationId: conversation.record.conversationId,
+            turnId: recoverEmptyTurnId,
+            previousThreadId: replacedThreadId,
+            replacementThreadId: resumed.providerThreadId,
+          })
+        } else {
+          this.#persistence?.updateConversation(
+            this.#durableConversation(conversation),
+          )
+        }
       })
+      if (
+        replacedThreadId !== undefined &&
+        replacedThreadId !== resumed.providerThreadId
+      ) {
+        this.#providerThreads.delete(
+          providerSessionKey(
+            conversation.record.machineId,
+            conversation.record.provider,
+            replacedThreadId,
+          ),
+        )
+      }
       this.#providerThreads.set(sessionKey, conversation.record.conversationId)
       conversation.providerSession = 'ready'
       retained = true
@@ -5910,6 +6076,9 @@ export class HostService {
     record: TurnRecord,
     error: HostError,
   ): TurnRecord {
+    if (conversation.record.machineId === this.#machines.localMachineId()) {
+      this.#localProviderReadiness?.invalidate(conversation.record.provider)
+    }
     const state: TurnState = {
       record,
       providerItems: new Map(),
@@ -6396,6 +6565,23 @@ export class HostService {
           )
     } catch (error) {
       throw projectServiceError(error)
+    }
+  }
+
+  #assertTurnInputFits(text: string): void {
+    const actualBytes = Buffer.byteLength(text, 'utf8')
+    const maxBytes = this.#runtimeHistory.inputByteLimit
+    if (actualBytes > maxBytes || !this.#runtimeHistory.canRetainInput(text)) {
+      throw new HostServiceError(
+        'invalid_request',
+        'Turn input exceeds the Host runtime history byte limit',
+        422,
+        {
+          maxBytes,
+          actualBytes,
+          runtimeEncodedBytes: Buffer.byteLength(JSON.stringify(text), 'utf8'),
+        },
+      )
     }
   }
 
@@ -7682,7 +7868,6 @@ export class HostService {
     ) {
       return
     }
-    if (!force && this.#localProviderHasActiveTurn(provider)) return
     const current = this.#providers.get(provider)
     if (
       !force &&
@@ -7692,7 +7877,9 @@ export class HostService {
     ) {
       return
     }
-    const inFlight = this.#localProviderRefreshes.get(provider)
+    const inFlight = handoffOwned
+      ? undefined
+      : this.#localProviderRefreshes.get(provider)
     if (inFlight !== undefined) {
       try {
         await inFlight
@@ -7705,13 +7892,33 @@ export class HostService {
       return
     }
     const performRefresh = async (): Promise<void> => {
-      // Admission may have started while an external refresh waited for the
-      // Provider handoff gate. Re-check under the gate so a stale pre-wait
-      // observation cannot replace the runtime now owning that Turn.
-      if (this.#localProviderHasActiveTurn(provider)) return
+      this.#assertProviderOwnershipVerified(machineId, provider)
       const previous = this.#providers.get(provider)
       if (previous === undefined) return
       const knownFatalFailure = this.#runtimeFailures.get(provider)
+      const readiness = this.#localProviderReadiness
+      if (
+        !force &&
+        knownFatalFailure === undefined &&
+        (await readiness?.isCurrent(provider)) === true
+      ) {
+        return
+      }
+      // A refresh never replaces the runtime that owns another Turn. If the
+      // cache missed during admission, wait for the Provider to become idle
+      // before starting execution against a changed or unreadable artifact.
+      if (this.#localProviderHasActiveTurn(provider)) {
+        if (!handoffOwned || force || readiness === undefined) return
+        const failure = canonicalFailure('conversation_busy', this.#timestamp())
+        throw new HostServiceError(
+          'conflict',
+          'Wait for the active Turn before checking the local Provider again',
+          409,
+          undefined,
+          failure,
+        )
+      }
+      readiness?.invalidate(provider)
       const lifecycleResult =
         await this.#refreshLocalProviderLifecycle?.(provider)
       const replacement =
@@ -7811,7 +8018,7 @@ export class HostService {
     const refresh = handoffOwned
       ? performRefresh()
       : this.#withLocalProviderHandoff(machineId, provider, performRefresh)
-    this.#localProviderRefreshes.set(provider, refresh)
+    if (!handoffOwned) this.#localProviderRefreshes.set(provider, refresh)
     try {
       await refresh
     } catch (error) {

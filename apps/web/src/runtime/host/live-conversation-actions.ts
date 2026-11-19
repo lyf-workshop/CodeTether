@@ -126,17 +126,25 @@ export class LiveConversationActions {
     previousEpoch.abort(new HostEpochChangedError())
   }
 
-  startTurn(conversationId: string, text: string): Promise<StartTurnResponse> {
+  startTurn(
+    conversationId: string,
+    text: string,
+    onActionId?: (actionId: ActionId) => void,
+  ): Promise<StartTurnResponse> {
     const conversation = ConversationIdSchema.parse(conversationId)
     const current = this.#starts.get(conversation)
     if (current !== undefined) {
-      if (current.text === text) return current.promise
+      if (current.text === text) {
+        onActionId?.(current.actionId)
+        return current.promise
+      }
       return Promise.reject(new ConversationMutationBusyError('Start Turn'))
     }
 
     const retry = this.#startRetries.get(conversation)
     const actionId =
       retry?.identity === text ? retry.actionId : this.#createActionId()
+    onActionId?.(actionId)
     return this.#beginStart(conversation, text, actionId, 'submit')
   }
 
@@ -148,6 +156,7 @@ export class LiveConversationActions {
   startNewTurn(
     conversationId: string,
     text: string,
+    onActionId?: (actionId: ActionId) => void,
   ): Promise<StartTurnResponse> {
     const conversation = ConversationIdSchema.parse(conversationId)
     const current = this.#starts.get(conversation)
@@ -161,6 +170,7 @@ export class LiveConversationActions {
           new ConversationMutationBusyError('Start Turn reconciliation'),
         )
       }
+      onActionId?.(retry.actionId)
       return this.#beginStart(
         conversation,
         text,
@@ -169,12 +179,9 @@ export class LiveConversationActions {
       )
     }
     this.#startRetries.delete(conversation)
-    return this.#beginStart(
-      conversation,
-      text,
-      this.#createActionId(),
-      'explicit-new-turn',
-    )
+    const actionId = this.#createActionId()
+    onActionId?.(actionId)
+    return this.#beginStart(conversation, text, actionId, 'explicit-new-turn')
   }
 
   #beginStart(

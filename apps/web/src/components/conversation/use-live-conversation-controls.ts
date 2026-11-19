@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import type { ApprovalDecision, ProviderDescriptor } from '@codetether/protocol'
+import type {
+  ActionId,
+  ApprovalDecision,
+  ProviderDescriptor,
+} from '@codetether/protocol'
 
 import type { ConversationReadModel } from '../../runtime/host/conversation-projection.js'
 import { canStartNewTurnAfterFailure } from '../../failures/failure-presentation.js'
@@ -16,6 +21,11 @@ import type {
 } from './conversation-controls.js'
 import { deriveComposerControlState } from './conversation-controls.js'
 import type { ConversationCapabilitiesViewModel } from './conversation-view-model.js'
+import {
+  findOptimisticTurn,
+  rejectOptimisticSend,
+  type OptimisticSend,
+} from './optimistic-send.js'
 
 export function useLiveConversationControls(
   model: ConversationReadModel,
@@ -24,7 +34,20 @@ export function useLiveConversationControls(
 ): ConversationControls {
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
-  const [submitPhase, setSubmitPhase] = useState<ComposerSubmitPhase>('idle')
+  const queryClient = useQueryClient()
+  const sendKey = useMemo(
+    () => ['host', 'optimistic-send', model.id],
+    [model.id],
+  )
+  const { data: send } = useQuery<OptimisticSend | null>({
+    queryKey: sendKey,
+    queryFn: skipToken,
+  })
+  const projectedTurnId = useMemo(
+    () => (send == null ? undefined : findOptimisticTurn(send, model)),
+    [model, send],
+  )
+  const [retryPhase, setRetryPhase] = useState<ComposerSubmitPhase>('idle')
   const [submitError, setSubmitError] = useState<string>()
   const [modelSwitchPending, setModelSwitchPending] = useState(false)
   const [modelSwitchError, setModelSwitchError] = useState<string>()
@@ -54,6 +77,20 @@ export function useLiveConversationControls(
     Readonly<Record<string, ApprovalControlState>>
   >({})
   const approvalGuards = useRef(new Set<string>())
+  const submitPhase: ComposerSubmitPhase =
+    send?.state === 'sending'
+      ? 'submitting'
+      : send?.state === 'accepted'
+        ? 'awaiting-event'
+        : retryPhase
+
+  useEffect(() => {
+    if (send?.state === 'accepted' && projectedTurnId !== undefined) {
+      queryClient.setQueryData<OptimisticSend | null>(sendKey, (current) =>
+        current?.actionId === send.actionId ? null : current,
+      )
+    }
+  }, [projectedTurnId, queryClient, send, sendKey])
 
   useEffect(() => {
     const expected = expectedTurnId.current
@@ -62,7 +99,7 @@ export function useLiveConversationControls(
       model.turns.some((turn) => turn.id === expected)
     ) {
       expectedTurnId.current = undefined
-      setSubmitPhase('idle')
+      setRetryPhase('idle')
       setRetryingTurnId(undefined)
     }
   }, [model.turns])
@@ -97,42 +134,78 @@ export function useLiveConversationControls(
   }, [model.pendingApprovals])
 
   const submit = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (text: string, retryActionId?: ActionId): Promise<boolean> => {
+      const current = queryClient.getQueryData<OptimisticSend | null>(sendKey)
       if (
         submitGuard.current ||
         modelSwitchGuard.current ||
         retryGuard.current ||
         submitPhase !== 'idle' ||
-        !capabilities.canCompose
+        !capabilities.canCompose ||
+        current?.state === 'sending' ||
+        current?.state === 'accepted' ||
+        (current?.state === 'uncertain' && current.text === text) ||
+        (retryActionId !== undefined &&
+          (current?.state !== 'failed' ||
+            !current.canRetry ||
+            current.actionId !== retryActionId ||
+            current.text !== text))
       ) {
         return false
       }
 
       submitGuard.current = true
       setSubmitError(undefined)
-      setSubmitPhase('submitting')
+      let attempt: OptimisticSend | undefined
       try {
-        const response = await runtime.startTurn(model.id, text)
-        const turnId = String(response.data.turn.turnId)
-        expectedTurnId.current = turnId
-        const projected = runtime.projection?.conversations[model.id]
-        if (projected?.turns.some((turn) => turn.id === turnId)) {
-          expectedTurnId.current = undefined
-          setSubmitPhase('idle')
-        } else {
-          setSubmitPhase('awaiting-event')
+        const onActionId = (actionId: ActionId) => {
+          attempt = {
+            state: 'sending',
+            actionId,
+            text,
+            timestamp: new Date().toISOString(),
+            previousTurnIds: new Set(model.turns.map((turn) => turn.id)),
+          }
+          queryClient.setQueryData<OptimisticSend>(sendKey, attempt)
+        }
+        const response =
+          retryActionId === undefined
+            ? await runtime.startTurn(model.id, text, onActionId)
+            : await runtime.startNewTurn(model.id, text, onActionId)
+        if (attempt !== undefined) {
+          const accepted: OptimisticSend = {
+            ...attempt,
+            state: 'accepted',
+            turnId: String(response.data.turn.turnId),
+          }
+          queryClient.setQueryData<OptimisticSend | null>(sendKey, (entry) =>
+            entry?.actionId === accepted.actionId ? accepted : entry,
+          )
         }
         return true
       } catch (error) {
-        expectedTurnId.current = undefined
-        setSubmitPhase('idle')
-        setSubmitError(mutationErrorMessage(error, '发送消息'))
+        if (attempt === undefined) {
+          setSubmitError(mutationErrorMessage(error, '发送消息'))
+        } else {
+          const failure = rejectOptimisticSend(attempt, error)
+          queryClient.setQueryData<OptimisticSend | null>(sendKey, (entry) =>
+            entry?.actionId === failure.actionId ? failure : entry,
+          )
+        }
         return false
       } finally {
         submitGuard.current = false
       }
     },
-    [capabilities.canCompose, model.id, runtime, submitPhase],
+    [
+      capabilities.canCompose,
+      model.id,
+      model.turns,
+      queryClient,
+      runtime,
+      sendKey,
+      submitPhase,
+    ],
   )
 
   const retryFailedTurn = useCallback(
@@ -160,7 +233,7 @@ export function useLiveConversationControls(
       setRetryErrorTurnId(undefined)
       setRetryError(undefined)
       setSubmitError(undefined)
-      setSubmitPhase('submitting')
+      setRetryPhase('submitting')
       try {
         const response = await runtime.startNewTurn(model.id, input)
         const newTurnId = String(response.data.turn.turnId)
@@ -168,14 +241,14 @@ export function useLiveConversationControls(
         const projected = runtime.projection?.conversations[model.id]
         if (projected?.turns.some((candidate) => candidate.id === newTurnId)) {
           expectedTurnId.current = undefined
-          setSubmitPhase('idle')
+          setRetryPhase('idle')
           setRetryingTurnId(undefined)
         } else {
-          setSubmitPhase('awaiting-event')
+          setRetryPhase('awaiting-event')
         }
       } catch (error) {
         expectedTurnId.current = undefined
-        setSubmitPhase('idle')
+        setRetryPhase('idle')
         setRetryingTurnId(undefined)
         setRetryErrorTurnId(turnId)
         setRetryError(mutationErrorMessage(error, '开始新的重试轮次'))
@@ -350,12 +423,28 @@ export function useLiveConversationControls(
       submitPhase,
     ],
   )
+  const composerError =
+    submitError ??
+    (send?.state === 'failed' || send?.state === 'uncertain'
+      ? send.message
+      : undefined)
+  const optimisticSend = useMemo(
+    () =>
+      send == null
+        ? undefined
+        : {
+            ...send,
+            ...(projectedTurnId === undefined ? {} : { projectedTurnId }),
+          },
+    [projectedTurnId, send],
+  )
 
   return useMemo(
     () => ({
       composer: {
         state: composerState,
-        ...(submitError === undefined ? {} : { error: submitError }),
+        ...(composerError === undefined ? {} : { error: composerError }),
+        ...(optimisticSend === undefined ? {} : { optimisticSend }),
         submit,
       },
       modelSwitch: {
@@ -402,6 +491,7 @@ export function useLiveConversationControls(
       capabilities.canCompose,
       capabilities.composerDisabled,
       composerState,
+      composerError,
       interrupt,
       interruptError,
       interruptingTurnId,
@@ -410,6 +500,7 @@ export function useLiveConversationControls(
       modelCatalog,
       model.id,
       modelCatalogLoading,
+      optimisticSend,
       resolveApproval,
       retryError,
       retryErrorTurnId,
@@ -417,7 +508,6 @@ export function useLiveConversationControls(
       retryingTurnId,
       refreshModels,
       submit,
-      submitError,
       submitPhase,
       updateModel,
     ],

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import {
   ConversationIdSchema,
@@ -57,6 +57,7 @@ export function ConversationWorkspace({
   targetTurnId,
   projectId,
 }: ConversationWorkspaceProps) {
+  const composerFormId = useId()
   const [modelControlRequest, setModelControlRequest] = useState(0)
   const wasArchivedRef = useRef(viewModel.archivedAt !== undefined)
   const conversationId = ConversationIdSchema.safeParse(viewModel.id)
@@ -164,6 +165,14 @@ export function ConversationWorkspace({
             : () => setModelControlRequest((value) => value + 1)
         }
         retryController={controls?.failedTurnRetry}
+        optimisticSend={archived ? undefined : controls.composer.optimisticSend}
+        composerFormId={composerFormId}
+        canRetrySend={
+          viewModel.capabilities.canCompose &&
+          controls.modelSwitch?.pending !== true &&
+          (controls.composer.state === 'idle' ||
+            controls.composer.state === 'interrupted')
+        }
         targetChangeId={targetChangeId}
         targetChangeRequestKey={targetChangeRequestKey}
         targetTurnId={targetTurnId}
@@ -180,6 +189,7 @@ export function ConversationWorkspace({
       ) : null}
       <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-5 max-sm:px-4">
         <Composer
+          formId={composerFormId}
           key={`${viewModel.id}:${archived ? 'archived' : 'active'}`}
           conversationId={viewModel.id}
           capabilities={viewModel.capabilities}

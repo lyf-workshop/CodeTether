@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createDom } from './fixtures/dom.mjs'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const {
+  COMPOSER_SEND_SHORTCUT_EVENT,
   COMPOSER_SEND_SHORTCUT_KEY,
   readComposerSendShortcut,
   writeComposerSendShortcut,
@@ -13,6 +15,7 @@ test('send shortcut defaults to Enter and persists the chosen mode', () => {
   const data = new Map()
   const events = []
   globalThis.window = {
+    Event,
     localStorage: {
       getItem: (key) => data.get(key) ?? null,
       setItem: (key, value) => data.set(key, value),
@@ -33,17 +36,28 @@ test('send shortcut defaults to Enter and persists the chosen mode', () => {
   }
 })
 
-test('inaccessible storage falls back for reads and reports failed writes', () => {
-  const previousWindow = globalThis.window
-  globalThis.window = {
-    get localStorage() {
+test('shortcut changes remain usable in the current window when storage throws', async (t) => {
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const original = Object.getOwnPropertyDescriptor(dom.window, 'localStorage')
+  Object.defineProperty(dom.window, 'localStorage', {
+    configurable: true,
+    get() {
       throw new Error('storage unavailable')
     },
-  }
+  })
+  const changes = []
+  dom.window.addEventListener(COMPOSER_SEND_SHORTCUT_EVENT, () => {
+    changes.push(readComposerSendShortcut())
+  })
   try {
     assert.equal(readComposerSendShortcut(), 'enter')
-    assert.throws(() => writeComposerSendShortcut('ctrl-enter'))
+    writeComposerSendShortcut('ctrl-enter')
+    assert.equal(readComposerSendShortcut(), 'ctrl-enter')
   } finally {
-    globalThis.window = previousWindow
+    Object.defineProperty(dom.window, 'localStorage', original)
+    writeComposerSendShortcut('enter')
   }
+  assert.equal(readComposerSendShortcut(), 'enter')
+  assert.deepEqual(changes, ['ctrl-enter', 'enter'])
 })

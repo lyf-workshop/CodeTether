@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import * as reactQuery from '@tanstack/react-query'
 import { createDom, h } from './fixtures/dom.mjs'
 import { loadWebComponent } from './fixtures/render-ui.mjs'
 
@@ -9,8 +10,12 @@ const catalog = {
 }
 
 async function fixture(t, initial = {}) {
+  const client = new reactQuery.QueryClient()
   const dom = await createDom()
-  t.after(() => dom.close())
+  t.after(async () => {
+    await dom.close()
+    client.clear()
+  })
   dom.window.HTMLElement.prototype.scrollIntoView = () => {}
   const requests = []
   const runtime = {
@@ -23,6 +28,7 @@ async function fixture(t, initial = {}) {
   let connectionState = 'connected'
   let controls
   const dependencies = new Map([
+    ['@tanstack/react-query', reactQuery],
     [
       '../../runtime/host/host-runtime-hooks.js',
       {
@@ -73,7 +79,9 @@ async function fixture(t, initial = {}) {
   }
   const render = async (next = {}) => {
     props = { ...props, ...next }
-    await dom.render(h(Probe, props))
+    await dom.render(
+      h(reactQuery.QueryClientProvider, { client }, h(Probe, props)),
+    )
   }
   await render()
   return {

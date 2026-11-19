@@ -324,9 +324,10 @@ Task 1c's Windows part was done on 2026-11-16, and Claude Code accepted it. Its 
    - Done: 21 merged remote branches deleted with approval. Leftover folders are listed in `release-v0.1.0-alpha.3.md`.
 6. **Generate the update signing key pair** (05 §7, decision 2). Done on 2026-11-15; the public key is `docs/release/codetether-update.key.pub`. Base URL: `https://codetether.org/updates` (decision 1).
 7. **Relay:** deferred (AD-13). If task 4 has not shipped by 2026-12-15, approve a short task that copies the renewed certificate and restarts the Relay before 2027-01-01. Postponed with remote work (2026-11-18). If nothing is done, paired phones and remote computers stop connecting on 2027-01-01. Local use of the Windows app does not go through the Relay.
-8. **Upload `latest.json`.** Copy `D:/Projects/Software/agenthub-archive/alpha3-update-source-windows/latest.json` to us-vps-01 so that it is served at `https://codetether.org/updates/alpha/latest.json`. Until then, "check for updates" shows an error on alpha.3. Superseded by R4: the Owner uploads alpha.4's `latest.json` instead (`release-alpha4-prompt.md`, goal 8).
+8. **Upload `latest.json`.** Copy `D:/Projects/Software/agenthub-archive/alpha3-update-source-windows/latest.json` to us-vps-01 so that it is served at `https://codetether.org/updates/alpha/latest.json`. Until then, "check for updates" shows an error on alpha.3. Superseded by R4: the release agent uploads alpha.4's `latest.json` instead (`release-alpha4-prompt.md`, goal 8).
 9. **Codex's default model** (W0-01). Done on 2026-11-18: the Owner changed the Windows Codex configuration from `gpt-6.2-sol`, which this account cannot use, to `gpt-6.1-sol`, which W0 verified. W0b can start.
    - The Owner approved pushing `main` for W0a; it merged on 2026-11-18 (`9cb3e5b`).
+10. **Releases without the Owner's hands** (2026-11-19). From alpha.4 on, the release agent signs, uploads to us-vps-01, runs the one-click update in the installed app and runs the acceptance checks. The Owner types the signing password once, the first time, into a window the agent opens; it is then stored encrypted for the Owner's Windows account (05 §7). The Owner still approves pushing `main` and the tag, and any web server change.
 
 ## 4. Backlog (not scheduled)
 

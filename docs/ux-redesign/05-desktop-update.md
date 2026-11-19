@@ -35,20 +35,20 @@ Date — 2026-11-01. References are `main` 0f624ae (v0.1.0-alpha.2), the U1 row 
 
 Place the version row in the first card on the About page, below the CodeTether name.
 
-| State | Text on the Left | Button on the Right |
-| -------------------- | ----------------------------------------------------------------------- | ------------------------ |
-| Updates not configured in this build | Version 0.1.0-alpha.3 · Automatic updates are not configured in this build | None |
-| Up to date | Version x · You are up to date · Last checked 3 minutes ago | Check for updates |
-| Checking | Version x · Checking for updates… | Check for updates (disabled) |
-| New version available | Version y is available (current x), with plain-text release notes below, up to 6 lines with expansion | Update to y |
-| Downloading | Downloading y · 42% | None |
-| Downloaded, conversations active | Downloaded y. Two conversations are running or awaiting approval. Update after they finish, without interrupting them. | Restart and update (disabled) |
-| Downloaded, ready to update | Downloaded y. CodeTether will close for a few seconds during the update, then reopen automatically. | Restart and update |
-| Updating | Closing the local service and installing y… | None |
-| Check failed | Unable to check for updates right now. Try again later. | Retry |
-| Download failed | Downloading y did not finish. Please retry. | Retry |
-| Invalid signature | The download failed verification and was not installed. Try again later. Contact us if it keeps failing. | Retry |
-| Installation failed | The update did not finish. The current version remains usable. | Retry |
+| State                                | Text on the Left                                                                                                       | Button on the Right           |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Updates not configured in this build | Version 0.1.0-alpha.3 · Automatic updates are not configured in this build                                             | None                          |
+| Up to date                           | Version x · You are up to date · Last checked 3 minutes ago                                                            | Check for updates             |
+| Checking                             | Version x · Checking for updates…                                                                                      | Check for updates (disabled)  |
+| New version available                | Version y is available (current x), with plain-text release notes below, up to 6 lines with expansion                  | Update to y                   |
+| Downloading                          | Downloading y · 42%                                                                                                    | None                          |
+| Downloaded, conversations active     | Downloaded y. Two conversations are running or awaiting approval. Update after they finish, without interrupting them. | Restart and update (disabled) |
+| Downloaded, ready to update          | Downloaded y. CodeTether will close for a few seconds during the update, then reopen automatically.                    | Restart and update            |
+| Updating                             | Closing the local service and installing y…                                                                            | None                          |
+| Check failed                         | Unable to check for updates right now. Try again later.                                                                | Retry                         |
+| Download failed                      | Downloading y did not finish. Please retry.                                                                            | Retry                         |
+| Invalid signature                    | The download failed verification and was not installed. Try again later. Contact us if it keeps failing.               | Retry                         |
+| Installation failed                  | The update did not finish. The current version remains usable.                                                         | Retry                         |
 
 - Display release notes only as plain text. Do not interpret HTML or Markdown links. Truncate notes beyond 2,000 characters.
 - Count active local conversations by status `running` or `waiting`, rather than relying only on `activeTurns`.
@@ -139,6 +139,9 @@ Place the version row in the first card on the About page, below the CodeTether 
 
 1. Update hosting was decided on 2026-11-01 as us-vps-01. The tentative base URL is `https://codetether.org/updates`, giving a check URL of `https://codetether.org/updates/alpha/latest.json`. Website source exists only on the VPS. You upload and maintain this directory, and the coding agent does not log into the VPS. You may change the exact path, which determines only `CODETETHER_UPDATE_BASE_URL`.
    - **Decided 2026-11-15:** `CODETETHER_UPDATE_BASE_URL=https://codetether.org/updates`.
+   - **Changed 2026-11-19 (the Owner):** the release agent uploads the update files over this computer's existing SSH access, starting with alpha.4 (`docs/reviews/release-alpha4-prompt.md`). It asks before any web server configuration change.
 2. Generate the update signing private key on your own computer with Tauri CLI's `tauri signer generate`. Store it outside the repository with a password. Provide the public key for the release documentation. The coding agent will include commands directly usable on this computer in its report.
    - **Done 2026-11-15.** The key pair was generated on the Windows computer and is stored outside the repository, password-protected. The public key (minisign key ID `39A9367FBD7A5F67`) is [`docs/release/codetether-update.key.pub`](../release/codetether-update.key.pub); its exact content, without a trailing newline, is `CODETETHER_UPDATE_PUBKEY`. The private key and its password stay with the Owner. Agents receive them only for a release that produces update files.
+   - **Changed 2026-11-19 (the Owner):** releases run without the Owner's hands. The Owner types the password once into a window the release agent opens. It is stored encrypted with Windows DPAPI for the Owner's account on the Windows computer (`%USERPROFILE%/.codetether-release/`), and later releases sign with it. The key and the password never leave that computer and never appear in output, logs or the repository.
 3. After implementation and review, manually install alpha.3, release alpha.4, and perform one update each on Windows and Mac.
+   - **Changed 2026-11-19:** Windows only for now (AD-13). The release agent performs the update in the installed app and runs the acceptance checks; the Owner reads the report.

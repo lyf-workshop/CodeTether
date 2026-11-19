@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  ChevronDown,
   CirclePause,
   FolderOpen,
   LoaderCircle,
@@ -21,7 +20,18 @@ import {
   WifiOff,
 } from 'lucide-react'
 
-import { AgentBadge, Button, Textarea, cn, type AgentId } from '@codetether/ui'
+import {
+  AgentBadge,
+  type AgentId,
+  Button,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+  Textarea,
+  cn,
+} from '@codetether/ui'
 
 import type {
   ConversationCapabilitiesViewModel,
@@ -30,8 +40,10 @@ import type {
 import {
   draftAfterSubmit,
   shouldSubmitComposerKey,
+  type ComposerModelSettings,
   type ComposerController,
   type InterruptController,
+  type ModelSwitchController,
 } from './conversation-controls'
 import {
   composerGatePresentation,
@@ -48,10 +60,13 @@ interface ComposerProps {
   conversationId: string
   capabilities: ConversationCapabilitiesViewModel
   controller: ComposerController
+  modelSettings?: ComposerModelSettings
+  modelSwitchController?: ModelSwitchController
   interruptController?: InterruptController
   context?: ConversationDisplayContext
   providerName?: string
   agent?: AgentId
+  modelControlRequest?: number
   model?: string
   previousUserInput?: string
   archived?: boolean
@@ -64,11 +79,19 @@ export function Composer({
   conversationId,
   capabilities,
   controller,
+  modelSettings = {
+    availableModels: [],
+    reasoningOptions: [],
+    canSelectModel: false,
+    canSelectReasoning: false,
+  },
+  modelSwitchController,
   interruptController,
   context,
   providerName = 'AI 工具',
   agent,
   model,
+  modelControlRequest = 0,
   previousUserInput,
   archived = false,
   projectBoundary,
@@ -95,9 +118,52 @@ export function Composer({
   })
   const canEdit = gate === undefined
   const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
-  const canSend = canEdit && value.trim().length > 0
+  const canSend =
+    canEdit &&
+    modelSwitchController?.pending !== true &&
+    value.trim().length > 0
   const feedback =
-    controller.error ?? interruptController?.error ?? externalError
+    controller.error ??
+    modelSwitchController?.error ??
+    interruptController?.error ??
+    externalError
+  const modelCanChange =
+    canEdit && !archived && modelSwitchController?.pending !== true
+  const availableModels =
+    modelSwitchController?.catalog === undefined
+      ? (modelSettings?.availableModels ?? [])
+      : (modelSwitchController.catalog.availableModels ?? [])
+  const reasoningOptions =
+    modelSwitchController?.catalog === undefined
+      ? (modelSettings?.reasoningOptions ?? [])
+      : (modelSwitchController.catalog.reasoningOptions ?? [])
+  const [modelOpen, setModelOpen] = useState(false)
+  const modelTriggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (modelControlRequest > 0) {
+      modelTriggerRef.current?.focus()
+      modelTriggerRef.current?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+      )
+    }
+  }, [modelControlRequest])
+  const catalog = modelSwitchController?.catalog
+  const modelMissing =
+    catalog?.availableModels !== undefined &&
+    modelSettings?.currentModel !== undefined &&
+    !catalog.availableModels.some(
+      (item) => item.id === modelSettings.currentModel,
+    )
+  const currentModel = modelSettings?.currentModel ?? model
+  const modelName =
+    availableModels.find((model) => model.id === currentModel)?.name ??
+    currentModel ??
+    '默认模型'
+  const currentReasoning = modelSettings?.currentReasoning
+  const reasoningName =
+    reasoningOptions.find((option) => option.id === currentReasoning)?.label ??
+    currentReasoning ??
+    '默认'
   const placeholder =
     agent === 'codex'
       ? '告诉 Codex 要做什么…'
@@ -256,37 +322,106 @@ export function Composer({
           gate?.kind === 'waiting' && 'border-warning/45',
         )}
       >
-        <div className="flex h-8 min-w-0 items-center gap-2 rounded-t-xl bg-surface-inset px-3 text-xs text-text-secondary">
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            {agent === undefined ? (
-              <span className="truncate font-medium text-text-primary">
-                {providerName}
-              </span>
+        {modelSettings === undefined ? null : (
+          <div className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border px-4 py-2 text-xs text-text-secondary">
+            <AgentBadge agent={agent ?? 'codex'} size="sm" />
+            <span aria-hidden="true">·</span>
+            {modelSettings.canSelectModel &&
+            modelSwitchController !== undefined ? (
+              <Select
+                open={modelOpen}
+                value={
+                  availableModels.some((model) => model.id === currentModel)
+                    ? currentModel
+                    : undefined
+                }
+                onOpenChange={(open) => {
+                  setModelOpen(open)
+                  if (open) void modelSwitchController.refreshModels()
+                }}
+                onValueChange={(model) =>
+                  void modelSwitchController.update({ model })
+                }
+                disabled={!modelCanChange}
+              >
+                <SelectTrigger
+                  size="sm"
+                  ref={modelTriggerRef}
+                  aria-label={`切换模型，当前 ${modelName}`}
+                  className="h-7 w-auto max-w-52 border-0 bg-transparent px-1 text-xs shadow-none"
+                >
+                  <SelectValue placeholder={modelName} />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableModels.map((model) => (
+                    <SelectItem
+                      key={model.id}
+                      value={model.id}
+                      title={model.description}
+                    >
+                      {model.name}
+                    </SelectItem>
+                  ))}
+                  {availableModels.length === 0 ? (
+                    <div
+                      role="status"
+                      className="px-2 py-2 text-xs text-text-muted"
+                    >
+                      {modelSwitchController.loadingModels
+                        ? '正在读取模型…'
+                        : '暂无可用模型'}
+                    </div>
+                  ) : null}
+                </SelectContent>
+              </Select>
             ) : (
-              <AgentBadge agent={agent} size="sm" className="min-w-0" />
-            )}
-            {model === undefined || model === '默认模型' ? null : (
-              <span className="truncate" title={model}>
-                · {model}
+              <span className="min-w-0 truncate" title={modelName}>
+                {modelName}
               </span>
             )}
-          </span>
-          <span className="hidden shrink-0 text-text-muted sm:inline">
-            剩余上下文
-          </span>
-          <span title="模型切换功能开发中" className="shrink-0">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled
-              className="h-7 px-2"
-              aria-label="模型切换功能开发中"
-            >
-              模型 <ChevronDown aria-hidden="true" className="size-3" />
-            </Button>
-          </span>
-        </div>
+            <span className="hidden shrink-0 text-text-muted sm:inline">
+              剩余上下文
+            </span>
+            {modelSettings.canSelectReasoning &&
+            modelSwitchController !== undefined ? (
+              <Select
+                value={
+                  reasoningOptions.some(
+                    (option) => option.id === currentReasoning,
+                  )
+                    ? currentReasoning
+                    : undefined
+                }
+                onValueChange={(reasoning) =>
+                  void modelSwitchController.update({ reasoning })
+                }
+                disabled={!modelCanChange}
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={`调整推理强度，当前 ${reasoningName}`}
+                  className="ml-auto h-7 w-auto max-w-36 border-0 bg-transparent px-1 text-xs shadow-none"
+                >
+                  <SelectValue placeholder={`推理：${reasoningName}`} />
+                </SelectTrigger>
+                <SelectContent>
+                  {reasoningOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : currentReasoning === undefined ? null : (
+              <span className="ml-auto truncate">推理：{reasoningName}</span>
+            )}
+          </div>
+        )}
+        {modelMissing ? (
+          <p role="status" className="px-4 py-2 text-xs text-warning-text">
+            {currentModel} 不在此账号的可用模型中
+          </p>
+        ) : null}
         {/* Submission and active work keep the same focused, read-only editor.
             Only archived/unavailable gates replace the visible input. */}
         <div hidden={editorHidden} data-composer-editor className="min-w-0">

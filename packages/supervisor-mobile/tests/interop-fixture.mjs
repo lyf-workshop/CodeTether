@@ -188,6 +188,9 @@ const control = {
     tagged(request.operation, recordAction(request)),
   createConversation: (request) =>
     tagged(request.operation, { ...recordAction(request), conversationId }),
+  updateConversationModel: (request) =>
+    tagged(request.operation, recordAction(request)),
+  refreshConversationModels: (request) => tagged(request.operation),
 }
 
 function operations(request) {

@@ -5,6 +5,7 @@ import {
   ClaudeCodeOwnedProcessCleanupError,
   ClaudeCodeSessionRuntime,
   type ClaudeCodeEffort,
+  type ClaudeCodeModel,
   type ClaudeCodeLauncher,
   type ClaudeCodeProcessSpecification,
   type ClaudeCodeTurnResult,
@@ -42,11 +43,13 @@ interface RemoteClaudeSessionRuntime {
     readonly turnId: string
     readonly prompt: string
     readonly effort?: ClaudeCodeEffort
+    readonly model?: ClaudeCodeModel
   }): Promise<ClaudeCodeTurnResult>
   startTurnExecution?(options: {
     readonly turnId: string
     readonly prompt: string
     readonly effort?: ClaudeCodeEffort
+    readonly model?: ClaudeCodeModel
   }): {
     readonly ownershipEstablished: Promise<void>
     readonly completion: Promise<ClaudeCodeTurnResult>
@@ -518,8 +521,7 @@ export class RemoteClaudeRunner {
       canonicalRoot === this.canonicalRoot &&
       request.providerSessionId !== undefined &&
       request.providerSessionId === this.providerSessionId &&
-      request.providerSessionMaterialized === materialized &&
-      request.effort === this.effort
+      request.providerSessionMaterialized === materialized
     )
   }
 
@@ -579,10 +581,12 @@ export class RemoteClaudeRunner {
     )
     this.#activeTurn = turn
     this.#rememberAction(request.actionId, turn)
+    const effort = request.effort === undefined ? this.effort : request.effort
     const turnOptions = {
       turnId: providerTurnId,
       prompt: request.prompt,
-      ...(this.effort === undefined ? {} : { effort: this.effort }),
+      ...(effort == null ? {} : { effort }),
+      ...(request.model === undefined ? {} : { model: request.model }),
     }
     let execution:
       | ReturnType<
@@ -1356,6 +1360,16 @@ function turnRequestHash(request: ClaudeTurnStartMessage): string {
     .update(request.providerSessionId)
     .update('\0')
     .update(request.prompt)
+    .update('\0')
+    .update(request.model ?? '')
+    .update('\0')
+    .update(
+      request.effort === undefined
+        ? 'unset'
+        : request.effort === null
+          ? 'null'
+          : `value:${request.effort}`,
+    )
     .digest('base64url')
 }
 

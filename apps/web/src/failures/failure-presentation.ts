@@ -19,6 +19,7 @@ export interface FailureTechnicalDetail {
 }
 
 export interface ExecutionFailurePresentation {
+  readonly modelUnavailable?: boolean
   readonly title: string
   readonly cause: string
   readonly guidance: string
@@ -313,6 +314,7 @@ export function executionFailurePresentation(
       : '本轮工作可能不完整。已保存的会话历史仍可查看。',
     canStartNewTurn,
     ...(navigation === undefined ? {} : { navigation }),
+    modelUnavailable: failure?.reason === 'provider_model_unavailable',
     technicalDetails: technicalDetails(error, failure),
   }
 }

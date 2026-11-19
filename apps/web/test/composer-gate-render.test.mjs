@@ -155,6 +155,43 @@ function controller(state) {
   }
 }
 
+test('catalog warnings preserve the unavailable model and require a readable catalog', () => {
+  const modelSettings = {
+    currentModel: 'account-unavailable-model',
+    availableModels: [],
+    reasoningOptions: [],
+    canSelectModel: true,
+    canSelectReasoning: false,
+  }
+  const control = {
+    pending: false,
+    loadingModels: false,
+    async refreshModels() {},
+    async update() {},
+  }
+  const renderCatalog = (catalog) =>
+    render({
+      modelSettings,
+      modelSwitchController: { ...control, catalog },
+    })
+  const markup = renderCatalog({
+    availableModels: [{ id: 'available-model', name: 'Available' }],
+  })
+  assert.match(markup, /account-unavailable-model 不在此账号的可用模型中/u)
+  assert.match(markup, /切换模型，当前 account-unavailable-model/u)
+  assert.match(markup, /附件即将推出/u)
+  assert.match(markup, /语音即将推出/u)
+  assert.match(markup, /剩余上下文/u)
+  assert.doesNotMatch(markup, /模型切换功能开发中/u)
+  for (const catalog of [
+    undefined,
+    {},
+    { availableModels: [{ id: modelSettings.currentModel, name: 'Current' }] },
+  ]) {
+    assert.doesNotMatch(renderCatalog(catalog), /不在此账号的可用模型中/u)
+  }
+})
+
 for (const [reason, title] of [
   ['project_location_missing', '这台电脑缺少项目位置'],
   ['project_location_invalid', '已注册的项目位置已改变'],

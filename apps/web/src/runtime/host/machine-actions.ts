@@ -442,6 +442,8 @@ export function machineErrorMessage(
       return 'CodeTether 本地服务暂时不可用。'
     case 'unsupported':
       return '当前 CodeTether 版本不支持这项设备操作。'
+    case 'operation_not_allowed':
+      return '当前状态不允许这项设备操作。'
     case 'machine_has_project_locations':
       return '这台电脑仍有已添加的项目，请先从这台设备移除这些项目，再取消配对。'
     case 'internal':

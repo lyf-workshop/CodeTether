@@ -159,6 +159,52 @@ test('Turn and interrupt never initialize a cold execution runtime', async () =>
   await runtime.close()
 })
 
+test('explicit catalog refresh hydrates Codex without opening a conversation', async () => {
+  const fixture = createFixture()
+  const runtime = CodexHostRuntime.deferred(fixture.options)
+  try {
+    assert.equal(runtime.descriptor.availableModels, undefined)
+    assert.equal(fixture.launches.length, 0)
+    const pending = runtime.refreshAvailableModels()
+    await fixture.waitForMethod('initialize', 1)
+    fixture.initialize()
+    await fixture.waitForMethod('model/list', 1)
+    fixture.respond(
+      fixture.written.find(({ method }) => method === 'model/list'),
+      {
+        data: [
+          {
+            id: 'catalog-preset',
+            model: 'gpt-test-model',
+            displayName: 'Test Model',
+            description: 'A test catalog item',
+            hidden: false,
+            supportedReasoningEfforts: [
+              { reasoningEffort: 'low', description: 'Fast' },
+            ],
+          },
+        ],
+        nextCursor: null,
+      },
+    )
+    const catalog = await pending
+    assert.deepEqual(catalog[0].reasoningOptions, ['low'])
+    assert.deepEqual(runtime.descriptor.availableModels, [
+      {
+        id: 'gpt-test-model',
+        name: 'Test Model',
+        description: 'A test catalog item',
+      },
+    ])
+    assert.deepEqual(
+      fixture.written.map(({ method }) => method),
+      ['initialize', 'initialized', 'model/list'],
+    )
+  } finally {
+    await runtime.close()
+  }
+})
+
 test('explicit eager launch retains its accepted initialization behavior', async () => {
   const fixture = createFixture()
   const pending = CodexHostRuntime.launch(fixture.options)

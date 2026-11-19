@@ -13,6 +13,7 @@ interface ConversationFailureCardProps {
   readonly machineId?: MachineId
   readonly projectId?: ProjectId
   readonly retryController?: FailedTurnRetryController
+  readonly onOpenModelControl?: () => void
   readonly turnId: string
 }
 
@@ -22,6 +23,7 @@ export function ConversationFailureCard({
   projectId,
   retryController,
   turnId,
+  onOpenModelControl,
 }: ConversationFailureCardProps) {
   const titleId = useId()
   const descriptionId = useId()
@@ -63,6 +65,11 @@ export function ConversationFailureCard({
           </div>
 
           <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
+            {failure.modelUnavailable && onOpenModelControl ? (
+              <Button type="button" size="sm" onClick={onOpenModelControl}>
+                选择可用模型
+              </Button>
+            ) : null}
             {retryAvailable ? (
               <Button
                 type="button"

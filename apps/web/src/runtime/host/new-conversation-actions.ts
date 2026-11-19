@@ -203,6 +203,8 @@ export function newConversationErrorMessage(
       return `${providerName} 版本不受支持。`
     case 'unsupported':
       return `当前 CodeTether 版本不支持创建 ${providerName} 会话。`
+    case 'operation_not_allowed':
+      return `当前不能创建 ${providerName} 会话。`
     case 'timeout':
       return '创建会话等待超时，请重试。'
     case 'provider_error':

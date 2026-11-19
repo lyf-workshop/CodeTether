@@ -58,6 +58,7 @@ interface ConversationTimelineProps {
   machineId?: MachineId
   projectId?: ProjectId
   projectRootPath?: string
+  onOpenModelControl?: () => void
   retryController?: FailedTurnRetryController
   targetChangeId?: string
   targetChangeRequestKey?: number
@@ -389,6 +390,7 @@ export function ConversationTimeline({
   projectId,
   projectRootPath,
   retryController,
+  onOpenModelControl,
   targetChangeId,
   targetChangeRequestKey,
   targetTurnId,
@@ -664,6 +666,7 @@ export function ConversationTimeline({
                             machineId={machineId}
                             projectId={projectId}
                             retryController={retryController}
+                            onOpenModelControl={onOpenModelControl}
                             turnId={block.turnId}
                           />
                         )}

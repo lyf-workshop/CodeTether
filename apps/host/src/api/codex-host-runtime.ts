@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import {
   CodexAppServerClient,
   JsonRpcRemoteError,
+  type CodexAvailableModel,
   type ApprovalDecision,
   type ApprovalPrompt,
   type ApprovalResolution,
@@ -11,11 +12,16 @@ import {
 import type {
   ProviderInstallationId,
   ProviderInstallationRevision,
+  ProviderDescriptor,
 } from '@codetether/protocol'
 
 import { BoundedAgentEventQueue } from '../runtime/bounded-agent-event-queue.js'
 import { IncrementalDeltaIntegrityTracker } from '../runtime/delta-integrity-tracker.js'
 import { ProviderConversationUnavailableError } from './agent-runtime.js'
+import {
+  LOCAL_CODEX_CAPABILITIES,
+  UNAVAILABLE_PROVIDER_CAPABILITIES,
+} from './provider-registry.js'
 import type {
   AgentHostRuntime,
   ProviderApprovalRequest,
@@ -47,6 +53,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
   readonly provider = 'codex' as const
   readonly installation
   readonly #options: CodexHostRuntimeOptions
+  #availableModels?: readonly CodexAvailableModel[]
   #client?: CodexAppServerClient
   #initialization?: Promise<void>
   readonly #queue = new BoundedAgentEventQueue()
@@ -97,6 +104,38 @@ export class CodexHostRuntime implements AgentHostRuntime {
     // An explicit lifecycle refresh may replace a closed runtime after verified
     // cleanup. It must never reuse a failed deferred initialization as live.
     return this.#failure === undefined && this.#closePromise === undefined
+  }
+
+  /** Cached presentation only; Provider discovery never starts a process. */
+  get descriptor(): ProviderDescriptor {
+    const available = this.available
+    const models = this.#availableModels
+    return {
+      provider: this.provider,
+      displayName: 'Codex',
+      availability: available ? 'available' : 'unavailable',
+      capabilities: available
+        ? LOCAL_CODEX_CAPABILITIES
+        : UNAVAILABLE_PROVIDER_CAPABILITIES,
+      ...(available && models !== undefined
+        ? {
+            models: models.map(({ id, name }) => ({ id, label: name })),
+            availableModels: models.map(({ id, name, description }) => ({
+              id,
+              name,
+              ...(description === undefined ? {} : { description }),
+            })),
+          }
+        : {}),
+    }
+  }
+
+  /** An explicit model-change control may hydrate Codex before validation. */
+  async refreshAvailableModels(): Promise<readonly CodexAvailableModel[]> {
+    const client = await this.#readyClient()
+    const models = await client.listAvailableModels()
+    this.#availableModels = models
+    return models
   }
 
   async #initialize(): Promise<void> {

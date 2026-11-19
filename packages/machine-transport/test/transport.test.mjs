@@ -846,6 +846,100 @@ test('Provider discovery messages are purpose-specific and presentation-safe', (
   )
 })
 
+test('installation-bound model catalog paginates and rejects injected controls', async () => {
+  const machine = {
+    machineId: 'machine_modelsfixture01',
+    nodeId: 'node_modelsfixture01',
+    displayName: 'Fixture',
+    platform: 'Linux',
+    architecture: 'x64',
+  }
+  let request
+  const framed = {
+    closed: false,
+    async send(message) {
+      request = message
+    },
+    async receive() {
+      const cursor = request.cursor ?? 0
+      return {
+        type: 'provider.models.listed',
+        protocolVersion: 1,
+        requestId: request.requestId,
+        machineId: machine.machineId,
+        nodeId: machine.nodeId,
+        provider: request.provider,
+        providerInstallationId: request.providerInstallationId,
+        installationRevision: request.expectedInstallationRevision,
+        models: [
+          {
+            id: `model-${cursor}`,
+            name: `Model ${cursor}`,
+            reasoningOptions: ['low', 'high'],
+          },
+        ],
+        ...(cursor === 0 ? { nextCursor: 1 } : {}),
+      }
+    },
+  }
+  const connection = new AuthenticatedRemoteMachineConnection(
+    framed,
+    'controller_modelsfixture01',
+    machine,
+  )
+  const models = await connection.listRemoteProviderModels({
+    provider: 'codex',
+    providerInstallationId,
+    expectedInstallationRevision: installationRevision,
+  })
+  assert.deepEqual(
+    models.map(({ id }) => id),
+    ['model-0', 'model-1'],
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...request,
+      executable: '/bin/sh',
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      ...request,
+      cursor: 64,
+    }).success,
+    false,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'codex.turn.start',
+      protocolVersion: 1,
+      actionId: 'act_abcdef',
+      conversationId: 'conv_abcdef',
+      turnId: 'turn_abcdef',
+      providerThreadId: 'thread-native-1',
+      prompt: 'Safe prompt',
+      model: 'gpt-codex-fixture',
+      effort: 'high',
+    }).success,
+    true,
+  )
+  assert.equal(
+    MachineWireMessageSchema.safeParse({
+      type: 'claude.turn.start',
+      protocolVersion: 1,
+      actionId: 'act_abcdef',
+      conversationId: 'conv_abcdef',
+      turnId: 'turn_abcdef',
+      providerSessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      prompt: 'Safe prompt',
+      model: 'unapproved',
+      effort: null,
+    }).success,
+    false,
+  )
+})
+
 test('remote Codex execution messages are correlated, bounded, and non-generic', () => {
   const session = {
     type: 'codex.session.open',

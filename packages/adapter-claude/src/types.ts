@@ -18,6 +18,14 @@ export const CLAUDE_CODE_EFFORT_LEVELS = [
 ] as const
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_LEVELS)[number]
 
+/** Stable Claude Code aliases resolve to the current model in each family. */
+export const CLAUDE_CODE_MODELS = [
+  { id: 'opus', name: 'Opus' },
+  { id: 'sonnet', name: 'Sonnet' },
+  { id: 'haiku', name: 'Haiku' },
+] as const
+export type ClaudeCodeModel = (typeof CLAUDE_CODE_MODELS)[number]['id']
+
 export function isClaudeCodeTestedVersion(version: string): boolean {
   return (CLAUDE_CODE_TESTED_VERSIONS as readonly string[]).includes(version)
 }

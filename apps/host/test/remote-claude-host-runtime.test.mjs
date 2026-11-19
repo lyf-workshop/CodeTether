@@ -200,6 +200,66 @@ test('remote Claude runtime performs exact Machine-bound native resume with immu
   await second.close()
 })
 
+test('remote Claude per-Turn controls change aliases and clear a session-open effort', async () => {
+  const session = fakeSession(nativeSessionId, { effort: 'high' })
+  const runtime = new RemoteClaudeHostRuntime({
+    machineId,
+    supportsTurnOverrides: () => true,
+    opener: { open: async () => session },
+  })
+  const created = await runtime.startConversation({
+    cwd: '/srv/project',
+    model: 'sonnet',
+    reasoning: 'high',
+    machineId,
+    conversationId,
+    projectId,
+  })
+  await runtime.startTurn({
+    providerThreadId: created.providerThreadId,
+    cwd: '/srv/project',
+    input: 'first',
+    model: 'opus',
+    reasoning: 'low',
+    machineId,
+    conversationId,
+    projectId,
+    actionId: 'act_d2_claude_first',
+    turnId: 'turn_d2_claude_first',
+  })
+  await runtime.startTurn({
+    providerThreadId: created.providerThreadId,
+    cwd: '/srv/project',
+    input: 'second',
+    model: 'haiku',
+    machineId,
+    conversationId,
+    projectId,
+    actionId: 'act_d2_claude_second',
+    turnId: 'turn_d2_claude_second',
+  })
+  assert.equal(session.turnInputs[0].model, 'opus')
+  assert.equal(session.turnInputs[0].reasoning, 'low')
+  assert.equal(session.turnInputs[1].model, 'haiku')
+  assert.equal(session.turnInputs[1].reasoning, null)
+  await assert.rejects(
+    runtime.startTurn({
+      providerThreadId: created.providerThreadId,
+      cwd: '/srv/project',
+      input: 'invalid',
+      model: 'unknown',
+      machineId,
+      conversationId,
+      projectId,
+      actionId: 'act_d2_claude_invalid',
+      turnId: 'turn_d2_claude_invalid',
+    }),
+    /model is unsupported/u,
+  )
+  assert.equal(session.turnInputs.length, 2)
+  await runtime.close()
+})
+
 test('remote Claude runtime rejects invalid effort and fails closed on an unsafe Tool event', async () => {
   let opens = 0
   const session = fakeSession(nativeSessionId, {
@@ -450,11 +510,13 @@ function fakeSession(providerSessionId, options = {}) {
     effort: options.effort,
     closeCalls: 0,
     startTurnCalls: 0,
+    turnInputs: [],
     get closed() {
       return closed
     },
-    async startTurn() {
+    async startTurn(input) {
       this.startTurnCalls += 1
+      this.turnInputs.push(input)
       return {
         async *events() {
           for (const event of options.events ?? [

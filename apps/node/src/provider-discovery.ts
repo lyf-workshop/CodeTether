@@ -47,6 +47,7 @@ const REMOTE_CODEX_TEXT_CAPABILITIES: RemoteProviderCapabilities =
     ...NO_REMOTE_EXECUTION_CAPABILITIES,
     streaming: true,
     resume: true,
+    modelSelection: true,
   })
 
 const REMOTE_CLAUDE_CAPABILITIES: RemoteProviderCapabilities = Object.freeze({
@@ -56,6 +57,7 @@ const REMOTE_CLAUDE_CAPABILITIES: RemoteProviderCapabilities = Object.freeze({
   fileRead: true,
   search: true,
   toolEvents: true,
+  modelSelection: true,
   reasoningControl: true,
 })
 

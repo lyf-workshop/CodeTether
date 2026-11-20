@@ -13,6 +13,21 @@ pub enum StartupFailureKind {
 }
 
 impl StartupFailureKind {
+    const fn diagnostic_code(self) -> &'static str {
+        match self {
+            Self::HostBinaryMissing => "host_binary_missing",
+            Self::HostSpawnFailed => "host_spawn_failed",
+            Self::ExistingCodeTetherHost => "existing_host",
+            Self::PortConflict => "port_conflict",
+            Self::HostExited => "host_exited",
+            Self::DatabaseFromNewerVersion => "database_from_newer_version",
+            Self::ReadinessTimeout => "readiness_timeout",
+            Self::ProtocolIncompatible => "protocol_incompatible",
+            Self::TrayUnavailable => "tray_unavailable",
+            Self::LifecycleUnavailable => "lifecycle_unavailable",
+        }
+    }
+
     pub const fn title(self) -> &'static str {
         "CodeTether 启动失败"
     }
@@ -123,7 +138,9 @@ pub fn show_host_exit<R: tauri::Runtime>(
     let title = dialog.title();
     let message = dialog.message();
     eprintln!("[codetether:desktop] {title}: {message}");
-    if suppress_dialog() {
+    let shown = !suppress_dialog();
+    crate::desktop_diagnostics::dialog("host_stopped", shown);
+    if !shown {
         return false;
     }
 
@@ -185,10 +202,17 @@ type NativeWindow = *mut std::ffi::c_void;
 fn show_with_optional_owner(kind: StartupFailureKind, owner: Option<NativeWindow>) {
     eprintln!("[codetether:desktop] {}: {}", kind.title(), kind.message());
     #[cfg(not(windows))]
-    let _ = owner;
+    {
+        let _ = owner;
+        crate::desktop_diagnostics::dialog(kind.diagnostic_code(), false);
+    }
     #[cfg(windows)]
-    if !suppress_dialog() {
-        show_windows_message(owner, kind.title(), kind.message());
+    {
+        let shown = !suppress_dialog();
+        crate::desktop_diagnostics::dialog(kind.diagnostic_code(), shown);
+        if shown {
+            show_windows_message(owner, kind.title(), kind.message());
+        }
     }
 }
 

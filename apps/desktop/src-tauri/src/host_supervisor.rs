@@ -20,6 +20,7 @@ use tauri_plugin_shell::{ShellExt, process::CommandEvent};
 use self::process_tree::{CommandChild, ProcessTreeGuard};
 use crate::{
     attention_notifications::AttentionNotificationState,
+    desktop_diagnostics::{self, StartupStderrTail},
     desktop_lifecycle::{
         DesktopLifecycle, LifecycleSnapshot, MainWindowCloseAction, ResumeDecision, SystemState,
     },
@@ -27,8 +28,7 @@ use crate::{
     system_tray, windows_lifecycle,
 };
 
-const HOST_ADDRESS: &str = "127.0.0.1:4317";
-const HOST_URL: &str = "http://127.0.0.1:4317";
+const HOST_PORT: &str = env!("CODETETHER_DESKTOP_HOST_PORT");
 const PROTOCOL_VERSION: u32 = 1;
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(12);
@@ -279,8 +279,13 @@ impl HostSupervisor {
             .command(std::env::current_exe().map_err(|error| StartError::Spawn(error.to_string()))?)
             .args([codetether_posix_supervisor::GUARDIAN_ARGUMENT]);
         let command = command
-            .args(["--port", "4317", "--origin", origin])
+            .args(["--port", HOST_PORT, "--origin", origin])
             .env("CODETETHER_DESKTOP_MANAGED", "1");
+        let command = if let Some(isolated) = option_env!("CODETETHER_W0F_DATA_DIR") {
+            command.env("CODETETHER_DATA_DIR", isolated)
+        } else {
+            command
+        };
         let command = match std::env::var("CODETETHER_CONTROL_PLANE_URL")
             .ok()
             .or_else(|| option_env!("VITE_CODETETHER_CONTROL_PLANE_URL").map(str::to_owned))
@@ -306,6 +311,8 @@ impl HostSupervisor {
             .spawn()
             .map_err(|error| StartError::Spawn(error.to_string()))?;
         let mut child = CommandChild::new(child);
+        desktop_diagnostics::host_spawn(child.pid());
+        let host_spawned_at = Instant::now();
         eprintln!(
             "{}",
             serde_json::json!({"component":"desktop", "event":"startup.phase", "phase":"HOST_CHILD_SPAWN", "elapsedMs":launch_started.elapsed().as_millis()})
@@ -332,6 +339,7 @@ impl HostSupervisor {
         let monitor_app = app.clone();
         let mut signing_pipe = child.clone();
         tauri::async_runtime::spawn(async move {
+            let mut startup_stderr = StartupStderrTail::default();
             while let Some(event) = events.recv().await {
                 match event {
                     CommandEvent::Stdout(line) => {
@@ -350,18 +358,33 @@ impl HostSupervisor {
                                 }
                                 continue;
                             }
-                            eprintln!("[codetether:host] {}", text.trim());
+                            desktop_diagnostics::host_output(text);
                         }
                     }
                     CommandEvent::Stderr(line) => {
                         if let Ok(text) = std::str::from_utf8(&line) {
-                            eprintln!("[codetether:host] {}", text.trim());
+                            desktop_diagnostics::host_output(text);
+                            if !monitor_observation.ready.load(Ordering::Acquire) {
+                                startup_stderr.push(text);
+                            }
+                        } else if !monitor_observation.ready.load(Ordering::Acquire) {
+                            startup_stderr.push("");
                         }
                     }
                     CommandEvent::Error(error) => {
-                        eprintln!("[codetether:host] process channel error: {error}");
+                        let _ = error;
+                        eprintln!("[codetether:host] process channel error");
                     }
                     CommandEvent::Terminated(payload) => {
+                        let before_ready = !monitor_observation.ready.load(Ordering::Acquire);
+                        if before_ready {
+                            startup_stderr.flush();
+                        }
+                        desktop_diagnostics::host_exit(
+                            payload.code,
+                            monitor_observation.stopping.load(Ordering::Acquire),
+                            host_spawned_at.elapsed(),
+                        );
                         monitor_observation.record_termination(payload.code);
                         if monitor_observation.ready.load(Ordering::Acquire)
                             && !monitor_observation.stopping.load(Ordering::Acquire)
@@ -386,6 +409,9 @@ impl HostSupervisor {
                     }
                     _ => {}
                 }
+            }
+            if !monitor_observation.ready.load(Ordering::Acquire) {
+                startup_stderr.flush();
             }
         });
 
@@ -522,7 +548,9 @@ struct BootstrapIdentity {
 }
 
 fn inspect_host_port() -> ExistingService {
-    let address: SocketAddr = HOST_ADDRESS.parse().expect("static Host address");
+    let address: SocketAddr = format!("127.0.0.1:{HOST_PORT}")
+        .parse()
+        .expect("static Host address");
     inspect_service_at(address, PROBE_TIMEOUT)
 }
 
@@ -606,7 +634,9 @@ fn probe_readiness(expected_host_version: &str) -> Readiness {
 }
 
 fn read_bootstrap(timeout: Duration) -> io::Result<Option<BootstrapIdentity>> {
-    let address: SocketAddr = HOST_ADDRESS.parse().expect("static Host address");
+    let address: SocketAddr = format!("127.0.0.1:{HOST_PORT}")
+        .parse()
+        .expect("static Host address");
     read_bootstrap_at(address, timeout)
 }
 
@@ -1431,6 +1461,19 @@ fn shutdown_exit_code(outcome: ShutdownOutcome, requested_code: i32) -> i32 {
 }
 
 pub fn run_desktop() {
+    if let Some(isolated) = option_env!("CODETETHER_W0F_DATA_DIR") {
+        // The diagnostic build must not inherit the installed Host database or
+        // WebView2 profile. This runs before Tauri creates any WebView.
+        unsafe {
+            std::env::set_var("CODETETHER_DATA_DIR", isolated);
+            #[cfg(windows)]
+            std::env::set_var(
+                "WEBVIEW2_USER_DATA_FOLDER",
+                Path::new(isolated).join("webview2"),
+            );
+        }
+    }
+    desktop_diagnostics::initialize();
     eprintln!(
         "[codetether:desktop] version={} build={} platform={} architecture={}",
         env!("CARGO_PKG_VERSION"),
@@ -1532,10 +1575,8 @@ pub fn run_desktop() {
                     Ok((elapsed, identity)) => {
                         eprintln!("{}", serde_json::json!({"component":"desktop", "event":"startup.phase", "phase":"LOCAL_READY", "elapsedMs":elapsed.as_millis()}));
                         state.set_host_epoch(identity.epoch);
-                        eprintln!(
-                            "[codetether:desktop] Host ready at {HOST_URL} in {} ms",
-                            elapsed.as_millis()
-                        );
+                        desktop_diagnostics::host_ready(elapsed);
+                        eprintln!("[codetether:desktop] Host ready in {} ms", elapsed.as_millis());
                         let initialization_app = app_handle.clone();
                         let initialization_state = state.clone();
                         if let Err(error) = app_handle.run_on_main_thread(move || {

@@ -1,4 +1,5 @@
 mod attention_notifications;
+mod desktop_diagnostics;
 mod desktop_lifecycle;
 mod desktop_update;
 mod host_identity_key_store;

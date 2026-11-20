@@ -221,7 +221,7 @@ function WorkspaceConversationRow({
         className={cn(
           'flex h-[var(--tree-conversation-h)] min-w-0 items-center gap-3 rounded-sm px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
           selected
-            ? 'bg-surface-muted font-medium text-text-primary'
+            ? 'bg-sidebar-current font-medium text-text-primary'
             : 'text-text-secondary hover:bg-surface-muted/55 hover:text-text-primary',
         )}
       >

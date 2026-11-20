@@ -58,8 +58,15 @@ export function useLiveConversationControls(
     readonly provider: ProviderDescriptor
   }>()
   const [modelCatalogLoading, setModelCatalogLoading] = useState<string>()
+  const [queuedExplicitCatalogRead, setQueuedExplicitCatalogRead] =
+    useState<string>()
   const modelCatalogGuard = useRef<
-    { readonly conversationId: string } | undefined
+    | {
+        readonly conversationId: string
+        readonly showError: boolean
+        explicitQueued: boolean
+      }
+    | undefined
   >(undefined)
   const automaticModelCatalog = useRef({
     conversationId: model.id,
@@ -328,37 +335,71 @@ export function useLiveConversationControls(
     [capabilities.canCompose, model.id, runtime, submitPhase],
   )
 
-  const refreshModels = useCallback(async () => {
-    if (
-      modelCatalogGuard.current?.conversationId === model.id ||
-      archived ||
-      !capabilities.canCompose
-    )
-      return
-    const request = { conversationId: model.id }
-    modelCatalogGuard.current = request
-    setModelCatalogLoading(model.id)
-    setModelSwitchError(undefined)
-    try {
-      const response = await runtime.refreshConversationModels(model.id)
-      if (modelCatalogGuard.current !== request) return
-      if (response.provider.provider !== model.provider) {
-        setModelCatalog(undefined)
-        setModelSwitchError('模型列表与当前会话不匹配，请刷新后重试。')
+  const readModels = useCallback(
+    async (showError: boolean) => {
+      if (archived || !capabilities.canCompose) return
+      if (modelCatalogGuard.current?.conversationId === model.id) {
+        // An explicit menu open gets its own fresh result after the quiet
+        // automatic read settles, without racing two catalog requests.
+        if (showError && !modelCatalogGuard.current.showError)
+          modelCatalogGuard.current.explicitQueued = true
         return
       }
-      setModelCatalog({ conversationId: model.id, provider: response.provider })
-    } catch (error) {
-      if (modelCatalogGuard.current !== request) return
-      setModelCatalog(undefined)
-      setModelSwitchError(mutationErrorMessage(error, '读取模型列表'))
-    } finally {
-      if (modelCatalogGuard.current === request) {
-        modelCatalogGuard.current = undefined
-        setModelCatalogLoading(undefined)
+      const request = {
+        conversationId: model.id,
+        showError,
+        explicitQueued: false,
       }
-    }
-  }, [archived, capabilities.canCompose, model.id, model.provider, runtime])
+      modelCatalogGuard.current = request
+      setModelCatalogLoading(model.id)
+      setModelSwitchError(undefined)
+      try {
+        const response = await runtime.refreshConversationModels(model.id)
+        if (modelCatalogGuard.current !== request) return
+        if (response.provider.provider !== model.provider) {
+          setModelCatalog(undefined)
+          if (request.showError)
+            setModelSwitchError('模型列表与当前会话不匹配，请刷新后重试。')
+          return
+        }
+        setModelCatalog({
+          conversationId: model.id,
+          provider: response.provider,
+        })
+      } catch (error) {
+        if (modelCatalogGuard.current !== request) return
+        setModelCatalog(undefined)
+        if (request.showError)
+          setModelSwitchError(mutationErrorMessage(error, '读取模型列表'))
+      } finally {
+        if (modelCatalogGuard.current === request) {
+          modelCatalogGuard.current = undefined
+          setModelCatalogLoading(undefined)
+          if (request.explicitQueued) setQueuedExplicitCatalogRead(model.id)
+        }
+      }
+    },
+    [archived, capabilities.canCompose, model.id, model.provider, runtime],
+  )
+
+  const refreshModels = useCallback(() => readModels(true), [readModels])
+
+  useEffect(() => {
+    if (queuedExplicitCatalogRead === undefined) return
+    setQueuedExplicitCatalogRead(undefined)
+    if (
+      queuedExplicitCatalogRead === model.id &&
+      !archived &&
+      capabilities.canCompose
+    )
+      void readModels(true)
+  }, [
+    archived,
+    capabilities.canCompose,
+    model.id,
+    queuedExplicitCatalogRead,
+    readModels,
+  ])
 
   useEffect(() => {
     if (automaticModelCatalog.current.conversationId !== model.id || archived) {
@@ -381,8 +422,8 @@ export function useLiveConversationControls(
     )
       return
     automaticModelCatalog.current.started = true
-    void refreshModels()
-  }, [archived, capabilities.canCompose, machineKind, model.id, refreshModels])
+    void readModels(false)
+  }, [archived, capabilities.canCompose, machineKind, model.id, readModels])
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision): Promise<void> => {

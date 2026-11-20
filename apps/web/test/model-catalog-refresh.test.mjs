@@ -162,9 +162,71 @@ test('local opening waits for the first composable state and failed reads are no
     view.requests[0].reject(new Error('catalog unavailable')),
   )
   assert.equal(view.warning(), false)
+  assert.equal(view.controls().modelSwitch.error, undefined)
+  assert.equal(view.container.querySelector('[role="alert"]'), null)
   await view.render({ canCompose: false })
   await view.render({ canCompose: true })
   assert.equal(view.requests.length, 1)
+  await view.openPicker()
+  assert.equal(view.requests.length, 2)
+  await view.perform(() =>
+    view.requests[1].reject(new Error('catalog unavailable again')),
+  )
+  assert.notEqual(view.controls().modelSwitch.error, undefined)
+  assert.match(
+    view.container.querySelector('[role="alert"]')?.textContent ?? '',
+    /暂时无法连接/u,
+  )
+})
+
+test('opening the picker during an automatic read queues one fresh explicit read', async (t) => {
+  const view = await fixture(t)
+  assert.equal(view.requests.length, 1)
+  await view.openPicker()
+  assert.equal(view.requests.length, 1)
+  await view.perform(() =>
+    view.requests[0].reject(new Error('catalog unavailable')),
+  )
+  await view.until(() => view.requests.length === 2)
+  assert.equal(view.controls().modelSwitch.error, undefined)
+  assert.equal(view.controls().modelSwitch.loadingModels, true)
+  await view.perform(() =>
+    view.requests[1].reject(new Error('explicit catalog unavailable')),
+  )
+  assert.match(
+    view.container.querySelector('[role="alert"]')?.textContent ?? '',
+    /暂时无法连接/u,
+  )
+  assert.equal(view.requests.length, 2)
+})
+
+test('an in-flight automatic success still gets the menu a fresh catalog', async (t) => {
+  const view = await fixture(t)
+  await view.openPicker()
+  await view.resolve(0)
+  await view.until(() => view.requests.length === 2)
+  assert.equal(view.controls().modelSwitch.error, undefined)
+  assert.equal(view.controls().modelSwitch.loadingModels, true)
+  await view.resolve(1, {
+    ...catalog,
+    availableModels: [{ id: 'fresh-model', name: 'Fresh model' }],
+  })
+  assert.equal(
+    view.controls().modelSwitch.catalog.availableModels[0].id,
+    'fresh-model',
+  )
+  assert.equal(view.requests.length, 2)
+})
+
+test('an automatic wrong-provider catalog is quiet until a picker read also fails', async (t) => {
+  const view = await fixture(t)
+  await view.resolve(0, { ...catalog, provider: 'claude' })
+  assert.equal(view.controls().modelSwitch.error, undefined)
+  assert.equal(view.container.querySelector('[role="alert"]'), null)
+  await view.openPicker()
+  assert.equal(view.requests.length, 2)
+  await view.resolve(1, { ...catalog, provider: 'claude' })
+  assert.match(view.controls().modelSwitch.error, /模型列表与当前会话不匹配/u)
 })
 
 test('remote opening does not read a catalog but opening its picker still refreshes', async (t) => {
@@ -250,12 +312,12 @@ test('an archived local conversation reads nothing until restoration even when c
   assert.equal(view.warning(), true)
 })
 
-test('archiving clears a failed initial read and restoration permits one new automatic read', async (t) => {
+test('archiving clears a quiet failed initial read and restoration permits one new automatic read', async (t) => {
   const view = await fixture(t)
   await view.perform(() =>
     view.requests[0].reject(new Error('initial catalog read failed')),
   )
-  assert.notEqual(view.controls().modelSwitch.error, undefined)
+  assert.equal(view.controls().modelSwitch.error, undefined)
   await view.render({ canCompose: false })
   await view.render({ canCompose: true })
   assert.equal(view.requests.length, 1)

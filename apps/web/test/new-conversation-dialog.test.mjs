@@ -270,12 +270,16 @@ for (const activeState of ['running', 'waiting']) {
           editor.closest('[hidden]') === null,
           `${state}: editor must stay visible`,
         )
-        assert.equal(editor.readOnly, true)
+        assert.equal(editor.readOnly, state === 'submitting')
         assert.equal(dom.window.document.activeElement, editor)
         assert.equal(
           dom.container.querySelector('button[type="submit"]').disabled,
           true,
         )
+        if (state === activeState) {
+          await dom.input(editor, 'draft for the next turn')
+          assert.equal(editor.value, 'draft for the next turn')
+        }
         await dom.perform(submitForm)
         await dom.perform(() =>
           editor.dispatchEvent(
@@ -293,7 +297,7 @@ for (const activeState of ['running', 'waiting']) {
       await dom.render(view())
       assert.equal(dom.window.document.activeElement, editor)
       assert.equal(editor.readOnly, false)
-      assert.equal(editor.value, '')
+      assert.equal(editor.value, 'draft for the next turn')
       assert.equal(calls, 1)
     } finally {
       await dom.close()

@@ -124,7 +124,7 @@ export function NewConversationFields({
                   : `${project.project.name} · ${project.machine?.displayName ?? '电脑不可用'}`}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
+            <SelectContent>
               {displayGroups.map((group, index) => (
                 <SelectGroup key={group.key}>
                   <SelectLabel

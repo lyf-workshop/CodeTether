@@ -648,7 +648,11 @@ export function ConversationTimeline({
                                     ? block.status
                                     : undefined
                                 }
-                                className="rounded-md border-2 border-status-idle bg-timeline-system px-4 py-3 text-sm text-text-secondary data-[turn-running=running]:border-status-running data-[turn-running=waiting]:border-status-waiting"
+                                className={
+                                  block.status === 'running'
+                                    ? 'px-4 py-2 text-sm text-text-muted'
+                                    : 'rounded-md border-2 border-status-idle bg-timeline-system px-4 py-3 text-sm text-text-secondary data-[turn-running=waiting]:border-status-waiting'
+                                }
                               >
                                 {block.outcomeText}
                               </p>

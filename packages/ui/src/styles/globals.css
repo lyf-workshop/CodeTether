@@ -24,6 +24,7 @@
   --message-code-background: #1e1e1e;
   --tool-search: #6d3da4;
   --ct-side: #f3f1ed;
+  --ct-sidebar-current: #cbc3b7;
   --ct-surface: #ffffff;
   --ct-hover: #ece9e3;
   --ct-hover-2: #f5f3ef;
@@ -75,6 +76,7 @@
   --message-code-background: #0d0d0d;
   --tool-search: #c6a2ef;
   --ct-side: #151413;
+  --ct-sidebar-current: #393631;
   --ct-surface: #232221;
   --ct-hover: #24231f;
   --ct-hover-2: #22211f;
@@ -436,6 +438,7 @@
 
   --color-background: var(--background);
   --color-navigation: var(--navigation);
+  --color-sidebar-current: var(--ct-sidebar-current);
   --text-timeline-message-size: 15px;
   --color-timeline-background: var(--timeline-background);
   --color-timeline-message: var(--timeline-message);

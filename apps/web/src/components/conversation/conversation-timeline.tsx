@@ -191,7 +191,7 @@ function AgentRunExecutions({
               <span className="shrink-0">{pendingApproval.requestedAt}</span>
             </span>
           }
-          aria-label={`${pendingApproval.title}，等待审批`}
+          aria-label={`${pendingApproval.title}，等待批准`}
         />
       </div>
     )

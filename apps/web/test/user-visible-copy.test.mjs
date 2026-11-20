@@ -10,7 +10,7 @@ const sourceRoots = [
   new URL('../../../packages/ui/src/', import.meta.url),
 ]
 const forbiddenCopy =
-  /智能体|推理后端|此电脑|\bProvider\b|这台电脑操作|Node显示|在Node|检查Node|Node版本/u
+  /智能体|推理后端|此电脑|\bProvider\b|这台电脑操作|Node显示|在Node|检查Node|Node版本|。[ \t\u3000]{2}/u
 
 /** Ignore implementation identifiers/imports and internal typed-error diagnostics. */
 function isVisibleLiteral(node) {
@@ -46,7 +46,7 @@ async function sourceFiles(directory) {
   return result
 }
 
-test('visible Web and UI copy avoids legacy technical terms and mechanical replacement remnants', async () => {
+test('visible Web and UI copy avoids legacy terms and double spaces after Chinese periods', async () => {
   const violations = []
   for (const sourceRoot of sourceRoots) {
     for (const url of await sourceFiles(sourceRoot)) {

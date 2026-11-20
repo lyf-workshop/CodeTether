@@ -5,15 +5,18 @@ import { Button } from '@codetether/ui'
 export function OfflineComputersGroup({
   count,
   surface,
+  initiallyReveal = false,
   children,
 }: {
   readonly count: number
   readonly surface: 'devices' | 'sidebar'
+  readonly initiallyReveal?: boolean
   readonly children: ReactNode
 }) {
   const contentId = useId()
   const preferenceKey = `ct-offline-computers-${surface}`
   const [open, setOpen] = useState(() => {
+    if (initiallyReveal) return true
     try {
       return window.sessionStorage.getItem(preferenceKey) === 'open'
     } catch {

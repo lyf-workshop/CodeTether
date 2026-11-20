@@ -55,6 +55,38 @@ test('installed compatible tools with unknown services show three separate facts
   assert.ok(providers.every((item) => model.isProviderUsable(item) === false))
 })
 
+test('provider summary distinguishes a cold read, a failed read and a completed read with no observations', () => {
+  const { MachineProviderBadge } = loadWebComponent(
+    'provider/provider-summary-badge.tsx',
+  )
+  const render = (read) =>
+    renderToStaticMarkup(h(MachineProviderBadge, { read, provider: 'codex' }))
+  assert.match(render({ data: undefined, isError: false }), /正在读取工具状态/u)
+  assert.match(render({ data: undefined, isError: true }), /工具状态读取失败/u)
+  assert.match(
+    render({
+      data: { providers: [], providerDiscovery: { state: 'not_observed' } },
+      isError: false,
+    }),
+    /尚未检查/u,
+  )
+  const detail = {
+    data: {
+      providers: [
+        { provider: 'codex', displayName: 'Codex', availability: 'available' },
+      ],
+    },
+    isError: false,
+  }
+  const html = renderToStaticMarkup(
+    h(OnboardingProviderCard, {
+      provider: provider({ provider: 'codex' }),
+      detail,
+    }),
+  )
+  assert.match(html, /data-variant="success"[^>]*>可用<\/span>/u)
+})
+
 test('one installed usable tool suffices for Continue while the missing tool retains its own official installation guide', () => {
   const html = panel([provider({ provider: 'codex' }), missing()])
   assert.match(html, /继续设置/u)
@@ -83,7 +115,7 @@ for (const [name, overrides, expected] of [
         state: 'needs_attention',
       }),
     },
-    /需要登录/u,
+    /未登录/u,
   ],
   [
     'custom service authentication',

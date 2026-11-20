@@ -155,6 +155,7 @@ export function NewConversationDialog({
   const providerOptions = conversationCreationProviderOptions(
     providerPresentationsForMachine(machineDetailQuery.data?.providers ?? []),
     machineDetailQuery.data?.providerLifecycles,
+    machineDetailQuery.data?.providerDiscovery,
   )
   const selectedProvider = resolveConversationCreationProvider(
     providerOptions,
@@ -366,22 +367,19 @@ export function NewConversationDialog({
                   : '原先选择的项目或设备不可用。请选择项目，不会自动改用其他设备。'}
               </InlineNotice>
             ) : null}
-            {selectedProvider?.eligibility.executionAdvisory ===
-            undefined ? null : (
+            {selectedProvider?.eligibility.eligible === true &&
+            selectedProvider.eligibility.executionAdvisory ? (
               <InlineNotice>
                 {selectedProvider.eligibility.executionAdvisory}
               </InlineNotice>
-            )}
-            {selectedProvider?.eligibility.eligible === false ? (
-              <InlineNotice>{selectedProvider.eligibility.label}</InlineNotice>
             ) : null}
             {!loading &&
             project !== undefined &&
             project.unavailableReason === undefined &&
             selectedProvider === undefined ? (
               <InlineNotice>
-                此设备当前没有可通过 CodeTether 启动可恢复流式会话的 AI
-                工具。请在设备详情检查当前安装，不会自动改用其他工具。
+                这台电脑暂时没有可用于新会话的 AI
+                工具，请在电脑详情检查安装和登录状态。
               </InlineNotice>
             ) : null}
             {emptyProjectScope ? (

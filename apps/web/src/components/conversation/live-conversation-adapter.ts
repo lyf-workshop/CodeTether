@@ -245,10 +245,10 @@ export function createLiveConversationViewModel(
       '默认',
     permission:
       pendingApprovals.length > 0
-        ? '等待审批'
+        ? '等待批准'
         : provider.capabilities.approvals
           ? '由 CodeTether 管理'
-          : '不支持审批',
+          : '不支持批准',
     machine: machineName,
     branch: '未提供',
     duration: formatDuration(
@@ -517,7 +517,7 @@ function projectTurnTimeline(
       executions: [],
       outcomeText:
         pendingApprovals.length > 0
-          ? `${providerName} 正在等待审批。`
+          ? `${providerName} 正在等待批准。`
           : `${providerName} 正在运行，实时活动将在这里显示。`,
     })
   }
@@ -652,9 +652,9 @@ function connectionIndicator(
 }
 
 function approvalTitle(kind: PendingApprovalReadModel['kind']): string {
-  if (kind === 'command') return '命令等待审批'
-  if (kind === 'file-change') return '文件变更等待审批'
-  return '操作等待审批'
+  if (kind === 'command') return '命令等待批准'
+  if (kind === 'file-change') return '文件变更等待批准'
+  return '操作等待批准'
 }
 
 function fileName(path: string): string {

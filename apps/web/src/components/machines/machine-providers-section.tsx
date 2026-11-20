@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react'
 import { RefreshCw } from 'lucide-react'
-import { AgentBadge, Badge, Button, Separator, cn } from '@codetether/ui'
+import { AgentBadge, Button, Disclosure, Separator, cn } from '@codetether/ui'
 import type {
   MachineProviderDiscovery,
   MachineProviderLifecycle,
@@ -10,12 +10,15 @@ import type {
 
 import {
   providerExecutionHealthPresentation,
+  machineProviderSummary,
+  type ProviderSummary,
   providerLifecycleForMachine,
   providerLifecyclePresentation,
   providerPresentationsForMachine,
   type ProviderLifecyclePresentation,
   type ProviderPresentation,
 } from '../../provider/provider-presentation'
+import { ProviderSummaryBadge } from '../../provider/provider-summary-badge'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { formatMachineLastSeen } from './machine-presentation'
 import { ProviderInstallationSelector } from './provider-installation-selector'
@@ -122,11 +125,19 @@ export function MachineProvidersSection({
               : `显示的是上次已知的状态${observedAt === undefined ? '' : ` · ${observedAt}`}`}
         </p>
       ) : null}
-      <ul className="space-y-3">
+      <ul className="grid grid-cols-[max-content_minmax(0,1fr)_max-content] items-start gap-x-4 gap-y-3">
         {presentations.map((provider) => (
           <MachineProviderCard
             key={provider.provider}
             provider={provider}
+            summary={machineProviderSummary(
+              {
+                providers,
+                providerLifecycles: lifecycles,
+                providerDiscovery: discovery,
+              },
+              provider.provider,
+            )}
             lifecycles={lifecycles}
             hostReady={hostReady}
             onSelectInstallation={onSelectInstallation}
@@ -142,7 +153,7 @@ export function MachineProvidersSection({
       </ul>
       {remote ? (
         <p className="mt-3 text-sm text-text-muted">
-          这台设备上的会话暂不支持停止和审批。
+          这台设备上的会话暂不支持停止和批准。
         </p>
       ) : null}
       {selectionError !== null && selectionError !== undefined ? (
@@ -168,12 +179,14 @@ export function MachineProvidersSection({
 function MachineProviderCard({
   provider,
   lifecycles,
+  summary,
   hostReady,
   onSelectInstallation,
   selectionPending,
   pendingInstallationId,
 }: {
   provider: ProviderPresentation
+  summary: ProviderSummary
   lifecycles: readonly MachineProviderLifecycle[]
   hostReady: boolean
   onSelectInstallation: MachineProvidersSectionProps['onSelectInstallation']
@@ -197,49 +210,33 @@ function MachineProviderCard({
       : lifecycle.installation.stateLabel
   const version = lifecycle.installation.version ?? provider.version
   return (
-    <li className="flex min-w-0 flex-wrap items-start gap-3 border-t border-border pt-3 first:border-t-0 first:pt-0">
+    <li className="col-span-full grid min-w-0 grid-cols-subgrid items-center gap-y-2 border-t border-border pt-3 first:border-t-0 first:pt-0">
       <AgentBadge agent={provider.agent} size="lg" />
-      <div className="min-w-0 flex-1 basis-32">
-        {version === undefined ? null : (
-          <p
-            title={version}
-            className="max-w-full truncate font-mono text-xs text-text-muted"
-          >
-            {version}
+      <p title={version} className="truncate font-mono text-xs text-text-muted">
+        {version ?? '—'}
+      </p>
+      <ProviderSummaryBadge summary={summary} />
+      <Disclosure label="查看详细状态" className="col-span-full">
+        <div className="mt-2">
+          <MachineProviderLifecycleDetails
+            health={health}
+            installationLabel={installationLabel}
+            lifecycle={lifecycle}
+            lifecycleObserved={lifecycleGroup !== undefined}
+          />
+          <p className="mt-1 text-xs text-text-muted">
+            {remoteProviderCapabilitySummary(provider)}
           </p>
-        )}
-        <Badge
-          variant={provider.available ? 'success' : 'danger'}
-          className="mt-2"
-        >
-          {provider.available ? '可用' : provider.availabilityLabel}
-        </Badge>
-        <details className="group/details mt-2">
-          <summary className="w-fit cursor-pointer rounded-sm text-sm text-text-muted outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring">
-            查看详细状态
-          </summary>
-          <div className="mt-2">
-            <MachineProviderLifecycleDetails
-              health={health}
-              installationLabel={installationLabel}
-              lifecycle={lifecycle}
-              lifecycleObserved={lifecycleGroup !== undefined}
-              providerAvailable={provider.available}
-            />
-            <p className="mt-1 text-xs text-text-muted">
-              {remoteProviderCapabilitySummary(provider)}
-            </p>
-            <ProviderInstallationSelector
-              lifecycle={lifecycleGroup}
-              disabled={!hostReady || selectionPending}
-              pendingInstallationId={pendingInstallationId}
-              onSelect={(providerInstallationId) =>
-                onSelectInstallation(provider.provider, providerInstallationId)
-              }
-            />
-          </div>
-        </details>
-      </div>
+          <ProviderInstallationSelector
+            lifecycle={lifecycleGroup}
+            disabled={!hostReady || selectionPending}
+            pendingInstallationId={pendingInstallationId}
+            onSelect={(providerInstallationId) =>
+              onSelectInstallation(provider.provider, providerInstallationId)
+            }
+          />
+        </div>
+      </Disclosure>
     </li>
   )
 }
@@ -291,13 +288,11 @@ function MachineProviderLifecycleDetails({
   installationLabel,
   lifecycle,
   lifecycleObserved,
-  providerAvailable,
 }: {
   health: ReturnType<typeof providerExecutionHealthPresentation>
   installationLabel: string
   lifecycle: ProviderLifecyclePresentation
   lifecycleObserved: boolean
-  providerAvailable: boolean
 }) {
   const installationDetail = lifecycleObserved
     ? lifecycle.installation.detailLabel
@@ -306,30 +301,17 @@ function MachineProviderLifecycleDetails({
   return (
     <>
       <dl className="mt-2 grid min-w-0 gap-1.5 text-xs">
+        <MachineProviderStatusRow label="安装状态" value={installationLabel} />
         <MachineProviderStatusRow
-          label="安装状态"
-          tone={
-            (lifecycleObserved &&
-              lifecycle.installation.state === 'available') ||
-            (!lifecycleObserved && providerAvailable)
-              ? 'text-success-text'
-              : 'text-text-secondary'
-          }
-          value={installationLabel}
-        />
-        <MachineProviderStatusRow
-          label="运行时"
-          tone={providerRuntimeLifecycleTone(lifecycle.runtime.state)}
+          label="运行环境"
           value={`${lifecycle.runtime.stateLabel} · ${lifecycle.runtime.freshnessLabel}`}
         />
         <MachineProviderStatusRow
-          label="后端"
-          tone={providerBackendLifecycleTone(lifecycle.backend.readiness)}
+          label="AI 服务"
           value={`${lifecycle.backend.modeLabel} · ${lifecycle.backend.readinessLabel} · ${lifecycle.backend.freshnessLabel}`}
         />
         <MachineProviderStatusRow
-          label="执行状态"
-          tone={providerExecutionHealthTone(health.state)}
+          label="运行情况"
           value={`${health.stateLabel} · ${health.freshnessLabel}`}
         />
       </dl>
@@ -342,13 +324,13 @@ function MachineProviderLifecycleDetails({
         </p>
       )}
       <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        运行时 · {lifecycle.runtime.description}
+        运行环境 · {lifecycle.runtime.description}
       </p>
       <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        后端 · {lifecycle.backend.description}
+        AI 服务 · {lifecycle.backend.description}
       </p>
       <p className="mt-1 break-words text-xs leading-relaxed text-text-muted">
-        执行 · {health.description}
+        运行情况 · {health.description}
       </p>
       {health.observedAt === undefined ? null : (
         <p className="mt-1 text-xs text-text-muted">
@@ -361,17 +343,15 @@ function MachineProviderLifecycleDetails({
 
 function MachineProviderStatusRow({
   label,
-  tone,
   value,
 }: {
   label: string
-  tone: string
   value: string
 }) {
   return (
     <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
       <dt className="shrink-0 text-text-muted">{label}</dt>
-      <dd className={cn('min-w-0 break-words text-right font-medium', tone)}>
+      <dd className="min-w-0 break-words text-right font-medium text-text-secondary">
         {value}
       </dd>
     </div>
@@ -386,7 +366,7 @@ function remoteProviderCapabilitySummary(
     capabilities.streaming ? '流式消息' : undefined,
     capabilities.resume ? '恢复会话' : undefined,
     capabilities.interrupt ? '停止运行' : undefined,
-    capabilities.approvals ? '审批' : undefined,
+    capabilities.approvals ? '批准' : undefined,
     capabilities.fileRead ? '读取' : undefined,
     capabilities.fileEdit ? '编辑' : undefined,
     capabilities.shell ? '执行命令' : undefined,
@@ -397,53 +377,4 @@ function remoteProviderCapabilitySummary(
     capabilities.reasoningControl ? provider.reasoningLabel : undefined,
   ].filter((value): value is string => value !== undefined)
   return `已声明能力 · ${enabled.length === 0 ? '暂无' : enabled.join('、')}`
-}
-
-function providerExecutionHealthTone(
-  state: ReturnType<typeof providerExecutionHealthPresentation>['state'],
-): string {
-  switch (state) {
-    case 'healthy':
-      return 'text-success-text'
-    case 'degraded':
-      return 'text-warning-text'
-    case 'unavailable':
-      return 'text-danger-text'
-    case 'unknown':
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
-}
-
-function providerRuntimeLifecycleTone(
-  state: ProviderLifecyclePresentation['runtime']['state'],
-): string {
-  switch (state) {
-    case 'verified':
-    case 'compatible_unverified':
-      return 'text-success-text'
-    case 'limited':
-      return 'text-warning-text'
-    case 'incompatible':
-    case 'unavailable':
-      return 'text-danger-text'
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
-}
-
-function providerBackendLifecycleTone(
-  readiness: ProviderLifecyclePresentation['backend']['readiness'],
-): string {
-  switch (readiness) {
-    case 'ready':
-      return 'text-success-text'
-    case 'unavailable':
-    case 'authentication_required':
-    case 'misconfigured':
-      return 'text-danger-text'
-    case 'unknown':
-    case 'not_observed':
-      return 'text-text-secondary'
-  }
 }

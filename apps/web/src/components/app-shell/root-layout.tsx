@@ -29,7 +29,7 @@ const pageTitles: Readonly<Record<string, string>> = {
   '/settings': '设置',
   '/doctor': '关于与检查',
   '/add': '添加设备',
-  '/add/node': '配对设备',
+  '/add/node': '配对远程电脑',
   '/signin': '登录',
   '/roadmap': '后续规划',
   '/settings/appearance': '外观',
@@ -51,7 +51,7 @@ export function RootLayout() {
   ) {
     return (
       <TooltipProvider>
-        <div className="h-dvh overflow-y-auto bg-background text-text-primary">
+        <div className="ct-setup-scroller h-dvh overflow-y-auto bg-background text-text-primary">
           {currentPath === '/setup' || currentPath === '/onboarding' ? (
             <a
               href="#setup-main"
@@ -135,13 +135,16 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
   })
   const machineName = machineQuery.data?.machine.displayName ?? '设备'
   const projectName = currentProject?.name ?? '项目'
+  const projectSection = currentPath.endsWith('/search')
+    ? '搜索'
+    : search.view === 'archived'
+      ? '已归档会话'
+      : undefined
   const currentPage =
     conversationMatch !== null
       ? (currentConversation?.title ?? '会话')
       : projectMatch !== null
-        ? currentPath.endsWith('/search')
-          ? '搜索'
-          : projectName
+        ? (projectSection ?? projectName)
         : machineMatch !== null
           ? machineName
           : (pageTitles[currentPath] ?? 'CodeTether')
@@ -155,9 +158,7 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
       })
     if (
       projectId !== undefined &&
-      (conversationMatch !== null ||
-        currentPath.endsWith('/conversations') ||
-        currentPath.endsWith('/search'))
+      (conversationMatch !== null || projectSection !== undefined)
     ) {
       breadcrumbs.push({
         label: projectName,
@@ -167,14 +168,7 @@ function StandardRootLayout({ currentPath }: { currentPath: string }) {
           currentMachineId === undefined ? {} : { machineId: currentMachineId },
       })
     }
-    breadcrumbs.push({
-      label:
-        conversationMatch !== null
-          ? currentPage
-          : currentPath.endsWith('/search')
-            ? '搜索'
-            : projectName,
-    })
+    breadcrumbs.push({ label: currentPage })
   } else if (machineMatch !== null) {
     breadcrumbs.push({ label: '设备', to: '/devices' }, { label: machineName })
   } else if (currentPath === '/add/node') {

@@ -31,14 +31,12 @@ export function OnboardingStepView(props: SetupStepProps) {
           onReselectProject={props.onProjectContextLost}
         />
       ) : (
-        <div className="ct-onboarding-previous">
-          <PreviousConversationsStep
-            presentation="page"
-            projectId={onboarding.projectId}
-            machineId={onboarding.machineId}
-            onFinished={props.onPreviousConversationsFinished}
-          />
-        </div>
+        <PreviousConversationsStep
+          presentation="page"
+          projectId={onboarding.projectId}
+          machineId={onboarding.machineId}
+          onFinished={props.onPreviousConversationsFinished}
+        />
       )
     case 'remote_setup':
       return <OnboardingRemoteStep {...props} />

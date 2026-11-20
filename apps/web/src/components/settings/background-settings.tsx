@@ -1,4 +1,4 @@
-import { Notice, SettingsRow } from '@codetether/ui'
+import { PageHeader, Notice, SettingsRow } from '@codetether/ui'
 import { Link } from '@tanstack/react-router'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 
@@ -9,12 +9,12 @@ export function BackgroundSettings({
 }) {
   return (
     <>
-      <h2 className="mb-5 text-xl font-semibold">后台运行</h2>
+      <PageHeader title="后台运行" />
       {available ? (
         <div className="overflow-hidden rounded-lg border border-border bg-surface">
           <SettingsRow
             title="关闭窗口后继续运行"
-            description="关闭窗口后，CodeTether 仍在后台运行，正在进行的工作、审批和通知不会中断。"
+            description="关闭窗口后，CodeTether 仍在后台运行，正在进行的工作、批准和通知不会中断。"
             control={
               <span className="text-sm text-text-secondary">始终开启</span>
             }

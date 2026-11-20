@@ -1,40 +1,12 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
 import test from 'node:test'
-import ts from 'typescript'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { JSDOM } from 'jsdom'
-import { loadUiComponent } from './fixtures/render-ui.mjs'
+import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
 
-const filename = resolve(
-  import.meta.dirname,
-  '../src/components/conversations/new-conversation-fields.tsx',
-)
-const requireDependency = createRequire(filename)
-const ui = {
-  ...loadUiComponent('components/select.tsx'),
-  ...loadUiComponent('components/product/agent-badge.tsx'),
-  ...loadUiComponent('lib/cn.ts'),
-}
-const module = { exports: {} }
-const output = ts.transpileModule(readFileSync(filename, 'utf8'), {
-  fileName: filename,
-  compilerOptions: {
-    module: ts.ModuleKind.CommonJS,
-    jsx: ts.JsxEmit.ReactJSX,
-    target: ts.ScriptTarget.ES2023,
-  },
-}).outputText
-new Function('require', 'module', 'exports', output)(
-  (specifier) =>
-    specifier === '@codetether/ui' ? ui : requireDependency(specifier),
-  module,
-  module.exports,
-)
-const { NewConversationFields } = module.exports
+const fieldsFile = 'components/conversations/new-conversation-fields.tsx'
+const { NewConversationFields } = loadWebComponent(fieldsFile)
 
 const project = {
   key: 'project_123:machine_local',
@@ -52,7 +24,17 @@ const provider = {
   reasoningOptions: [],
   reasoningLabel: '推理强度',
 }
-const option = { provider, eligibility: { eligible: true, label: '可用' } }
+const option = {
+  provider,
+  eligibility: {
+    eligible: true,
+    label: '可用',
+    summary: {
+      status: { label: '可用', variant: 'success' },
+      freshnessLabel: '尚未检查',
+    },
+  },
+}
 const base = {
   groups: [{ machineId: project.machineId, label: '本机', choices: [project] }],
   project,
@@ -114,7 +96,9 @@ test('multiple computers have distinct, prominent project group headers', () => 
   // Render the closed selector's content with minimal wrappers; Radix portals
   // otherwise leave the menu out of server-rendered markup.
   const selectUi = {
-    ...ui,
+    ...loadUiComponent('components/product/agent-badge.tsx'),
+    ...loadUiComponent('components/badge.tsx'),
+    ...loadUiComponent('lib/cn.ts'),
     Select: ({ children }) => createElement('div', null, children),
     SelectTrigger: ({ children }) => createElement('div', null, children),
     SelectValue: ({ children }) => createElement('span', null, children),
@@ -125,12 +109,9 @@ test('multiple computers have distinct, prominent project group headers', () => 
     SelectItem: ({ children }) =>
       createElement('div', { role: 'option' }, children),
   }
-  const isolatedModule = { exports: {} }
-  new Function('require', 'module', 'exports', output)(
-    (specifier) =>
-      specifier === '@codetether/ui' ? selectUi : requireDependency(specifier),
-    isolatedModule,
-    isolatedModule.exports,
+  const isolatedModule = loadWebComponent(
+    fieldsFile,
+    new Map([['@codetether/ui', selectUi]]),
   )
   const remote = {
     ...project,
@@ -154,7 +135,7 @@ test('multiple computers have distinct, prominent project group headers', () => 
     },
   ]
   const html = renderToStaticMarkup(
-    createElement(isolatedModule.exports.NewConversationFields, {
+    createElement(isolatedModule.NewConversationFields, {
       ...base,
       groups,
     }),
@@ -187,11 +168,19 @@ test('reasoning selector is absent when capability or descriptor options do not 
 test('unavailable provider cards are disabled and explain the canonical reason', () => {
   const blocked = {
     ...option,
-    eligibility: { eligible: false, label: '当前安装需要登录' },
+    eligibility: {
+      eligible: false,
+      label: '请在电脑上完成登录。',
+      summary: {
+        status: { label: '未登录', variant: 'warning' },
+        freshnessLabel: '尚未检查',
+      },
+    },
   }
   const html = render({ providerOptions: [blocked], selectedProvider: blocked })
   assert.match(html, /type="radio"[^>]*disabled=""/u)
-  assert.match(html, /当前安装需要登录/u)
+  assert.match(html, /未登录/u)
+  assert.match(html, /请在电脑上完成登录/u)
 })
 
 test('unavailable project suppresses tool controls while keeping the project/device context visible', () => {
@@ -208,7 +197,7 @@ test('remote restrictions derive from descriptor capabilities rather than provid
     machine: { ...project.machine, kind: 'remote', displayName: '构建节点' },
   }
   const html = render({ project: remote })
-  assert.match(html, /在 构建节点 上运行时，这里不能停止或审批命令。/u)
+  assert.match(html, /在 构建节点 上运行时，这里不能停止或批准命令。/u)
   const complete = {
     ...option,
     provider: {
@@ -222,7 +211,7 @@ test('remote restrictions derive from descriptor capabilities rather than provid
   }
   assert.doesNotMatch(
     render({ project: remote, selectedProvider: complete }),
-    /不能停止或审批/u,
+    /不能停止或批准/u,
   )
 })
 

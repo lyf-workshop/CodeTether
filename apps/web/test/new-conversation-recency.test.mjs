@@ -59,7 +59,7 @@ test('cold project menu keeps local-first computer grouping with no invented rec
   const menu = selection.conversationProjectMenuGroups(canonical, [])
   assert.deepEqual(
     menu.map((group) => group.label),
-    ['这台电脑 (Windows)', '配对设备 (macOS)'],
+    ['本地电脑 (Windows)', '配对设备 (macOS)'],
   )
   assert.deepEqual(choices(menu), choices(canonical))
   assert.equal(
@@ -80,7 +80,7 @@ test('recent project activity sorts within each computer without moving choices 
   const menu = selection.conversationProjectMenuGroups(canonical, [
     source(records),
   ])
-  assert.equal(menu[0].label, '这台电脑 (Windows)')
+  assert.equal(menu[0].label, '本地电脑 (Windows)')
   assert.equal(menu[1].label, '配对设备 (macOS)')
   assert.equal(menu[0].kind, 'device')
   assert.deepEqual(
@@ -242,7 +242,7 @@ test('actual project fields render computer groups with real path labels and dis
     }),
   )
   assert.ok(
-    html.indexOf('这台电脑 (Windows)') < html.indexOf('配对设备 (macOS)'),
+    html.indexOf('本地电脑 (Windows)') < html.indexOf('配对设备 (macOS)'),
   )
   assert.doesNotMatch(html, /最近使用/u)
   assert.match(html, /proj_shared01\/machine_recentremote01/u)

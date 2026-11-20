@@ -80,9 +80,9 @@ export function createPendingActionDockModel(
 function approvalKindLabel(
   kind: ConversationApprovalViewModel['kind'],
 ): string {
-  if (kind === 'command') return '命令审批'
-  if (kind === 'file-change') return '文件审批'
-  return '操作审批'
+  if (kind === 'command') return '批准命令'
+  if (kind === 'file-change') return '批准文件变更'
+  return '批准操作'
 }
 
 function compactSubtitle(value: string): string {

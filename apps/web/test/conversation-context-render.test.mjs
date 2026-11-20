@@ -57,7 +57,7 @@ const conversation = {
   provider: 'claude-code',
   model: '默认模型',
   reasoning: '默认',
-  permission: '不支持审批',
+  permission: '不支持批准',
   machine: '配对设备',
   branch: '未提供',
   duration: '尚未开始',
@@ -174,7 +174,7 @@ test('title context keeps Provider, model and reasoning without repeating locati
   assert.match(markup, /Claude Code/u)
   assert.match(markup, /默认模型/u)
   assert.match(markup, /从 Claude Code 导入/u)
-  assert.match(markup, /推理强度：高/u)
+  assert.match(markup, /推理：高/u)
   assert.doesNotMatch(markup, /配对设备|支付项目|role="combobox"/u)
 })
 
@@ -182,7 +182,7 @@ test('unset reasoning and non-imported conversation do not manufacture metadata 
   const markup = await header({
     context: { ...context, reasoning: undefined, importedFrom: undefined },
   })
-  assert.doesNotMatch(markup, /推理强度：|从 Claude Code 导入/u)
+  assert.doesNotMatch(markup, /推理：|从 Claude Code 导入/u)
 })
 
 function panel(overrides = {}) {

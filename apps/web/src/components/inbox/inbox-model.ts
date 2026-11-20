@@ -88,7 +88,7 @@ export function createInboxItemPresentation(
   const failure = executionFailurePresentation(item.payload.error)
   return {
     conversation: item.payload.conversationTitle,
-    description: `${failure.cause} ${failure.historyNote}`,
+    description: `${failure.cause}${failure.historyNote}`,
     title: failure.title,
   }
 }

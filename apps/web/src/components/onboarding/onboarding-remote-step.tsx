@@ -1,9 +1,15 @@
+import { MachineProviderBadge } from '../../provider/provider-summary-badge'
 import { useState } from 'react'
 import { Monitor } from 'lucide-react'
-import { Button, SegmentedControl, SegmentedControlItem } from '@codetether/ui'
+import {
+  PageHeader,
+  Disclosure,
+  Button,
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@codetether/ui'
 import type { SetupStepProps } from './onboarding-step-props'
 import { InvalidSetupState, StatusRow } from './onboarding-step-feedback'
-import { OnboardingStepHeading as StepHeading } from './onboarding-step-layout'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { AddRemoteMachineDialog } from '../machines/add-remote-machine-dialog'
 import { machineCanAddProject } from '../machines/device-project-model'
@@ -15,7 +21,7 @@ import {
   onboardingProviderInstallationLabel,
   onboardingProviderRuntimeLabel,
   onboardingProviderServiceLabel,
-} from './onboarding-model'
+} from '../../provider/provider-presentation'
 
 export function OnboardingRemoteStep(props: SetupStepProps) {
   const { doctor, onboarding } = props
@@ -39,7 +45,7 @@ export function OnboardingRemoteStep(props: SetupStepProps) {
   ).some((choice) => choice.state.available)
   return (
     <div>
-      <StepHeading
+      <PageHeader
         title="还有其他设备吗？"
         description="本机使用不需要网络远程设置。你可以以后随时从“设备”中添加。"
       />
@@ -49,6 +55,7 @@ export function OnboardingRemoteStep(props: SetupStepProps) {
           const remoteStatus = doctor.remoteComputers.find(
             (candidate) => candidate.machineId === machine.machineId,
           )
+          const detail = props.providerDetails?.get(machine.machineId)
           return (
             <div
               key={machine.machineId}
@@ -90,6 +97,10 @@ export function OnboardingRemoteStep(props: SetupStepProps) {
                   <span className="text-text-secondary">
                     {providerDisplayName(provider.provider)}
                   </span>
+                  <MachineProviderBadge
+                    read={detail}
+                    provider={provider.provider}
+                  />
                   <span className="text-text-primary">
                     {onboardingProviderInstallationLabel(provider)} ·{' '}
                     {onboardingProviderRuntimeLabel(provider)} · AI 服务：{' '}
@@ -161,8 +172,10 @@ function OnboardingNodeInstructions() {
         配对 Linux 服务器或 Apple 芯片的 Mac，不需要账号。Windows
         和同一账号下的其他桌面版目前不能作为配对设备添加。
       </p>
-      <details className="mt-3 rounded-md border border-border bg-surface p-4 text-sm">
-        <summary className="cursor-pointer">在电脑上运行远程服务</summary>
+      <Disclosure
+        label="在电脑上运行远程服务"
+        className="mt-3 rounded-md border border-border bg-surface p-4 text-sm"
+      >
         <div className="mt-4 space-y-4">
           <SegmentedControl
             aria-label="设备系统"
@@ -178,7 +191,7 @@ function OnboardingNodeInstructions() {
           </SegmentedControl>
           <NodeSetupInstructions platform={platform} />
         </div>
-      </details>
+      </Disclosure>
     </section>
   )
 }

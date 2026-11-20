@@ -2,7 +2,13 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { LogOut, UserRound } from 'lucide-react'
 
-import { Button, Notice, SectionState, SettingsRow } from '@codetether/ui'
+import {
+  PageHeader,
+  Button,
+  Notice,
+  SectionState,
+  SettingsRow,
+} from '@codetether/ui'
 import { useAccountSession } from '../../runtime/account/use-account-session'
 import {
   useHostConnectionState,
@@ -31,14 +37,16 @@ export function AccountSettings() {
   })
   return (
     <>
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-2">
-        <h2 className="text-xl font-semibold">账号</h2>
-        {onboarding !== undefined && onboarding.completedAt === undefined ? (
-          <Button asChild variant="secondary" size="sm">
-            <Link to="/onboarding">返回设置向导</Link>
-          </Button>
-        ) : null}
-      </div>
+      <PageHeader
+        title="账号"
+        actions={
+          onboarding !== undefined && onboarding.completedAt === undefined ? (
+            <Button asChild variant="secondary" size="sm">
+              <Link to="/onboarding">返回设置向导</Link>
+            </Button>
+          ) : null
+        }
+      />
       {supabase === undefined ? (
         <AccountConfigurationNotice />
       ) : query.isError ? (

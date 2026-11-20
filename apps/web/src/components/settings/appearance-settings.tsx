@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from 'react'
 import { Check } from 'lucide-react'
 
-import { Button, SettingsRow, cn } from '@codetether/ui'
+import { PageHeader, Button, SettingsRow, cn } from '@codetether/ui'
 import {
   getThemeController,
   type ThemePreference,
@@ -28,7 +28,7 @@ export function AppearanceSettings() {
   )
   return (
     <>
-      <h2 className="mb-5 text-xl font-semibold">外观</h2>
+      <PageHeader title="外观" />
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <SettingsRow
           className="@container/themes"

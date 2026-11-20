@@ -182,7 +182,7 @@ export function newConversationErrorMessage(
       error.envelope.failure,
       { providerDisplayName: providerName },
     )
-    return `${presentation.cause} ${presentation.guidance}`
+    return `${presentation.cause}${presentation.guidance}`
   }
 
   switch (error.envelope.code) {

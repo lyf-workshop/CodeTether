@@ -1,3 +1,4 @@
+import { MachineProviderBadge } from '../../provider/provider-summary-badge'
 import { RefreshCw } from 'lucide-react'
 import { Button, cn } from '@codetether/ui'
 import type { SetupStepProps } from './onboarding-step-props'
@@ -7,14 +8,16 @@ import {
   isDoctorExecutionContextReady,
   isProviderUsable,
   localOnboardingBlockerText,
-  providerDisplayName,
   remoteOnboardingBlockerText,
   onboardingProviderServiceUnverified,
+  onboardingUnverifiedServiceGuidance,
+} from './onboarding-model'
+import {
+  providerDisplayName,
   onboardingProviderInstallationLabel,
   onboardingProviderRuntimeLabel,
   onboardingProviderServiceLabel,
-  onboardingUnverifiedServiceGuidance,
-} from './onboarding-model'
+} from '../../provider/provider-presentation'
 
 export function OnboardingReadyStep(props: SetupStepProps) {
   const { doctor, onboarding } = props
@@ -25,6 +28,8 @@ export function OnboardingReadyStep(props: SetupStepProps) {
   const contextProviders = selectedLocal
     ? doctor.providers
     : (selectedRemote?.providers ?? [])
+  const detail =
+    onboarding.machineId && props.providerDetails?.get(onboarding.machineId)
   const usableProviders = contextProviders.filter(isProviderUsable)
   const selectedDoctorProject =
     doctor.project?.projectId === onboarding.projectId
@@ -73,7 +78,7 @@ export function OnboardingReadyStep(props: SetupStepProps) {
         <StatusRow
           label={
             selectedLocal
-              ? '这台电脑'
+              ? '本地电脑'
               : selectedRemote
                 ? '配对设备'
                 : '所选设备'
@@ -94,11 +99,11 @@ export function OnboardingReadyStep(props: SetupStepProps) {
             key={provider.provider}
             label={providerDisplayName(provider.provider)}
             detail={`${onboardingProviderInstallationLabel(provider)} · ${onboardingProviderRuntimeLabel(provider)} · AI 服务：${onboardingProviderServiceLabel(provider)}`}
-            state={provider.state}
-            statusLabel={
-              onboardingProviderServiceUnverified(provider)
-                ? 'AI 服务尚未验证'
-                : undefined
+            status={
+              <MachineProviderBadge
+                read={detail}
+                provider={provider.provider}
+              />
             }
           />
         ))}

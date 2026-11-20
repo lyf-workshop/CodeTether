@@ -1,5 +1,9 @@
 import type {
   Bootstrap,
+  CanonicalFailure,
+  DoctorBackendStatus,
+  DoctorProviderStatus,
+  MachineProviderDiscovery,
   ProviderAvailability,
   ProviderCapabilities,
   ProviderBackendMode,
@@ -33,6 +37,7 @@ export interface ProviderPresentation {
   readonly agent: AgentId
   readonly displayName: string
   readonly availability: ProviderAvailability
+  readonly observed?: boolean
   readonly availabilityLabel: string
   readonly available: boolean
   readonly version?: string
@@ -97,13 +102,184 @@ const providerFallbackNames = {
   'claude-code': 'Claude Code',
 } as const satisfies Record<AgentProvider, string>
 
+const compatibilityLabels = {
+  verified: '兼容',
+  compatible_unverified: '兼容的新版本，尚未完整验证',
+  limited: '部分功能受限',
+  incompatible: '需要更新 CodeTether',
+  unavailable: '暂时不可用',
+} as const satisfies Record<ProviderCompatibilityState, string>
+
 const availabilityLabels = {
   available: '可用',
   not_installed: '未安装',
-  unsupported_version: '版本不支持',
+  unsupported_version: '需要更新此 AI 工具',
   misconfigured: '暂时不可用',
   unavailable: '暂时不可用',
 } as const satisfies Record<ProviderAvailability, string>
+
+const summaryStatuses = {
+  available: { label: '可用', variant: 'success' },
+  limited: { label: '可用，部分功能受限', variant: 'warning' },
+  login: { label: '未登录', variant: 'warning' },
+  updateTool: { label: '需要更新此 AI 工具', variant: 'warning' },
+  updateApp: { label: '需要更新 CodeTether', variant: 'warning' },
+  unconfirmed: { label: '已安装，待确认', variant: 'secondary' },
+  missing: { label: '未安装', variant: 'secondary' },
+  unavailable: { label: '暂时不可用', variant: 'danger' },
+} as const
+
+type SummaryStatus = keyof typeof summaryStatuses
+export interface ProviderSummary {
+  readonly status?: (typeof summaryStatuses)[SummaryStatus]
+  readonly freshnessLabel: string
+  readonly advisory?: string
+}
+
+/** Read-only projection of the selected installation. This never grants or denies selection. */
+export function providerSummary(
+  provider:
+    | (Pick<
+        ProviderDescriptor,
+        'availability' | 'displayName' | 'executionHealth'
+      > & { readonly observed?: boolean })
+    | undefined,
+  lifecycle?: MachineProviderLifecycle,
+  discovery?: MachineProviderDiscovery,
+): ProviderSummary {
+  if (
+    !provider ||
+    provider.observed === false ||
+    discovery?.state === 'not_observed'
+  ) {
+    return { freshnessLabel: '尚未检查' }
+  }
+  const selected = lifecycle?.installations.find(
+    (item) =>
+      item.selected && item.installationId === lifecycle.selectedInstallationId,
+  )
+  const compatibility = selected?.compatibility
+  const observedBackend = selected?.backend
+  // A historical sign-in requirement cannot override current discovery. On an
+  // offline computer the entire projection is explicitly historical.
+  const backend =
+    observedBackend?.freshness === 'last_known' &&
+    discovery?.state !== 'last_known'
+      ? undefined
+      : observedBackend
+  const health = provider.executionHealth
+  const observedAt = [
+    selected?.lastObservedAt,
+    compatibility?.observedAt,
+    observedBackend?.observedAt,
+    health?.observedAt,
+    discovery?.observedAt,
+  ].reduce<string | undefined>(
+    (latest, value) =>
+      value && (!latest || Date.parse(value) > Date.parse(latest))
+        ? value
+        : latest,
+    undefined,
+  )
+  const freshnessLabel = observedAt
+    ? lifecycleObservationLabel('last_known', observedAt)
+    : '尚未检查'
+  const displayName = provider.displayName
+  function summary(state: SummaryStatus, nextStep?: string): ProviderSummary {
+    const status = summaryStatuses[state]
+    if (state === 'available' || state === 'unconfirmed')
+      return { status, freshnessLabel }
+    const advisory = `${displayName} ${status.label}${nextStep ? `，${nextStep}` : ''}。`
+    return { status, freshnessLabel, advisory }
+  }
+
+  if (
+    provider.availability === 'not_installed' ||
+    lifecycle?.installations.length === 0
+  ) {
+    return summary('missing', '请在电脑上安装后重新检查')
+  }
+  if (compatibility?.state === 'incompatible') {
+    return summary('updateApp', '更新后请在电脑详情重新检查')
+  }
+  if (
+    provider.availability === 'unsupported_version' ||
+    health?.failure?.reason === 'provider_unsupported_version'
+  ) {
+    return summary('updateTool', '更新后请在电脑详情重新检查')
+  }
+  const authFailure =
+    health?.failure?.userAction === 'login_on_machine' &&
+    !(
+      health.freshness === 'last_known' &&
+      backend?.freshness === 'current' &&
+      backend.readiness === 'ready'
+    )
+  if (backend?.readiness === 'authentication_required' || authFailure) {
+    if (
+      backend?.mode &&
+      backend.mode !== 'unknown' &&
+      backend.mode !== 'first_party'
+    ) {
+      return summary('unavailable', '请检查 AI 服务配置')
+    }
+    return summary('login', '请在电脑上完成登录')
+  }
+  if (
+    provider.availability === 'misconfigured' ||
+    backend?.readiness === 'misconfigured'
+  ) {
+    return summary('unavailable', '请检查 AI 服务配置')
+  }
+  if (
+    provider.availability === 'unavailable' ||
+    (lifecycle !== undefined && selected?.availability !== 'available') ||
+    (compatibility?.state === 'unavailable' &&
+      compatibility.freshness !== 'not_observed') ||
+    backend?.readiness === 'unavailable' ||
+    health?.state === 'unavailable'
+  ) {
+    return summary(
+      'unavailable',
+      providerHealthNextStep(health?.failure) ?? '请在电脑详情重新检查',
+    )
+  }
+  if (compatibility?.state === 'limited' || health?.state === 'degraded') {
+    return summary('limited', providerHealthNextStep(health?.failure))
+  }
+  if (
+    compatibility?.freshness === 'not_observed' ||
+    (backend?.readiness === 'unknown' && health?.state !== 'healthy')
+  ) {
+    return summary('unconfirmed')
+  }
+  return summary('available')
+}
+
+function providerHealthNextStep(
+  failure?: CanonicalFailure,
+): string | undefined {
+  if (!failure) return undefined
+  const steps = {
+    retry: '请稍后再试',
+    wait:
+      failure.reason === 'usage_limit_reached'
+        ? '请等待额度恢复'
+        : '请稍后再试',
+    login_on_machine: '请在电脑上完成登录',
+    open_machine: '请在电脑详情查看工具状态',
+    open_project: '请检查项目位置',
+    repair_project_location: '请在项目中修复文件夹位置',
+    reconnect_machine: '请重新连接电脑',
+    reinstall_provider: '请重新安装工具',
+    update_provider: '请更新工具后重新检查',
+    reduce_active_work: '请等待其他任务完成',
+    view_details: '请在电脑详情查看原因',
+    contact_provider: '请联系 AI 服务提供方',
+    none: undefined,
+  } satisfies Record<CanonicalFailure['userAction'], string | undefined>
+  return steps[failure.userAction]
+}
 
 const unavailableCapabilities: ProviderCapabilities = {
   streaming: false,
@@ -209,20 +385,20 @@ export function providerExecutionHealthPresentation(
   if (health === undefined) {
     return {
       state: 'not_observed',
-      stateLabel: '尚未验证',
-      freshnessLabel: '未观察',
-      description: '尚无独立的执行健康结果；安装状态不代表当前可以执行。',
+      stateLabel: '待确认',
+      freshnessLabel: '尚未检查',
+      description: '尚未检查这个工具能否完成会话。',
     }
   }
 
   const stateLabels = {
-    healthy: '执行正常',
-    degraded: '执行受限',
-    unavailable: '执行不可用',
+    healthy: '运行正常',
+    degraded: '部分功能受限',
+    unavailable: '暂时不可用',
     unknown: '状态未知',
   } as const satisfies Record<ProviderExecutionHealth['state'], string>
   const freshnessLabel =
-    health.freshness === 'current' ? '当前状态' : '上次已知'
+    health.freshness === 'current' ? '当前状态' : '上次检查'
   const failurePresentation =
     health.failure === undefined
       ? undefined
@@ -231,12 +407,12 @@ export function providerExecutionHealthPresentation(
         })
   const description =
     failurePresentation !== undefined
-      ? `${failurePresentation.cause} ${failurePresentation.guidance}`
+      ? `${failurePresentation.cause}${failurePresentation.guidance}`
       : health.state === 'healthy' && health.freshness === 'current'
-        ? '当前连接上的执行条件已经过验证。'
+        ? '最近一次使用时运行正常。'
         : health.state === 'healthy'
-          ? '上次验证时执行正常；当前连接尚未重新验证。'
-          : '当前没有可确认的执行健康结果。'
+          ? '上次使用时运行正常。'
+          : '尚未确认这个工具能否完成会话。'
 
   return {
     state: health.state,
@@ -272,6 +448,21 @@ export function providerLifecyclePresentation(
   }
 }
 
+export function machineProviderSummary(
+  detail: {
+    readonly providers: readonly ProviderDescriptor[]
+    readonly providerLifecycles?: readonly MachineProviderLifecycle[]
+    readonly providerDiscovery?: MachineProviderDiscovery
+  },
+  provider: ProviderId,
+): ProviderSummary {
+  return providerSummary(
+    detail.providers.find((item) => item.provider === provider),
+    providerLifecycleForMachine(detail.providerLifecycles ?? [], provider),
+    detail.providerDiscovery,
+  )
+}
+
 export function providerLifecycleForMachine(
   lifecycles: readonly MachineProviderLifecycle[],
   provider: AgentProvider,
@@ -286,9 +477,9 @@ export function providerLifecycleFreshnessLabel(
     case 'current':
       return '当前状态'
     case 'last_known':
-      return '上次已知'
+      return '上次检查'
     case 'not_observed':
-      return '尚未观察'
+      return '尚未检查'
   }
 }
 
@@ -303,7 +494,7 @@ function providerInstallationLifecyclePresentation(
       state,
       stateLabel:
         state === 'not_observed'
-          ? '尚未观察'
+          ? '尚未检查'
           : installationCount === 0
             ? '未检测到安装'
             : '尚未选择',
@@ -344,6 +535,20 @@ function providerInstallationLifecyclePresentation(
   }
 }
 
+export function installationCompatibilityLabel(
+  installation: ProviderInstallationSummary,
+): string {
+  if (installation.availability !== 'available')
+    return summaryStatuses.unavailable.label
+  const compatibility = installation.compatibility
+  if (!compatibility || compatibility.freshness === 'not_observed')
+    return '尚未检查兼容性'
+  return [
+    compatibilityLabels[compatibility.state],
+    providerLifecycleFreshnessLabel(compatibility.freshness),
+  ].join(' · ')
+}
+
 function providerRuntimeLifecyclePresentation(
   compatibility: ProviderInstallationSummary['compatibility'],
 ): ProviderRuntimeLifecyclePresentation {
@@ -351,23 +556,16 @@ function providerRuntimeLifecyclePresentation(
     return {
       state: 'not_observed',
       stateLabel: '尚未验证',
-      freshnessLabel: '尚未观察',
-      description: '尚无针对所选安装修订的兼容性结果。',
+      freshnessLabel: '尚未检查',
+      description: '尚未检查此版本能否与 CodeTether 一起使用。',
     }
   }
 
-  const stateLabels = {
-    verified: '兼容',
-    compatible_unverified: '兼容 — 新版本',
-    limited: '受限',
-    incompatible: '需要更新 CodeTether',
-    unavailable: '不可用',
-  } as const satisfies Record<ProviderCompatibilityState, string>
   const stateDescriptions = {
-    verified: '当前 CodeTether 运行契约已验证。',
-    compatible_unverified: '必需运行契约已通过；此安装修订尚未列入已验证矩阵。',
-    limited: '核心执行仍可用，但一个或多个可选能力不可用。',
-    incompatible: '当前安装缺少安全执行所需契约；项目和历史仍然安全。',
+    verified: '此版本可以与 CodeTether 一起使用。',
+    compatible_unverified: '此版本可以使用，但部分功能尚未经过检查。',
+    limited: '可以开始会话，但部分功能暂不可用。',
+    incompatible: '请更新 CodeTether 以使用此版本的工具。',
     unavailable: '所选安装当前无法运行；项目和历史仍然可用。',
   } as const satisfies Record<ProviderCompatibilityState, string>
   const failurePresentation =
@@ -377,11 +575,11 @@ function providerRuntimeLifecyclePresentation(
   const description =
     failurePresentation === undefined
       ? stateDescriptions[compatibility.state]
-      : `${failurePresentation.cause} ${failurePresentation.guidance}`
+      : `${failurePresentation.cause}${failurePresentation.guidance}`
 
   return {
     state: compatibility.state,
-    stateLabel: stateLabels[compatibility.state],
+    stateLabel: compatibilityLabels[compatibility.state],
     freshnessLabel: providerLifecycleFreshnessLabel(compatibility.freshness),
     description,
     ...(compatibility.observedAt === undefined
@@ -396,34 +594,20 @@ function providerBackendLifecyclePresentation(
   if (backend === undefined) {
     return {
       mode: 'not_observed',
-      modeLabel: '尚未观察',
+      modeLabel: '尚未检查',
       readiness: 'not_observed',
       readinessLabel: '尚未验证',
-      freshnessLabel: '尚未观察',
-      description: 'AI 服务就绪状态与 AI 工具 运行时兼容性分开验证。',
+      freshnessLabel: '尚未检查',
+      description: '尚未检查 AI 服务是否可用。',
     }
   }
 
-  const modeLabels = {
-    first_party: 'AI 工具官方服务',
-    custom_gateway: '自定义网关',
-    bedrock: 'Amazon Bedrock',
-    vertex: 'Google Vertex AI',
-    unknown: 'AI 服务类型未知',
-  } as const satisfies Record<ProviderBackendMode, string>
-  const readinessLabels = {
-    unknown: '尚未验证',
-    ready: '就绪',
-    unavailable: '不可用',
-    authentication_required: '需要登录',
-    misconfigured: '配置不可用',
-  } as const satisfies Record<ProviderBackendReadiness, string>
   const readinessDescriptions = {
-    unknown: '尚未通过显式检查或实际执行确认AI 服务。',
-    ready: '当前AI 服务已验证可用。',
-    unavailable: 'AI 服务当前不可用；运行时兼容性保持独立。',
+    unknown: '开始会话后可以确认 AI 服务是否可用。',
+    ready: 'AI 服务可以使用。',
+    unavailable: 'AI 服务暂时无法连接。',
     authentication_required: '当前 AI 服务需要在这台电脑上完成身份验证。',
-    misconfigured: '当前 AI 服务配置无法用于 AI 工具执行。',
+    misconfigured: '请在电脑上检查 AI 服务配置。',
   } as const satisfies Record<ProviderBackendReadiness, string>
   const failurePresentation =
     backend.failure === undefined
@@ -432,13 +616,13 @@ function providerBackendLifecyclePresentation(
   const description =
     failurePresentation === undefined
       ? readinessDescriptions[backend.readiness]
-      : `${failurePresentation.cause} ${failurePresentation.guidance}`
+      : `${failurePresentation.cause}${failurePresentation.guidance}`
 
   return {
     mode: backend.mode,
-    modeLabel: modeLabels[backend.mode],
+    modeLabel: backendModeLabel(backend),
     readiness: backend.readiness,
-    readinessLabel: readinessLabels[backend.readiness],
+    readinessLabel: backendReadinessLabel(backend),
     freshnessLabel: providerLifecycleFreshnessLabel(backend.freshness),
     description,
     ...(backend.observedAt === undefined
@@ -504,7 +688,7 @@ function presentProviderDescriptor(
       : { testedVersion: descriptor.testedVersion }),
     capabilities: descriptor.capabilities,
     models: descriptor.models ?? [],
-    reasoningLabel: descriptor.reasoningLabel ?? '推理',
+    reasoningLabel: '推理',
     reasoningOptions: descriptor.reasoningOptions ?? [],
     ...(descriptor.executionHealth === undefined
       ? {}
@@ -520,6 +704,7 @@ function unavailableProviderPresentation(
     agent: providerAgentIds[provider],
     displayName: providerFallbackNames[provider],
     availability: 'unavailable',
+    observed: false,
     availabilityLabel: availabilityLabels.unavailable,
     available: false,
     capabilities: unavailableCapabilities,
@@ -527,4 +712,129 @@ function unavailableProviderPresentation(
     reasoningLabel: '推理',
     reasoningOptions: [],
   }
+}
+
+export function onboardingProviderInstallationLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const label = !provider.installed
+    ? '未安装'
+    : provider.selected
+      ? '已安装'
+      : '已安装 · 未选择'
+  return label
+}
+
+export function onboardingProviderRuntimeLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const compatibility = providerCompatibilityLabel(provider)
+  const readiness =
+    provider.runtimeReadiness === 'ready'
+      ? '可用'
+      : provider.runtimeReadiness === 'limited'
+        ? '部分功能可用'
+        : undefined
+  const label =
+    readiness === undefined ? compatibility : `${readiness} · ${compatibility}`
+  return label
+}
+
+export function onboardingProviderServiceLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.backend === undefined) return '尚未验证'
+  if (provider.backend.readiness !== 'unknown')
+    return backendReadinessLabel(provider.backend)
+  return '尚未验证'
+}
+
+export function onboardingSessionDiscoveryLabel(
+  state: DoctorProviderStatus['sessionDiscovery'],
+): string {
+  return {
+    supported: '支持查找',
+    unsupported: '暂不支持查找',
+    unavailable: '暂时无法查找',
+    unknown: '尚未检查',
+  }[state]
+}
+
+export function providerCompatibilityLabel(
+  provider: DoctorProviderStatus,
+): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const label = !provider.installed
+    ? '未安装'
+    : provider.compatibility
+      ? compatibilityLabels[provider.compatibility]
+      : '尚未检查'
+  return label
+}
+
+export function providerVersionLabel(provider: DoctorProviderStatus): string {
+  if (provider.freshness === 'not_observed') return '尚未检查'
+  const label = provider.installed ? (provider.version ?? '已安装') : '未安装'
+  return label
+}
+
+export function backendModeLabel(
+  backend: Pick<DoctorBackendStatus, 'mode'> | undefined,
+): string {
+  if (backend === undefined) return 'AI 服务尚未检查'
+  switch (backend.mode) {
+    case 'first_party':
+      return '官方 AI 服务'
+    case 'custom_gateway':
+      return '自定义 AI 服务'
+    case 'bedrock':
+      return 'Amazon Bedrock'
+    case 'vertex':
+      return 'Google Vertex AI'
+    case 'unknown':
+      return 'AI 服务'
+  }
+}
+
+export function backendReadinessLabel(
+  backend:
+    Pick<DoctorBackendStatus, 'mode' | 'readiness' | 'freshness'> | undefined,
+): string {
+  if (backend === undefined) return '尚未检查'
+  switch (backend.readiness) {
+    case 'ready':
+      return '可用'
+    case 'unavailable':
+      return '暂时不可用'
+    case 'authentication_required':
+      return backend.mode === 'first_party' ? '未登录' : '需要检查配置'
+    case 'misconfigured':
+      return '需要检查配置'
+    case 'unknown':
+      return '尚未检查'
+  }
+}
+
+export function lifecycleObservationLabel(
+  freshness: DoctorProviderStatus['freshness'],
+  observedAt?: string,
+): string {
+  if (freshness === 'not_observed') return '尚未检查'
+  const timestamp = formatObservationTime(observedAt)
+  if (freshness === 'last_known') {
+    return timestamp === undefined ? '上次检查' : `上次检查：${timestamp}`
+  }
+  return timestamp === undefined ? '当前状态' : `检查于 ${timestamp}`
+}
+
+function formatObservationTime(observedAt?: string): string | undefined {
+  if (observedAt === undefined) return undefined
+  const date = new Date(observedAt)
+  if (Number.isNaN(date.getTime())) return undefined
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'short',
+    timeStyle: 'short',
+  }).format(date)
 }

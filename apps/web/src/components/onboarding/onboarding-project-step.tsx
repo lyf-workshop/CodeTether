@@ -1,7 +1,6 @@
 import { FolderOpen, Monitor } from 'lucide-react'
-import { Button, Notice, SectionState } from '@codetether/ui'
+import { PageHeader, Button, Notice, SectionState } from '@codetether/ui'
 import type { SetupStepProps } from './onboarding-step-props'
-import { OnboardingStepHeading as StepHeading } from './onboarding-step-layout'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import { AddRemoteMachineDialog } from '../machines/add-remote-machine-dialog'
 import { machineCanAddProject } from '../machines/device-project-model'
@@ -12,7 +11,7 @@ export function OnboardingProjectStep(props: SetupStepProps) {
   const choices = onboardingProjectChoices(props.projects, props.machines)
   return (
     <div>
-      <StepHeading
+      <PageHeader
         title="添加第一个项目"
         description="选择已有项目，或添加这台电脑或另一台已安全连接设备上的项目文件夹。普通文件夹也可以使用。"
       />
@@ -136,7 +135,7 @@ export function OnboardingProjectStep(props: SetupStepProps) {
                 <FolderOpen aria-hidden="true" />
                 <span className="truncate">
                   在
-                  {machine.kind === 'local' ? '这台电脑' : machine.displayName}
+                  {machine.kind === 'local' ? '本地电脑' : machine.displayName}
                   上添加项目
                 </span>
               </Button>

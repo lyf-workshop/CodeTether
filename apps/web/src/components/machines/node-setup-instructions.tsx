@@ -1,4 +1,4 @@
-import { CommandBlock, Notice } from '@codetether/ui'
+import { Disclosure, CommandBlock, Notice } from '@codetether/ui'
 import { nodePairingCommands } from './node-pairing-model'
 
 /** Shared copy-only instructions; no command execution or environment import. */
@@ -45,10 +45,10 @@ export function NodeSetupInstructions({
         改为原服务实际使用的同一目录，不能新建身份。已配对的电脑
         不会生成新码；请先使用原有配对，不要自动清除信任。
       </Notice>
-      <details className="rounded-lg border border-border p-3 text-sm">
-        <summary className="cursor-pointer font-medium text-text-primary">
-          连接方式与安装说明
-        </summary>
+      <Disclosure
+        label="连接方式与安装说明"
+        className="rounded-lg border border-border p-3 text-sm"
+      >
         <div className="mt-3 space-y-2">
           <p>
             上方配对命令默认只在本机监听。跨电脑连接可使用远程服务现有 Relay
@@ -69,7 +69,7 @@ export function NodeSetupInstructions({
             查看远程服务安装与后台运行说明
           </a>
         </div>
-      </details>
+      </Disclosure>
     </div>
   )
 }

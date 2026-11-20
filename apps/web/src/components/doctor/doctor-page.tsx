@@ -1,3 +1,6 @@
+import type { MachineProviderRead } from '../../provider/use-machine-provider-details'
+import { MachineProviderBadge } from '../../provider/provider-summary-badge'
+import { useMachineProviderDetails } from '../../provider/use-machine-provider-details'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearch } from '@tanstack/react-router'
@@ -16,10 +19,12 @@ import {
 } from 'lucide-react'
 
 import {
+  Disclosure,
   Badge,
   Button,
   Card,
   CardContent,
+  PageHeader,
   CardHeader,
   CardTitle,
 } from '@codetether/ui'
@@ -46,20 +51,23 @@ import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
 import { machineConnectionStateLabel } from '../machines/machine-presentation'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import {
+  doctorOverallPresentation,
+  isProviderUsable,
+  providerInstallationGuidance,
+  providerRepairText,
+  remoteComputerRepairText,
+} from '../onboarding/onboarding-model'
+import {
+  onboardingProviderRuntimeLabel,
+  onboardingSessionDiscoveryLabel,
   backendModeLabel,
   backendReadinessLabel,
-  doctorOverallPresentation,
-  doctorStateBadgeVariant,
-  doctorStateLabel,
-  isProviderUsable,
   lifecycleObservationLabel,
   providerCompatibilityLabel,
   providerDisplayName,
-  providerInstallationGuidance,
-  providerRepairText,
   providerVersionLabel,
-  remoteComputerRepairText,
-} from '../onboarding/onboarding-model'
+} from '../../provider/provider-presentation'
+import { doctorComponentStatus } from './doctor-component-status'
 import { ProviderGuidanceLink } from '../onboarding/provider-guidance-link'
 
 export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
@@ -89,6 +97,15 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
         onboardingQuery.data !== undefined ||
         onboardingQuery.isError),
   })
+  const report = doctorQuery.data
+  const providerDetails = useMachineProviderDetails(
+    connectionState === 'connected' && report
+      ? [
+          report.thisComputer.machineId,
+          ...report.remoteComputers.map((machine) => machine.machineId),
+        ]
+      : [],
+  )
   useEffect(() => {
     if (checking || doctorQuery.isFetching || !restoreCheckFocusRef.current) {
       return
@@ -176,51 +193,41 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
 
   const doctor = doctorQuery.data
   const overallPresentation = doctorOverallPresentation(doctor)
-  const Heading = embedded ? 'h3' : 'h1'
+  const SectionHeading = embedded ? 'h3' : 'h2'
 
   return (
     <section
       aria-labelledby="doctor-heading"
       aria-busy={checking || doctorQuery.isFetching}
-      className={
-        embedded
-          ? 'min-w-0'
-          : 'mx-auto w-full max-w-5xl px-[var(--layout-content-inline-padding)] py-[var(--layout-content-block-padding)]'
-      }
+      className={embedded ? 'min-w-0' : 'ct-page-content'}
     >
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <Heading
-            id="doctor-heading"
-            className="text-page font-semibold text-text-primary"
+      <PageHeader
+        headingId="doctor-heading"
+        level={embedded ? 2 : 1}
+        title={embedded ? '状态检查' : '关于与检查'}
+        description="查看电脑、AI 工具、AI 服务、项目和远程连接分别是否可用。检查不会发送提示或创建会话。"
+        actions={
+          <Button
+            ref={checkButtonRef}
+            type="button"
+            size="sm"
+            disabled={checking || doctorQuery.isFetching}
+            onClick={() => void checkAgain()}
           >
-            {embedded ? '状态检查' : 'CodeTether 检查'}
-          </Heading>
-          <p className="mt-1 max-w-2xl text-sm leading-relaxed text-text-secondary">
-            查看电脑、AI 工具、AI
-            服务、项目和远程连接分别是否可用。检查不会发送提示或创建对话。
-          </p>
-        </div>
-        <Button
-          ref={checkButtonRef}
-          type="button"
-          size="sm"
-          disabled={checking || doctorQuery.isFetching}
-          onClick={() => void checkAgain()}
-        >
-          {checking || doctorQuery.isFetching ? (
-            <LoaderCircle
-              aria-hidden="true"
-              className="animate-spin motion-reduce:animate-none"
-            />
-          ) : (
-            <RefreshCw aria-hidden="true" />
-          )}
-          检查状态
-        </Button>
-      </div>
+            {checking || doctorQuery.isFetching ? (
+              <LoaderCircle
+                aria-hidden="true"
+                className="animate-spin motion-reduce:animate-none"
+              />
+            ) : (
+              <RefreshCw aria-hidden="true" />
+            )}
+            检查状态
+          </Button>
+        }
+      />
 
-      <Card className="mt-5 border-primary/30 bg-primary-muted/15">
+      <Card className="border-primary/30 bg-primary-muted/15">
         <CardContent className="flex flex-wrap items-center gap-4 p-5">
           <span
             aria-hidden="true"
@@ -254,18 +261,18 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
       <div className="mt-4 grid gap-4 lg:grid-cols-2">
         <DoctorSection
           icon={<Monitor aria-hidden="true" />}
-          title="这台电脑"
+          title="本地电脑"
           state={doctor.thisComputer.state}
         >
           <KeyValue label="电脑" value={doctor.thisComputer.displayName} />
           <KeyValue
             label="应用服务"
-            value={doctorStateLabel(doctor.thisComputer.state)}
+            value={doctorComponentStatus(doctor.thisComputer.state).label}
           />
-          <details className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted">
-            <summary className="cursor-pointer font-medium text-text-secondary">
-              技术详情
-            </summary>
+          <Disclosure
+            label="技术详情"
+            className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted"
+          >
             <div className="mt-2 space-y-1">
               <KeyValue
                 label="平台"
@@ -284,7 +291,7 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
                 mono
               />
             </div>
-          </details>
+          </Disclosure>
         </DoctorSection>
 
         <DoctorSection
@@ -348,16 +355,20 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
       <section aria-labelledby="doctor-providers-heading" className="mt-4">
         <div className="mb-3 flex items-center gap-2">
           <Bot aria-hidden="true" className="size-5 text-primary" />
-          <h2
+          <SectionHeading
             id="doctor-providers-heading"
             className="text-lg font-semibold text-text-primary"
           >
             AI 工具
-          </h2>
+          </SectionHeading>
         </div>
         <div className="grid gap-4 lg:grid-cols-2">
           {doctor.providers.map((provider) => (
-            <DoctorProviderCard key={provider.provider} provider={provider} />
+            <DoctorProviderCard
+              key={provider.provider}
+              provider={provider}
+              detail={providerDetails.get(doctor.thisComputer.machineId)}
+            />
           ))}
         </div>
       </section>
@@ -365,12 +376,12 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
       <section aria-labelledby="doctor-remote-heading" className="mt-4">
         <div className="mb-3 flex items-center gap-2">
           <Network aria-hidden="true" className="size-5 text-primary" />
-          <h2
+          <SectionHeading
             id="doctor-remote-heading"
             className="text-lg font-semibold text-text-primary"
           >
             远程访问
-          </h2>
+          </SectionHeading>
         </div>
         {doctor.remoteComputers.length === 0 ? (
           <Card>
@@ -389,7 +400,11 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
             {doctor.remoteComputers.map((machine) => (
-              <RemoteComputerCard key={machine.machineId} machine={machine} />
+              <RemoteComputerCard
+                key={machine.machineId}
+                machine={machine}
+                detail={providerDetails.get(machine.machineId)}
+              />
             ))}
           </div>
         )}
@@ -408,7 +423,9 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
               <KeyValue
                 key={provider.provider}
                 label={providerDisplayName(provider.provider)}
-                value={sessionDiscoveryLabel(provider.sessionDiscovery)}
+                value={onboardingSessionDiscoveryLabel(
+                  provider.sessionDiscovery,
+                )}
               />
             ))}
           </div>
@@ -443,7 +460,7 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
       <p className="sr-only" role="status" aria-live="polite">
         {checking || doctorQuery.isFetching
           ? '正在重新检查。'
-          : `检查完成：${doctorStateLabel(doctor.overall)}。`}
+          : `检查完成：${doctorComponentStatus(doctor.overall).label}。`}
       </p>
     </section>
   )
@@ -453,11 +470,13 @@ function DoctorSection({
   children,
   icon,
   state,
+  status,
   title,
 }: {
+  readonly status?: ReactNode
   readonly children: ReactNode
   readonly icon: ReactNode
-  readonly state: DoctorComponentState
+  readonly state?: DoctorComponentState
   readonly title: string
 }) {
   return (
@@ -468,7 +487,7 @@ function DoctorSection({
             <span className="text-primary [&>svg]:size-4">{icon}</span>
             <CardTitle>{title}</CardTitle>
           </div>
-          <StateBadge state={state} />
+          {state ? <StateBadge state={state} /> : status}
         </div>
       </CardHeader>
       <CardContent>{children}</CardContent>
@@ -478,8 +497,10 @@ function DoctorSection({
 
 function DoctorProviderCard({
   provider,
+  detail,
 }: {
   readonly provider: DoctorProviderStatus
+  readonly detail?: MachineProviderRead
 }) {
   const guidance = providerInstallationGuidance[provider.provider]
   const authRequired =
@@ -491,7 +512,9 @@ function DoctorProviderCard({
     <DoctorSection
       icon={<Bot aria-hidden="true" />}
       title={providerDisplayName(provider.provider)}
-      state={provider.state}
+      status={
+        <MachineProviderBadge read={detail} provider={provider.provider} />
+      }
     >
       <div className="space-y-2">
         <KeyValue label="安装" value={providerVersionLabel(provider)} />
@@ -545,10 +568,10 @@ function DoctorProviderCard({
           </ProviderGuidanceLink>
         </div>
       ) : null}
-      <details className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted">
-        <summary className="cursor-pointer font-medium text-text-secondary">
-          技术详情
-        </summary>
+      <Disclosure
+        label="技术详情"
+        className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted"
+      >
         <div className="mt-2 space-y-1">
           <KeyValue
             label="已选择安装"
@@ -578,25 +601,28 @@ function DoctorProviderCard({
           ) : null}
           <KeyValue
             label="状态"
-            value={provider.compatibility ?? 'not_observed'}
+            value={providerCompatibilityLabel(provider)}
             compact
             mono
           />
           <KeyValue
             label="新会话"
-            value={provider.runtimeReadiness ?? 'not_observed'}
+            value={onboardingProviderRuntimeLabel(provider)}
             compact
             mono
           />
           <KeyValue
             label="以前的会话"
-            value={provider.sessionDiscovery}
+            value={onboardingSessionDiscoveryLabel(provider.sessionDiscovery)}
             compact
             mono
           />
           <KeyValue
             label="信息新鲜度"
-            value={provider.freshness}
+            value={lifecycleObservationLabel(
+              provider.freshness,
+              provider.observedAt,
+            )}
             compact
             mono
           />
@@ -617,14 +643,16 @@ function DoctorProviderCard({
             />
           ) : null}
         </div>
-      </details>
+      </Disclosure>
     </DoctorSection>
   )
 }
 
 function RemoteComputerCard({
   machine,
+  detail,
 }: {
+  readonly detail?: MachineProviderRead
   readonly machine: DoctorRemoteComputer
 }) {
   const executionReady = machine.providers.some(isProviderUsable)
@@ -679,7 +707,10 @@ function RemoteComputerCard({
               <span className="text-sm font-medium text-text-primary">
                 {providerDisplayName(provider.provider)}
               </span>
-              <StateBadge state={provider.state} />
+              <MachineProviderBadge
+                read={detail}
+                provider={provider.provider}
+              />
             </div>
             <div className="mt-2 space-y-1">
               <KeyValue
@@ -699,7 +730,9 @@ function RemoteComputerCard({
               />
               <KeyValue
                 label="以前的会话"
-                value={sessionDiscoveryLabel(provider.sessionDiscovery)}
+                value={onboardingSessionDiscoveryLabel(
+                  provider.sessionDiscovery,
+                )}
                 compact
               />
             </div>
@@ -711,10 +744,10 @@ function RemoteComputerCard({
           </div>
         ))}
       </div>
-      <details className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted">
-        <summary className="cursor-pointer font-medium text-text-secondary">
-          技术详情
-        </summary>
+      <Disclosure
+        label="技术详情"
+        className="mt-3 rounded-sm border border-border px-3 py-2 text-xs text-text-muted"
+      >
         <div className="mt-2 space-y-1">
           <KeyValue
             label="传输"
@@ -724,7 +757,10 @@ function RemoteComputerCard({
           />
           <KeyValue
             label="AI 工具状态"
-            value={machine.providerFreshness}
+            value={lifecycleObservationLabel(
+              machine.providerFreshness,
+              machine.observedAt,
+            )}
             compact
             mono
           />
@@ -755,7 +791,7 @@ function RemoteComputerCard({
             />
           ) : null}
         </div>
-      </details>
+      </Disclosure>
       <Link
         to="/devices/$machineId"
         params={{ machineId: machine.machineId }}
@@ -769,8 +805,8 @@ function RemoteComputerCard({
 
 function StateBadge({ state }: { readonly state: DoctorComponentState }) {
   return (
-    <Badge variant={doctorStateBadgeVariant(state)}>
-      {doctorStateLabel(state)}
+    <Badge variant={doctorComponentStatus(state).variant}>
+      {doctorComponentStatus(state).label}
     </Badge>
   )
 }
@@ -798,21 +834,6 @@ function KeyValue({
       </span>
     </div>
   )
-}
-
-function sessionDiscoveryLabel(
-  state: DoctorProviderStatus['sessionDiscovery'],
-): string {
-  switch (state) {
-    case 'supported':
-      return '可用'
-    case 'unsupported':
-      return '此 AI 工具版本不受支持'
-    case 'unavailable':
-      return '暂时不可用'
-    case 'unknown':
-      return '尚未检查'
-  }
 }
 
 function DoctorLoading({
@@ -876,10 +897,9 @@ function DoctorUnavailable({
             <RefreshCw aria-hidden="true" />
             重新检查
           </Button>
-          <details className="mt-4 text-xs text-text-muted">
-            <summary className="cursor-pointer">技术详情</summary>
+          <Disclosure label="技术详情" className="mt-4 text-xs text-text-muted">
             <p className="mt-2 font-mono">host_state: {connectionState}</p>
-          </details>
+          </Disclosure>
         </CardContent>
       </Card>
     </section>

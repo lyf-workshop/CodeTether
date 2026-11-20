@@ -5,21 +5,32 @@ import test from 'node:test'
 const sourceRoot = new URL('../src/', import.meta.url)
 
 test('Remote Claude creation is executable-gated and exposes only Provider effort controls', async () => {
-  const [dialog, selection, fields, creationSelection] = await Promise.all([
+  const [dialog, fields, creationSelection] = await Promise.all([
     source('components/conversations/new-conversation-dialog.tsx'),
-    source('components/conversations/new-conversation-provider-selection.ts'),
     source('components/conversations/new-conversation-fields.tsx'),
     source('components/conversations/new-conversation-selection.ts'),
   ])
 
-  assert.match(
-    selection,
-    /provider\.available[\s\S]*provider\.capabilities\.streaming[\s\S]*provider\.capabilities\.resume/u,
-  )
+  const { newConversationProviderEligibility } =
+    await import('../.tmp/test-dist/components/conversations/new-conversation-provider-selection.js')
+  for (const [available, streaming, resume, eligible] of [
+    [true, true, true, true],
+    [false, true, true, false],
+    [true, false, true, false],
+    [true, true, false, false],
+  ]) {
+    const option = newConversationProviderEligibility({
+      displayName: 'Claude Code',
+      available,
+      availability: available ? 'available' : 'unavailable',
+      capabilities: { streaming, resume },
+    })
+    assert.equal(option.eligible, eligible)
+  }
   assert.match(dialog, /resolveConversationCreationProvider/u)
   assert.match(dialog, /provider: presentation\.provider/u)
   assert.match(dialog, /selectedProvider === undefined/u)
-  assert.match(dialog, /启动可恢复流式会话的 AI\s*工具/u)
+  assert.match(dialog, /没有可用于新会话的 AI\s*工具/u)
   assert.doesNotMatch(dialog + fields, /modelSelection|选择模型|selectedModel/u)
   assert.match(
     creationSelection,

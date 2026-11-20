@@ -56,6 +56,8 @@ for (const { label, path, exportName, props } of surfaces) {
         .querySelector(`a[href="${deviceHref(local)}"]`)
         .closest('article')
       assert.match(localCard.textContent, /这台电脑无需账号即可使用。/u)
+      assert.equal(dom.container.querySelector('h1').textContent, '设备')
+      assert.equal(localCard.textContent.match(/在线/gu)?.length, 1)
       assert.match(
         dom.container.textContent,
         /账号用于将手机或平板与电脑配对。其他电脑也可以直接配对，无需账号。/u,
@@ -73,6 +75,11 @@ for (const { label, path, exportName, props } of surfaces) {
       assert.ok(group.textContent.includes(machine.displayName))
     }
     assert.match(group.textContent, /离线/u)
+    if (exportName === 'MachinesPage') {
+      for (const card of group.querySelectorAll('article')) {
+        assert.equal(card.textContent.match(/离线/gu)?.length, 1)
+      }
+    }
     assert.deepEqual(
       deviceLinks(dom.container).slice(0, 3),
       [local, online, connecting].map(deviceHref),
@@ -127,6 +134,44 @@ for (const { label, path, exportName, props } of surfaces) {
     assert.deepEqual(deviceLinks(dom.container), [deviceHref(local)])
   })
 }
+
+test('opening a conversation reveals its offline computer without changing the browsing preference', async (t) => {
+  const fixture = metadataUiFixture({ machines: [local, ...offline] })
+  const { WorkspaceSidebar } = fixture.load(
+    'components/app-shell/workspace-sidebar.tsx',
+  )
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const show = (id, computer) =>
+    dom.render(
+      h(WorkspaceSidebar, {
+        currentPath: id ? '/c/' + id : '/devices',
+        currentConversation: id
+          ? { conversationId: id, machineId: computer.machineId }
+          : undefined,
+        onNewConversation() {},
+      }),
+    )
+  await show(undefined)
+  assert.equal(
+    offlineGroup(dom.container).getAttribute('aria-expanded'),
+    'false',
+  )
+  await show('conv_first', offline[0])
+  assert.ok(deviceLinks(dom.container).includes(deviceHref(offline[0])))
+  await dom.perform(() => offlineGroup(dom.container).click())
+  assert.equal(
+    offlineGroup(dom.container).getAttribute('aria-expanded'),
+    'false',
+  )
+  await show('conv_second', offline[1])
+  assert.ok(deviceLinks(dom.container).includes(deviceHref(offline[1])))
+  await show('conv_local', local)
+  assert.equal(
+    offlineGroup(dom.container).getAttribute('aria-expanded'),
+    'false',
+  )
+})
 
 function machine(id, displayName, connectionState) {
   const usable = connectionState === 'local' || connectionState === 'online'

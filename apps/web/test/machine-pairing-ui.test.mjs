@@ -122,7 +122,13 @@ test('remote detail is truthful and unpair remains explicit and remote-only', as
     'capabilities.reasoningControl',
   ])
     assert.ok(providers.includes(field))
-  for (const label of ['安装状态', '运行时', '后端', '执行状态', '已声明能力'])
+  for (const label of [
+    '安装状态',
+    '运行环境',
+    'AI 服务',
+    '运行情况',
+    '已声明能力',
+  ])
     assert.ok(providers.includes(label))
   assert.match(providers, /health\.freshnessLabel/u)
   assert.match(providers, /已声明能力/u)
@@ -199,8 +205,9 @@ test('New Conversation excludes identity-only remote Machines by canonical capab
   assert.match(dialog, /conversationCreationProviderOptions/u)
   assert.match(
     providerSelection,
-    /provider\.available[\s\S]*provider\.capabilities\.streaming[\s\S]*provider\.capabilities\.resume/u,
+    /provider\.capabilities\.streaming && provider\.capabilities\.resume/u,
   )
+  assert.match(providerSelection, /provider\.available && supported/u)
   assert.match(selection, /设备不能运行 AI 工具/u)
   assert.match(selection, /choice\.unavailableReason !== undefined/u)
   assert.doesNotMatch(dialog, /当前 Codex 检测/u)

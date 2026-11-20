@@ -23,10 +23,14 @@ test('first-run screens link to the existing account settings and return to the 
     async getOnboarding() {
       return { onboarding: progress }
     },
+    async getMachine(machineId) {
+      return { machine: { machineId }, providers: [] }
+    },
     async getDoctor() {
       return {
         doctor: {
           thisComputer: {
+            machineId: 'machine_account01',
             displayName: '测试电脑',
             platform: 'win32',
             architecture: 'x64',
@@ -43,6 +47,10 @@ test('first-run screens link to the existing account settings and return to the 
       queryClient.setQueryData(onboardingQueryKeys.progress, progress)
       return { data: { onboarding: progress } }
     },
+  }
+  const hostHooks = {
+    useHostRuntime: () => runtime,
+    useHostConnectionState: () => 'connected',
   }
   const dependencies = new Map([
     ['@tanstack/react-query', reactQuery],
@@ -72,13 +80,8 @@ test('first-run screens link to the existing account settings and return to the 
       },
     ],
     ['./onboarding-layout.css', {}],
-    [
-      '../../runtime/host/host-runtime-hooks',
-      {
-        useHostRuntime: () => runtime,
-        useHostConnectionState: () => 'connected',
-      },
-    ],
+    ['../../runtime/host/host-runtime-hooks', hostHooks],
+    ['../runtime/host/host-runtime-hooks', hostHooks],
     [
       '../../runtime/account/use-account-session',
       {
@@ -136,16 +139,22 @@ test('first-run screens link to the existing account settings and return to the 
       assert.equal(dom.window.document.activeElement, entry)
       entry.click()
     })
-    await dom.until(() => find('h2', '账号'))
+    await dom.until(() => find('h1', '账号'))
     const returnLink = find('a', '返回设置向导')
     assert.equal(returnLink.getAttribute('href'), '/onboarding')
     await dom.perform(() => returnLink.click())
     await dom.until(() => find('h1', expectedHeading))
+    assert.equal(dom.container.querySelectorAll('h1').length, 1)
+    await dom.until(
+      () =>
+        dom.window.document.activeElement ===
+        dom.container.querySelector('#setup-main'),
+    )
   }
 
   await dom.until(() => find('button', '开始设置'))
   assert.match(dom.container.textContent, /在这台电脑上使用不需要账号/u)
-  await openAccountAndReturn('欢迎')
+  await openAccountAndReturn('你的 AI 编程助手，在你的每台设备上都能接着用')
   assert.equal(progress.revision, 1)
 
   await dom.perform(() => find('button', '开始设置').click())

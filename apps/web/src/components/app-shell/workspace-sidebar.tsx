@@ -107,6 +107,11 @@ export function WorkspaceSidebar({
   const offlineGroups = groups.filter(({ machine }) =>
     isOfflineRemoteComputer(machine),
   )
+  const offlineConversationId = offlineGroups.some(
+    ({ machine }) => machine.machineId === currentConversation?.machineId,
+  )
+    ? currentConversation?.conversationId
+    : undefined
   const pending =
     projectsQuery.data === undefined || machinesQuery.data === undefined
   const failed = projectsQuery.isError || machinesQuery.isError
@@ -265,8 +270,10 @@ export function WorkspaceSidebar({
                   .filter(({ machine }) => !isOfflineRemoteComputer(machine))
                   .map(renderDevice)}
                 <OfflineComputersGroup
+                  key={offlineConversationId ?? 'browsing'}
                   count={offlineGroups.length}
                   surface="sidebar"
+                  initiallyReveal={offlineConversationId !== undefined}
                 >
                   {offlineGroups.map(renderDevice)}
                 </OfflineComputersGroup>

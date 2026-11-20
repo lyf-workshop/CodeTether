@@ -333,23 +333,23 @@ test('structured canonical failures control pre-Turn mutation copy without raw f
   const cases = [
     [
       canonicalFailure('execution_capacity_reached'),
-      'CodeTether 当前没有可用的远程运行时槽位。 请等待其他工作结束后再开始新一轮。',
+      'CodeTether 当前没有可用的远程运行时槽位。请等待其他工作结束后再开始新一轮。',
     ],
     [
       canonicalFailure('conversation_busy'),
-      '这个会话已经有一个活动轮次。 请等待当前轮次结束。',
+      '这个会话已经有一个活动轮次。请等待当前轮次结束。',
     ],
     [
       canonicalFailure('login_required'),
-      '执行电脑上的AI 工具登录状态不可用。 请在执行电脑上完成登录，然后再开始新一轮。',
+      '执行电脑上的AI 工具登录状态不可用。请在执行电脑上完成登录，然后再开始新一轮。',
     ],
     [
       canonicalFailure('machine_offline'),
-      'CodeTether 当前无法连接到这台执行电脑。 请恢复电脑连接并等待状态重新验证。',
+      'CodeTether 当前无法连接到这台执行电脑。请恢复电脑连接并等待状态重新验证。',
     ],
     [
       canonicalFailure('project_location_invalid'),
-      '已注册的项目位置不再匹配原来的工作区。 请在项目详情中修复项目位置后再继续。',
+      '已注册的项目位置不再匹配原来的工作区。请在项目详情中修复项目位置后再继续。',
     ],
   ]
 

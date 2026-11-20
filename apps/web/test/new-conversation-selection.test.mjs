@@ -35,7 +35,7 @@ test('project choices group exact locations under real devices, local first, wit
   )
   assert.deepEqual(
     groups.map((group) => group.label),
-    ['这台电脑 (Windows)', '构建设备 (Linux)'],
+    ['本地电脑 (Windows)', '构建设备 (Linux)'],
   )
   assert.deepEqual(
     groups[1].choices.map((choice) => choice.projectId),
@@ -286,7 +286,7 @@ test('canonical selected installation gates creation; a healthy alternate is nev
     [group],
   )[0]
   assert.equal(option.eligibility.eligible, false)
-  assert.match(option.eligibility.label, /所选安装不可用.*重新检查/u)
+  assert.match(option.eligibility.label, /暂时不可用.*重新检查/u)
   assert.equal(group.selectedInstallationId, selected.installationId)
 })
 
@@ -312,14 +312,14 @@ test('an empty installation list directs the user to check the installation', ()
     [{ provider: 'claude-code', installations: [] }],
   )
   assert.equal(eligibility.eligible, false)
-  assert.match(eligibility.label, /未检测到安装.*确认安装状态后重新检查/u)
+  assert.match(eligibility.label, /未安装.*安装后重新检查/u)
 })
 
 test('blocked tool choices show the selected installation’s observed reason and next step', () => {
   for (const [overrides, expected] of [
     [
       { compatibility: { state: 'incompatible', freshness: 'last_known' } },
-      /上次检查时.*不兼容.*重新检查/u,
+      /需要更新 CodeTether.*重新检查/u,
     ],
     [
       {
@@ -334,11 +334,11 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'ready',
         },
       },
-      /^所选安装的运行时.*不兼容.*重新检查/u,
+      /需要更新 CodeTether.*重新检查/u,
     ],
     [
       { compatibility: { state: 'unavailable', freshness: 'not_observed' } },
-      /尚未确认所选安装能否运行.*重新检查/u,
+      /尚未确认这个工具能否运行.*重新检查/u,
     ],
     [
       {
@@ -352,7 +352,7 @@ test('blocked tool choices show the selected installation’s observed reason an
           },
         },
       },
-      /不支持新会话所需的运行或恢复能力.*重新检查/u,
+      /不支持新会话所需的功能.*重新检查/u,
     ],
     [
       {
@@ -362,7 +362,7 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'authentication_required',
         },
       },
-      /需要登录.*登录后重新检查/u,
+      /未登录.*完成登录/u,
     ],
     [
       {
@@ -372,15 +372,15 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'authentication_required',
         },
       },
-      /需要身份验证.*检查服务配置/u,
+      /暂时不可用.*检查 AI 服务配置/u,
     ],
     [
       { backend: { freshness: 'current', readiness: 'misconfigured' } },
-      /AI 服务配置不可用.*检查服务配置/u,
+      /暂时不可用.*检查 AI 服务配置/u,
     ],
     [
       { backend: { freshness: 'current', readiness: 'unavailable' } },
-      /AI 服务暂时不可用.*重新检查/u,
+      /暂时不可用.*重新检查/u,
     ],
   ]) {
     const selected = installation('installation_selected01', overrides)
@@ -422,7 +422,7 @@ test('an older backend login observation does not disable a currently eligible t
 
 test('legacy descriptor eligibility is preserved without Lifecycle, and runtime health stays advisory', () => {
   const item = provider('codex', {
-    executionHealth: { state: 'degraded', freshness: 'stale' },
+    executionHealth: { state: 'degraded', freshness: 'last_known' },
   })
   const option = conversationCreationProviderOptions([item], undefined)[0]
   assert.equal(option.eligibility.eligible, true)
@@ -465,6 +465,7 @@ function provider(id, overrides = {}) {
     agent: id === 'codex' ? 'codex' : 'claude',
     displayName: id === 'codex' ? 'Codex' : 'Claude Code',
     available: true,
+    availability: 'available',
     availabilityLabel: '可用',
     models: [],
     reasoningOptions: [],

@@ -2,7 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { RefreshCw } from 'lucide-react'
 
-import { Button, Notice, SettingsRow } from '@codetether/ui'
+import { PageHeader, Button, Notice, SettingsRow } from '@codetether/ui'
 import {
   useHostConnectionState,
   useHostRuntime,
@@ -39,7 +39,7 @@ export function AboutSettings({
   })
   return (
     <>
-      <h2 className="mb-5 text-xl font-semibold">关于与检查</h2>
+      <PageHeader title="关于与检查" />
       <div className="mb-6 overflow-hidden rounded-lg border border-border bg-surface">
         <DesktopUpdateSettings
           snapshot={updateSnapshot}
@@ -67,7 +67,7 @@ export function AboutSettings({
         />
         <SettingsRow
           title="安装选择与登录说明"
-          description="在设备详情中查看真实的 AI 工具安装、运行时、后端和执行健康；安装选择仍需明确确认，不会自动切换。"
+          description="在电脑详情中查看 AI 工具的安装、登录和运行状态。如果安装了多个版本，可以选择要使用的版本。"
           control={
             <Button asChild variant="secondary" size="sm">
               <Link to="/devices">查看设备</Link>

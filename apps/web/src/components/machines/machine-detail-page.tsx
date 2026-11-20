@@ -1,17 +1,16 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import {
-  ArrowLeft,
-  MapPin,
-  Monitor,
-  Plus,
-  RefreshCw,
-  Server,
-  Unplug,
-} from 'lucide-react'
+import { MapPin, Monitor, Plus, RefreshCw, Server, Unplug } from 'lucide-react'
 
-import { Button, Notice, SectionState, cn } from '@codetether/ui'
+import {
+  Disclosure,
+  Button,
+  Notice,
+  PageHeader,
+  SectionState,
+  cn,
+} from '@codetether/ui'
 import {
   MachineIdSchema,
   ProviderInstallationIdSchema,
@@ -145,35 +144,15 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
 
   return (
     <MachinePageFrame>
-      <Link
-        to="/devices"
-        className="mb-4 inline-flex w-fit items-center gap-1.5 rounded-xs text-sm text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        返回设备
-      </Link>
-      <header className="mb-8 flex min-w-0 flex-wrap items-center gap-4">
-        <span
-          aria-hidden="true"
-          className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-surface-inset text-text-secondary"
-        >
-          <MachineIcon className="size-6" />
-        </span>
-        <div className="min-w-0 flex-1 basis-40">
-          <h1
-            title={machine.displayName}
-            className="truncate text-page font-semibold"
-          >
-            {machine.displayName}
-          </h1>
-          <p className="mt-2 text-sm text-text-muted">
-            {machineSubtitleLabel(machine)} ·{' '}
-            {machine.kind === 'local'
-              ? '本机'
-              : machineExecutionTransportLabel(connection?.executionTransport)}
-          </p>
-        </div>
-      </header>
+      <PageHeader
+        title={machine.displayName}
+        icon={<MachineIcon className="size-6" />}
+        description={
+          machine.kind === 'local'
+            ? machineSubtitleLabel(machine)
+            : `${machineSubtitleLabel(machine)} · ${machineExecutionTransportLabel(connection?.executionTransport)}`
+        }
+      />
       {!online ? (
         <div className="mb-6">
           <Notice
@@ -261,16 +240,16 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             onUnpair={() => setUnpairOpen(true)}
           />
           {machine.kind === 'remote' ? (
-            <details className="min-w-0 rounded-lg border border-border bg-surface p-4">
-              <summary className="cursor-pointer rounded-xs text-md font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                Relay 高级连接设置
-              </summary>
+            <Disclosure
+              label="Relay 高级连接设置"
+              className="min-w-0 rounded-lg border border-border bg-surface p-4"
+            >
               <MachineRelaySection
                 hostReady={hostReady}
                 machine={machine}
                 relay={relay}
               />
-            </details>
+            </Disclosure>
           ) : null}
         </div>
       </div>
@@ -343,7 +322,7 @@ export function MachineConnectionSection({
           label="连接方式"
           value={
             machine.kind === 'local'
-              ? '这台电脑'
+              ? '本地电脑'
               : machineExecutionTransportLabel(connection?.executionTransport)
           }
         />
@@ -491,9 +470,5 @@ function MachineNotFound() {
 }
 
 function MachinePageFrame({ children }: { children: ReactNode }) {
-  return (
-    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
-      {children}
-    </div>
-  )
+  return <div className="ct-page-content min-h-full">{children}</div>
 }

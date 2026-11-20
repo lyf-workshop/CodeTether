@@ -46,9 +46,7 @@ export function ConversationHeader({
           {conversation.model}
         </span>
         {context?.reasoning === undefined ? null : (
-          <span className="min-w-0 truncate">
-            · 推理强度：{context.reasoning}
-          </span>
+          <span className="min-w-0 truncate">· 推理：{context.reasoning}</span>
         )}
         {context?.importedFrom === undefined ? null : (
           <Badge variant="outline">从 {context.importedFrom} 导入</Badge>

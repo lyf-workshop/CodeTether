@@ -16,14 +16,23 @@
   display: inline-flex;
 }
 
+/* Classic Windows scrollbars must not move the center line between short and long pages. */
+#main-content:has(> .ct-page-content, > [data-page-type='settings']),
+.ct-setup-scroller {
+  scrollbar-gutter: stable both-edges;
+}
+
 @media (width <= 37.5rem) {
+  .ct-page-content[data-page-type='form'] {
+    margin-inline: auto;
+  }
+
   [data-slot='workspace-global-search'] {
     display: inline-flex;
   }
   .ct-workspace-shell {
     --layout-topbar-height: var(--s12);
     --layout-content-inline-padding: var(--s4);
-    --layout-inbox-page-block-padding: var(--s4);
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
   }

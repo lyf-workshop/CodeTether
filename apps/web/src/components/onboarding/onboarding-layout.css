@@ -8,7 +8,7 @@
 }
 .ct-onboarding-inner {
   width: 100%;
-  max-width: var(--layout-onboarding-width);
+  max-width: var(--layout-form-width);
   min-width: 0;
   padding-block: var(--s8);
 }
@@ -32,20 +32,6 @@
 .ct-onboarding-progress [data-complete] .ct-onboarding-progress-line {
   background: var(--ct-ink);
 }
-.ct-onboarding-title,
-.ct-onboarding-previous h2 {
-  color: var(--ct-text);
-  font-size: var(--layout-onboarding-title-size);
-  font-weight: var(--layout-onboarding-title-weight);
-  letter-spacing: var(--layout-onboarding-title-tracking);
-  line-height: var(--layout-onboarding-title-leading);
-}
-.ct-onboarding-lead {
-  margin-top: var(--s3);
-  color: var(--ct-text-2);
-  font-size: var(--fs-lg);
-  line-height: var(--layout-onboarding-lead-leading);
-}
 .ct-onboarding-brand {
   width: var(--layout-onboarding-brand-size);
   height: var(--layout-onboarding-brand-size);
@@ -54,9 +40,6 @@
 .ct-onboarding-brand > svg {
   width: var(--s6);
   height: var(--s6);
-}
-.ct-onboarding-emblem-title {
-  margin-top: var(--s6);
 }
 .ct-onboarding-features,
 .ct-onboarding-readiness {

@@ -75,7 +75,7 @@ test('each pending action derives mutation state only from its own approvalId', 
       },
       approval_file01: {
         state: 'pending',
-        error: '审批请求已失效',
+        error: '批准请求已失效',
       },
     },
   })
@@ -88,7 +88,7 @@ test('each pending action derives mutation state only from its own approvalId', 
   assert.deepEqual(model[1].controls, {
     disabled: false,
     pending: false,
-    error: '审批请求已失效',
+    error: '批准请求已失效',
   })
 })
 
@@ -123,7 +123,7 @@ test('Dock markup bounds long text and follows details, decline, accept keyboard
 
   assert.match(source, /className="[^"]*min-w-0[^"]*truncate/u)
   assert.match(source, /max-h-40/u)
-  assert.match(source, /<details/u)
+  assert.match(source, /<Disclosure/u)
   assert.match(source, /getApprovalFocusTarget/u)
   assert.match(source, /restoreComposerWhenEditable/u)
   assert.match(source, /composer\.disabled \|\| composer\.readOnly/u)

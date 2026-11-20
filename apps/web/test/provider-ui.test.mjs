@@ -112,12 +112,12 @@ test('Claude Code status, version, models and capabilities remain Host-owned', (
   const claude = providerPresentation(bootstrap, 'claude-code')
   assert.equal(claude.agent, 'claude')
   assert.equal(claude.available, false)
-  assert.equal(claude.availabilityLabel, '版本不支持')
+  assert.equal(claude.availabilityLabel, '需要更新此 AI 工具')
   assert.equal(claude.version, '9.9.9')
   assert.deepEqual(claude.models, [
     { id: 'real-model-id', label: 'CLI model', isDefault: true },
   ])
-  assert.equal(claude.reasoningLabel, '思考强度')
+  assert.equal(claude.reasoningLabel, '推理')
   assert.deepEqual(claude.reasoningOptions, [
     { id: 'low', label: '低' },
     { id: 'high', label: '高' },
@@ -206,7 +206,7 @@ test('New Conversation falls back to executable Remote Claude and preserves its 
   assert.equal(selected?.capabilities.fileEdit, false)
   assert.equal(selected?.capabilities.shell, false)
   assert.equal(selected?.capabilities.modelSelection, false)
-  assert.equal(selected?.reasoningLabel, '思考强度')
+  assert.equal(selected?.reasoningLabel, '推理')
   assert.deepEqual(
     selected?.reasoningOptions.map((option) => option.id),
     ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -244,10 +244,10 @@ test('New Conversation explains health without turning a recoverable observation
 
   const eligibility = newConversationProviderEligibility(provider)
   assert.equal(eligibility.eligible, true)
-  assert.match(eligibility.executionLabel, /执行不可用/u)
+  assert.equal(eligibility.summary.status.label, '暂时不可用')
   assert.match(eligibility.executionAdvisory, /Codex/u)
-  assert.match(eligibility.executionAdvisory, /首个明确轮次会重新验证/u)
-  assert.match(eligibility.executionAdvisory, /不会重发任何旧请求/u)
+  assert.match(eligibility.executionAdvisory, /等待额度恢复/u)
+  assert.equal(eligibility.executionAdvisory.split('。').length, 2)
   assert.deepEqual(executableConversationProviders([provider]), [provider])
 
   const unsupported = newConversationProviderEligibility({
@@ -289,7 +289,7 @@ test('New Conversation keeps execution health advisory unless the executable pro
     },
   })
   assert.equal(current.eligible, true)
-  assert.match(current.executionAdvisory, /首个明确轮次会重新验证/u)
+  assert.match(current.executionAdvisory, /未登录，请在电脑上完成登录/u)
   assert.deepEqual(
     executableConversationProviders([
       {
@@ -322,7 +322,7 @@ test('New Conversation keeps execution health advisory unless the executable pro
     },
   })
   assert.equal(stale.eligible, true)
-  assert.match(stale.executionAdvisory, /首个明确轮次会重新验证/u)
+  assert.match(stale.executionAdvisory, /未登录，请在电脑上完成登录/u)
 
   for (const reason of [
     'provider_session_lost',
@@ -370,6 +370,14 @@ test('New Conversation keeps execution health advisory unless the executable pro
       true,
     )
   }
+
+  const blockedByCapabilities = newConversationProviderEligibility({
+    ...provider,
+    capabilities: { ...provider.capabilities, resume: false },
+    executionHealth: { state: 'unavailable', freshness: 'last_known', failure },
+  })
+  assert.equal(blockedByCapabilities.eligible, false)
+  assert.equal(blockedByCapabilities.label, '此工具暂不支持创建可恢复的会话。')
 
   const loggedOutRestrictedClaude = newConversationProviderEligibility({
     ...provider,

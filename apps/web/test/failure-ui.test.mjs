@@ -33,9 +33,7 @@ test('failure card and Composer expose keyboard and screen-reader semantics', as
   assert.match(card, /aria-live="polite"/u)
   assert.match(card, /aria-labelledby=\{titleId\}/u)
   assert.match(card, /aria-describedby=\{descriptionId\}/u)
-  assert.match(card, /<details/u)
-  assert.match(card, /<summary/u)
-  assert.match(card, /focus-visible:ring/u)
+  assert.match(card, /<Disclosure\s+label="技术详情"/u)
   assert.match(card, /role="alert"/u)
   assert.match(composer, /aria-disabled=\{!canEdit \|\| undefined\}/u)
   assert.ok(

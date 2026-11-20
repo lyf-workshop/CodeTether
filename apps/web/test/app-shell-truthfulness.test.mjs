@@ -80,7 +80,7 @@ test('Top Bar only renders optional product controls with real handlers', async 
   )
   assert.doesNotMatch(source, /defaultProfile|演示用户/u)
   assert.doesNotMatch(source, /未读/u)
-  assert.match(source, /待处理事项/u)
+  assert.match(source, /待处理，\$\{notificationCount\} 项/u)
   assert.doesNotMatch(source, /新建会话/u)
 })
 

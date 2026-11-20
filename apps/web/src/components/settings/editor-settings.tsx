@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import {
+  PageHeader,
   SegmentedControl,
   SegmentedControlItem,
   SettingsRow,
@@ -30,7 +31,7 @@ export function EditorSettings() {
 
   return (
     <>
-      <h2 className="mb-5 text-xl font-semibold">编辑器与输入</h2>
+      <PageHeader title="编辑器与输入" />
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <SettingsRow
           title="发送快捷键"

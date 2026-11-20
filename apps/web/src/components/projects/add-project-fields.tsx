@@ -86,7 +86,7 @@ export function AddProjectFields({
               {machine?.displayName ?? '找不到这台设备'}
             </span>
             {machine?.isLocal ? (
-              <span className="shrink-0 text-xs text-text-muted">这台电脑</span>
+              <span className="shrink-0 text-xs text-text-muted">本地电脑</span>
             ) : null}
           </div>
         ) : (
@@ -123,7 +123,7 @@ export function AddProjectFields({
                     title={reason}
                   >
                     {candidate.displayName}
-                    {candidate.isLocal ? '（这台电脑）' : ''}
+                    {candidate.isLocal ? '（本地电脑）' : ''}
                     {reason === undefined ? '' : ` · ${reason}`}
                   </SelectItem>
                 )

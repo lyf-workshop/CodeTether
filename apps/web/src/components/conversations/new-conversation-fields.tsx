@@ -1,3 +1,4 @@
+import { ProviderSummaryBadge } from '../../provider/provider-summary-badge'
 import { FolderOpen, LockKeyhole, Monitor } from 'lucide-react'
 import {
   AgentIdentityMark,
@@ -71,11 +72,11 @@ export function NewConversationFields({
       ? undefined
       : !presentation.capabilities.interrupt &&
           !presentation.capabilities.approvals
-        ? '这里不能停止或审批命令。'
+        ? '这里不能停止或批准命令。'
         : !presentation.capabilities.interrupt
           ? '这里不能停止会话。'
           : !presentation.capabilities.approvals
-            ? '这里不能审批命令。'
+            ? '这里不能批准命令。'
             : undefined
 
   return (
@@ -264,8 +265,11 @@ export function NewConversationFields({
                         aria-hidden="true"
                       />
                       <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-text-primary">
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold text-text-primary">
                           {provider.displayName}
+                          <ProviderSummaryBadge
+                            summary={option.eligibility.summary}
+                          />
                         </span>
                         <span
                           id={formId + '-provider-' + provider.provider}

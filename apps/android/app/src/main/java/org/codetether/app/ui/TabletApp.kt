@@ -72,7 +72,7 @@ internal fun TabletApp(state: TabletState, actions: TabletActions) {
 
 @Composable
 private fun SignIn(state: TabletState, actions: TabletActions) {
-    var email by remember { mutableStateOf("") }
+    var email by rememberSaveable { mutableStateOf("") }
     var code by remember(state.otpEmail) { mutableStateOf("") }
     EntryCard {
         Brand()

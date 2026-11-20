@@ -22,6 +22,36 @@ fn main() {
     assert!(!build_id.is_empty(), "Desktop build ID must not be empty");
     println!("cargo:rustc-env=CODETETHER_BUILD_ID={build_id}");
 
+    // A one-off, build-time-only port for W0F's isolated unsigned Desktop
+    // validation. Normal Desktop remains fixed to its production port.
+    println!("cargo:rerun-if-env-changed=CODETETHER_W0F_HOST_PORT");
+    let diagnostic_port = env::var("CODETETHER_W0F_HOST_PORT").ok();
+    assert!(
+        diagnostic_port
+            .as_deref()
+            .is_none_or(|value| value == "4320"),
+        "W0F diagnostic Desktop port must be 4320"
+    );
+    if diagnostic_port.is_some() {
+        assert_eq!(
+            env::var("VITE_CODETETHER_HOST_URL").as_deref(),
+            Ok("http://127.0.0.1:4320"),
+            "W0F diagnostic Desktop requires Web assets targeting port 4320"
+        );
+        let data_dir = env::var("CODETETHER_W0F_DATA_DIR")
+            .expect("W0F diagnostic Desktop requires an isolated data directory");
+        assert!(
+            PathBuf::from(&data_dir).is_absolute(),
+            "W0F diagnostic Desktop data directory must be absolute"
+        );
+        println!("cargo:rustc-env=CODETETHER_W0F_DATA_DIR={data_dir}");
+    }
+    println!("cargo:rerun-if-env-changed=CODETETHER_W0F_DATA_DIR");
+    println!(
+        "cargo:rustc-env=CODETETHER_DESKTOP_HOST_PORT={}",
+        diagnostic_port.as_deref().unwrap_or("4317")
+    );
+
     println!("cargo:rerun-if-env-changed=VITE_CODETETHER_CONTROL_PLANE_URL");
     println!("cargo:rerun-if-env-changed=CODETETHER_UPDATE_BASE_URL");
     println!("cargo:rerun-if-env-changed=CODETETHER_UPDATE_PUBKEY");

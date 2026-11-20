@@ -44,6 +44,8 @@ import { useDebouncedSearchQuery } from '../conversations/use-debounced-search-q
 import {
   filterProjectLocationConversations,
   filterProjectLocationSearchResults,
+  parseProjectWorkspaceSearch,
+  projectViewIncludesStatus,
   type ProjectWorkspaceSearch,
 } from './project-workspace-model'
 
@@ -134,8 +136,7 @@ export function ProjectConversationCollection({
     next: Partial<ProjectWorkspaceSearch>,
     nextSearchPage = searchPage,
   ) {
-    const value = { ...search, ...next, machineId }
-    delete value.invalidMachineId
+    const value = parseProjectWorkspaceSearch({ ...search, ...next, machineId })
     void navigate({
       to: nextSearchPage
         ? '/projects/$projectId/search'
@@ -226,11 +227,15 @@ export function ProjectConversationCollection({
             })
           }
         >
-          {statusOptions.map((option) => (
-            <SegmentedControlItem key={option.value} value={option.value}>
-              {option.label}
-            </SegmentedControlItem>
-          ))}
+          {statusOptions
+            .filter((option) =>
+              projectViewIncludesStatus(search.view, option.value),
+            )
+            .map((option) => (
+              <SegmentedControlItem key={option.value} value={option.value}>
+                {option.label}
+              </SegmentedControlItem>
+            ))}
         </SegmentedControl>
         {provider !== 'all' || status !== 'all' ? (
           <Button
@@ -358,9 +363,11 @@ export function ProjectConversationCollection({
               description={
                 browseQuery.data !== undefined && browseQuery.data.length >= 100
                   ? '可以使用项目内搜索，查找这台设备上更早的会话。'
-                  : archiveView === 'archived'
-                    ? '归档的会话会出现在这里，可以随时取消归档。'
-                    : '可以调整筛选条件，或在这个项目中新建会话。'
+                  : provider !== 'all' || status !== 'all'
+                    ? '可以调整或清除筛选条件。'
+                    : archiveView === 'archived'
+                      ? '归档的会话会出现在这里，可以随时取消归档。'
+                      : '可以在这个项目中新建会话。'
               }
             />
           )}

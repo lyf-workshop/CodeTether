@@ -41,6 +41,32 @@ test('conversation drafts save after the debounce and reload only from their exa
   assert.equal(data.has('composer-drafts-updated:conv_draft01'), false)
 })
 
+test('leaving before debounce saves pending conversations once and excludes cleared drafts', async () => {
+  const data = new Map()
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  }
+  const drafts = createConversationDraftStore(() => storage, 5)
+  drafts.write('conv_first', 'earlier')
+  drafts.write('conv_first', 'latest')
+  drafts.write('conv_second', 'separate')
+  drafts.write('conv_sent', 'accepted')
+  drafts.clear('conv_sent')
+  drafts.flushPending()
+  const reloaded = createConversationDraftStore(() => storage)
+  assert.equal(reloaded.read('conv_first'), 'latest')
+  assert.equal(reloaded.read('conv_second'), 'separate')
+  assert.equal(reloaded.read('conv_sent'), '')
+
+  // A pagehide after visibilitychange and the old timer must both be harmless.
+  reloaded.clear('conv_first')
+  drafts.flushPending()
+  await new Promise((resolve) => setTimeout(resolve, 15))
+  assert.equal(reloaded.read('conv_first'), '')
+})
+
 test('startup cleans only drafts older than 30 days and dates drafts from old installations', () => {
   const day = 24 * 60 * 60 * 1000
   const now = 100 * day

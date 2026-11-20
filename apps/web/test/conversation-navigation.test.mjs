@@ -7,6 +7,7 @@ import {
   createTimelineAnchorRequestKey,
   timelineContainsTurn,
 } from '../.tmp/test-dist/components/conversation/conversation-timeline-behavior.js'
+import { parseProjectWorkspaceSearch } from '../.tmp/test-dist/components/projects/project-workspace-model.js'
 
 const webSource = resolve(import.meta.dirname, '../src')
 
@@ -29,10 +30,10 @@ test('Project Conversation organization view is durable URL state, not browser s
   assert.match(router, /type ProjectSearch = ProjectWorkspaceSearch/u)
   assert.match(router, /return parseProjectWorkspaceSearch\(search\)/u)
   assert.match(model, /view\?: 'archived'/u)
-  assert.match(
-    model,
-    /search\.view === 'archived' \? \{ view: 'archived' as const \} : \{\}/u,
-  )
+  assert.deepEqual(parseProjectWorkspaceSearch({ view: 'archived' }), {
+    view: 'archived',
+  })
+  assert.deepEqual(parseProjectWorkspaceSearch({ view: 'invalid' }), {})
   assert.doesNotMatch(router + model, /localStorage|sessionStorage/u)
 })
 

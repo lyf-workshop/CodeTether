@@ -52,7 +52,7 @@ export function NodePairingPage() {
     if (await pairing.cancel()) goToStep(2)
   }
   return (
-    <main
+    <div
       className="mx-auto w-full min-w-0 max-w-(--pairing-w) space-y-6 px-4 py-6 sm:px-6"
       data-node-pairing-step={step}
     >
@@ -155,6 +155,6 @@ export function NodePairingPage() {
           onOpenChange={setProjectOpen}
         />
       ) : null}
-    </main>
+    </div>
   )
 }

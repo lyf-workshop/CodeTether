@@ -58,7 +58,7 @@ export function MachinesPage() {
 
   function renderCards(computers: readonly MachineSummary[]) {
     return (
-      <div className="grid min-w-0 gap-4 sm:grid-cols-2 desktop:grid-cols-3">
+      <div className="grid min-w-0 gap-4 @xl/devices:grid-cols-2 @4xl/devices:grid-cols-3">
         {computers.map((machine) => (
           <MachineSummaryCard
             key={machine.machineId}
@@ -73,10 +73,10 @@ export function MachinesPage() {
   }
 
   return (
-    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
+    <div className="@container/devices mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
       <header className="mb-8 flex min-w-0 flex-wrap items-end justify-between gap-4">
         <div className="min-w-0 flex-1 basis-64">
-          <h1 className="text-page font-semibold">电脑</h1>
+          <h1 className="text-page font-semibold">设备</h1>
           <p className="mt-2 max-w-prose text-base text-text-secondary">
             每台电脑独立显示它的项目和 AI
             工具。选择一台电脑，查看项目与最近的会话。

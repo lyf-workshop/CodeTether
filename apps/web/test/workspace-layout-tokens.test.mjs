@@ -100,7 +100,7 @@ test('existing permanent spacing tokens preserve all prior baseline dimensions',
     )
 })
 
-test('settings uses approved desktop and tablet columns and only phone tabs', async () => {
+test('settings uses the section navigation that fits the workspace content width', async () => {
   const [tokens] = await styles()
   const settings = await readFile(
     new URL('../src/components/settings/settings-page.tsx', import.meta.url),
@@ -119,10 +119,13 @@ test('settings uses approved desktop and tablet columns and only phone tabs', as
     )
   }
   assert.match(settings, /gap-\[var\(--s10\)\]/u)
-  assert.match(settings, /compact-workspace:gap-6/u)
-  assert.match(settings, /phone:grid-cols-1/u)
-  assert.match(settings, /phone:hidden/u)
-  assert.match(settings, /above-phone:hidden/u)
+  assert.match(settings, /grid-cols-1 gap-6/u)
+  assert.match(
+    settings,
+    /@2xl\/workspace:grid-cols-\[var\(--layout-settings-navigation-compact-width\)/u,
+  )
+  assert.match(settings, /hidden gap-1 @2xl\/workspace:grid/u)
+  assert.match(settings, /@2xl\/workspace:hidden/u)
   assert.doesNotMatch(settings, /11rem|min-\[1001px\]|max-w-\(--page-w\)/u)
 })
 

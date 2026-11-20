@@ -31,11 +31,12 @@ export function AppearanceSettings() {
       <h2 className="mb-5 text-xl font-semibold">外观</h2>
       <div className="overflow-hidden rounded-lg border border-border bg-surface">
         <SettingsRow
+          className="@container/themes"
           title="主题"
           description="默认浅色。选择“跟随系统”会随系统的深浅色设置切换。"
         >
           <div
-            className="grid grid-cols-1 gap-3 theme-grid:grid-cols-3"
+            className="grid grid-cols-1 gap-3 theme-grid:@min-[19rem]/themes:grid-cols-3"
             role="group"
             aria-label="主题"
           >

@@ -15,7 +15,7 @@
 
 **References** (read with `git show origin/ux/design:<path>`):
 
-- `docs/reviews/ui-ux-runtime-audit.md`: the Owner's UI/UX runtime audit, merged before this task; it already fixed the devices page title and the computer card's status (goal 5). Start from `main` after it merges.
+- `docs/reviews/ui-ux-runtime-audit.md`: the Owner's UI/UX runtime audit, merged before this task; it already fixed the devices page title and the computer card's status (goal 5). It merged on 2026-11-20 (`6fb9dd3`); start from `main` at or after that commit. W0e's round 2 runs at the same time and changes `composer.tsx` and the shared Select, so merge `origin/main` before you push.
 
 - `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 6–8, 11, 12 and 14
 

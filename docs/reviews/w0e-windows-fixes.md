@@ -17,7 +17,9 @@
 - `cargo test` in `packages/supervisor-mobile`: 8 unit tests and 4 interop tests. It was run because the phone reads the same filtered 待处理 list.
 - Prettier passed on every changed file. The repository-wide `pnpm format:check` fails on the Windows line-ending baseline (W0f carried item 5).
 
-**Verdict.** Accepted after one follow-up round.
+**Status.** The first follow-up round (`74969a8`) fixed both must-fix items. Claude Code's live check then found the real cause of the cold-start error that goal 10 targeted, so a second short round follows; see "Follow-up round 1" at the end.
+
+**Verdict (first review).** Accepted after one follow-up round.
 
 - Goals 1–7 and 10 are met. Claude Code measured goals 6 and 7 again on its own build.
 - Before merging, two must-fix items:
@@ -142,3 +144,77 @@
 ## Merge order
 
 The UI/UX runtime audit branch (`ui-ux-runtime-audit.md`) is accepted and starts from current `main`, so it merges first. W0e's follow-up round then merges `main` and runs the gates again. `git merge-tree` of the two branches is clean; both touch `composer.tsx` on different lines.
+
+## Follow-up round 1 (2026-11-20, `74969a8`)
+
+**What changed.**
+
+- `3d39ffa` holds the fixes, `885adf1` merges `main` (with the UI/UX runtime audit), and `74969a8` updates tests.
+- Report: the same file, extended.
+- **Gates (as reported) on the merged branch:**
+  - typecheck, lint, build and test passed: Web 1,054 of 1,054, Host 623 of 623
+  - desktop `cargo test`: 90 unit and 3 integration tests
+  - the Android Gradle gates
+  - Prettier on 64 changed files
+- `git merge-tree` into `main` (`6fb9dd3`) is clean.
+
+**Code read.**
+
+- **The fallback model.**
+  - When a new local Codex conversation has no explicit model, the Host reads only `model` from Codex's `config/read`.
+  - If that model is not in `model/list`, the Host starts the thread with the list's default (`isDefault`), or else the list's first model.
+  - The create response carries `modelFallback`. The web shows it once in the Composer.
+  - If Codex returns a model that is not listed, or ignores the fallback, creating the conversation fails with `provider_model_unavailable` instead of a later send failing.
+- **Sending with an unlisted model.**
+  - While the current model is not listed, Send is disabled. Its reason and the warning say to pick a model first.
+  - The Host's rejection carries `provider_model_unavailable`, now shown as "所选模型当前不可用。请选择列表中的可用模型后再发送。"
+  - Changing the model clears an earlier send error.
+- **The held height** is gone.
+- **Smaller fixes.**
+  - The hint keeps its text while a message submits.
+  - The panel keeps Stop only for an unavailable conversation whose local Turn can still be interrupted, not for an archived one.
+  - Select items set `title` only when the label is cut off or carries extra detail.
+
+**Checked hands-on** on `74969a8` (isolated Host, same setup). Evidence: `w0e-review-2026-11-20/`, `live-w0e2-1440.json` and `cold-1.txt`.
+
+- **Must-fix 1, met.**
+  - A new Codex conversation started on GPT-6.1 Terra, and both Turns ran.
+  - With the Host warm, the Composer said once: "Codex 配置的默认模型 gpt-6.2-astra当前不在模型列表中，CodeTether 已选择可用模型 gpt-6.1-terra。可在上方菜单切换模型。"
+- **Must-fix 2, met.**
+  - A six-line draft made the Composer 238.63 px high. It was 135 px 50 ms after sending, stayed 135 px while running and while waiting, and was still 135 px at the first new keystroke.
+  - A one-line Turn with an Approval stayed 135 px throughout, as in the first review.
+- **New: the cold-start error, found and explained.**
+  - Right after the Host starts, a conversation created at once shows a red "CodeTether 暂时无法连接，请重试。" under the Composer, and no fallback notice. The error stays through later, successful Turns. Every request in that window succeeded.
+  - Reproduced twice in two cold starts. It never showed with the Host warm.
+  - **Cause.**
+    - As the conversation opens, the Composer's model Select receives an untrusted `change` event from Radix's hidden native `<select>`, with value `""` and no options (recorded in `cold-1.txt`).
+    - Radix passes this to `onValueChange("")`. The Composer then hides the fallback notice and calls `update({ model: "" })`.
+    - The client's protocol check rejects the empty model before any request is sent. `mutationErrorMessage` shows any error that is not a Host response as "CodeTether 暂时无法连接，请重试。"
+  - This is very likely the real cause of detail-pass finding 1 (W0-27). Goal 10's quiet model-list read was right but did not cover it.
+- **New, pre-existing: the New Conversation dialog never refreshes Codex's availability.**
+  - Opened 2 s after the Host started, it showed "Codex · 暂时不可用", and Codex could not be selected. It still said so after 60 s in the open dialog; no request was made.
+  - Closing and opening the dialog again showed Codex available.
+  - Someone who opens CodeTether and clicks 新建会话 at once sees Codex as unavailable until they reopen the dialog.
+
+## Must-fix in follow-up round 2
+
+1. **Never act on an empty Select change.**
+   - Radix Select items cannot have the value `""`, so `onValueChange("")` never comes from a user's choice.
+   - The shared `Select` in `packages/ui` ignores it, so every Select in the app is covered.
+   - The Composer's model and reasoning handlers also do nothing when the value equals the current one.
+   - **Tests:** the primitive drops `""`. The Composer neither updates the model nor hides the fallback notice on such an event.
+   - **Real check:** a cold start, then creating a Codex conversation at once, 3 times. Each shows the fallback notice and no error.
+   - Report whether this also explains W0-27.
+2. **The New Conversation dialog shows each AI tool's current availability while it is open.**
+   - While the Host is still checking an AI tool after starting, the option says "正在检查…", not "暂时不可用".
+   - It becomes selectable as soon as the Host reports the tool ready, without reopening the dialog. Use the existing Host events or a bounded refetch while a tool is still being checked.
+   - Report how long Codex takes to become available after the Host starts, and what the Host reports in between.
+
+**Should-fix:** in the fallback notice, put a space before "当前", and name the selected model by its display name ("GPT-6.1 Terra"), as the menu above it does.
+
+**Carried from round 1:**
+
+- **Codex's own default.** The fallback applies only when Codex's config names a model. If no model is configured and Codex's own default is unlisted, creating the conversation fails, and the New Conversation dialog has no model field to work around it. That is unlikely today. If it happens, extend the fallback to that case.
+- **`CreateConversationData`** has a new optional `modelFallback` field. The phone creates conversations through `createConversationWithFirstTurn`, which returns only the conversation and its first Turn. So the phone never receives the field, but its new Codex conversations still get the fallback model.
+
+**Then W0e merges, and alpha.5 follows.**

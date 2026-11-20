@@ -17,7 +17,13 @@
 - `cargo test` in `packages/supervisor-mobile`: 8 unit tests and 4 interop tests. It was run because the phone reads the same filtered 待处理 list.
 - Prettier passed on every changed file. The repository-wide `pnpm format:check` fails on the Windows line-ending baseline (W0f carried item 5).
 
-**Status.** The first follow-up round (`74969a8`) fixed both must-fix items. Claude Code's live check then found the real cause of the cold-start error that goal 10 targeted, so a second short round follows; see "Follow-up round 1" at the end.
+**Status.** Accepted on 2026-11-20 at `dc9cfe2`, after two follow-up rounds. Merge it into `main`, then release alpha.5.
+
+- Round 1 (`74969a8`) fixed both must-fix items.
+- Claude Code's live check then found the real cause of the cold-start error that goal 10 targeted.
+- Round 2 (`dc9cfe2`) fixed it, and the New Conversation dialog now updates while it is open.
+
+See the two follow-up sections at the end.
 
 **Verdict (first review).** Accepted after one follow-up round.
 
@@ -218,3 +224,69 @@ The UI/UX runtime audit branch (`ui-ux-runtime-audit.md`) is accepted and starts
 - **`CreateConversationData`** has a new optional `modelFallback` field. The phone creates conversations through `createConversationWithFirstTurn`, which returns only the conversation and its first Turn. So the phone never receives the field, but its new Codex conversations still get the fallback model.
 
 **Then W0e merges, and alpha.5 follows.**
+
+## Follow-up round 2 (2026-11-20, `dc9cfe2`)
+
+**What changed.**
+
+- Three commits on `74969a8`:
+  - `0701802`: the shared Select and the Composer ignore empty and unchanged values. After a check of a local AI tool finishes, the Host publishes `machine.updated`.
+  - `5fe390d`: "正在检查…" in the New Conversation dialog.
+  - `dc9cfe2`: the dialog during a cold start and when its read fails.
+- 14 files, +534 / −45 lines. The branch already contains `main` at `6fb9dd3`.
+- Report: the same file, extended. Evidence: `D:/Projects/Software/agenthub-archive/w0e-evidence/followup-round2/`.
+- **Gates (as reported):**
+  - typecheck, lint, build and test passed: Web 1,059 of 1,059, Host 624 of 624
+  - Prettier passed on the 14 changed files
+  - The repository-wide check also fails on nine generated Gradle HTML reports, besides the line-ending baseline (carried item 2).
+
+**Code read.**
+
+- **Empty changes.**
+  - The shared `Select` in `packages/ui` drops `""` before calling `onValueChange`.
+  - The Composer's model and reasoning handlers return on `""` or an unchanged value, before they clear the fallback notice.
+- **Live availability.** After a check of a local AI tool finishes, at startup or on 重新检查, the Host publishes `machine.updated`. An open dialog then reads the computer again. Nothing polls.
+- **"正在检查…".**
+  - `conversationCreationProviderOptions` derives it on the web. It applies only to this computer, when a tool reads `unavailable` with no current compatibility observation and with unknown or last-known execution health.
+  - Remote computers are unchanged.
+  - The dialog hides "此设备当前没有可通过 CodeTether 启动…" while a tool is being checked or before the read succeeds. A failed read shows its error, not "这台设备当前没有可用的 AI 工具".
+- **The notice** now reads "…gpt-6.2-astra 当前不在模型列表中，CodeTether 已选择可用模型 GPT-6.1 Terra。…".
+
+**Checked hands-on** on `dc9cfe2`, with the same isolated Host and data.
+
+- **Evidence:** `w0e-review-2026-11-20/`: `r2-cold-1.txt` to `r2-cold-3.txt`, the `r2-cold-*` screenshots, and `s27-cold-r2.mjs`.
+- **Setup:** three cold starts. Each time the New Conversation dialog opened about 3.4 s after the Host was ready and stayed open. Codex's option was read every 200 ms.
+- **The dialog during the check.**
+  - Codex and Claude Code both read "正在检查…" and could not be selected.
+  - "暂时不可用" and the no-AI-tool notice never showed.
+- **When Codex was ready.**
+  - Codex became selectable in the same dialog 5.8 s and 5.9 s after it opened, about 9.2 s after the Host was ready. The dialog selected it.
+  - Run 1's selectability probe was wrong; its conversation was created 8.3 s after the dialog opened.
+- **Creating at once.**
+  - The fallback notice showed with the corrected text at 0.5, 2, 5 and 10 s.
+  - The model menu read "GPT-6.1 Terra".
+  - There was no alert and no "暂时无法连接".
+  - The same untrusted `change` with `""` still fired 2–4 s after the conversation opened, in every run. It now changes nothing.
+- **The first message,** "请只回复"好"，不要运行任何命令。", completed in 9–10 s in all three runs.
+
+**Verdict.** Both must-fix items and the should-fix are met. W0e is accepted and can merge. Six cold starts in all (the agent's three and these three) confirm the empty `change` as the cause of W0-27.
+
+**Seen in this check, older than W0e, and routed to D3a's merge check:**
+
+- **An amber notice for a healthy tool.**
+  - After every cold start, the ready dialog shows "执行正常 · 上次已知。上次验证时执行正常；当前连接尚未重新验证。 这是最近一次观测；新会话的首个明确轮次会重新验证，不会重发任何旧请求。"
+  - The text is on `main`, and D3a's `c529b6b` already replaces it. After D3a merges, the ready dialog shows no amber notice for a tool whose last observation was healthy.
+- **The raw model name in the header.**
+  - The conversation header reads `gpt-6.1-terra` while the Composer's menu reads "GPT-6.1 Terra".
+  - D3a's `c529b6b` already maps the header to the display name.
+
+**Carried items.**
+
+1. **"正在检查…" is inferred, not reported.**
+   - The Host has no "still checking" fact, so the web infers it from missing facts.
+   - If the startup check fails, the Host only logs `startup.provider_discovery_failed` and keeps the placeholder. The dialog then says "正在检查…" until 重新检查 on 关于与检查 succeeds; before this round it said "暂时不可用". This is rare and recoverable.
+   - **The real fix:** the Host reports each local tool's check state (checking, done, failed) in the computer's detail, and the web reads only that. This is a small Host and Protocol task, in the backlog with the reasoning reset (`d3a-desktop-consistency.md`, carried item 1).
+   - D3a's must-fix 3 moves W0e's derivation unchanged into `provider-presentation.ts`, so that task changes one place.
+2. **The repository-wide format check** fails on the line-ending baseline (W0f carried item 5) and on generated Gradle reports. Add `.gitattributes` and ignore build outputs in `.prettierignore`. Backlog.
+
+**Next:** merge W0e into `main`, then release alpha.5.

@@ -55,6 +55,7 @@ On the Owner's real data, however, the new status vocabulary turns stale and unr
    - Right after the Host starts, local Codex read red "暂时不可用" on Devices; a few minutes later it read "可用".
    - W0e's round 2 adds "正在检查…" to New Conversation for that interval (W0-30) and reports what the Host returns meanwhile.
    - When D3a merges `main` with W0e in it, that state goes through `provider-presentation.ts` as a neutral "正在检查…" on all five surfaces. A cold start then shows no red anywhere.
+   - W0e derives the state in `conversationCreationProviderOptions` (`new-conversation-selection.ts`). Move that derivation unchanged into `provider-presentation.ts`, keep it to this computer as W0e does, and keep W0e's tests. A later Host task replaces the inference with a reported fact (`w0e-windows-fixes.md`, round 2 carried item 1).
 
 ## Merging with W0e
 
@@ -63,7 +64,12 @@ W0e merges first; it is the last change before alpha.5. The report predicts five
 - **Doctor page.** Keep W0e's no-project summary ("CodeTether 可以使用" when this computer has a working AI tool) and its offline-computers group. Today D3a's 关于与检查 still reads "设置需要处理", because it branched before that fix.
 - **The conversation adapter.** Keep W0e's "等待批准" for a tool waiting on an Approval and its quiet running placeholder, with D3a's wording.
 - **The offline computers group** and the two tests: keep both behaviors.
-- **Afterwards,** check 关于与检查, a conversation through one Approval, and the sidebar's offline group again, with screenshots.
+- **Afterwards,** check these again, with screenshots:
+  - 关于与检查
+  - a conversation through one Approval
+  - the sidebar's offline group
+  - a cold start: the New Conversation dialog reads "正在检查…" and then shows Codex ready with no amber notice. W0e's round 2 saw "执行正常 · 上次已知。…" in amber on `main`, and D3a replaces that text.
+  - the conversation header names the model as the Composer's menu does ("GPT-6.1 Terra", not `gpt-6.1-terra`).
 
 ## Carried items
 

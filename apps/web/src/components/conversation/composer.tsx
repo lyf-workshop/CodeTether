@@ -498,9 +498,9 @@ export function Composer({
             data-model-fallback-notice
             className="break-words px-4 py-2 text-xs text-text-secondary"
           >
-            Codex 配置的默认模型 {visibleModelFallback.configuredModel} 不在
-            CodeTether 当前读取的模型列表中。此会话已改用列表的默认模型{' '}
-            {visibleModelFallback.selectedModel}；可在上方菜单切换。
+            Codex 配置的默认模型 {visibleModelFallback.configuredModel}{' '}
+            当前不在模型列表中，CodeTether 已选择可用模型 {modelName}
+            。可在上方菜单切换模型。
           </p>
         ) : null}
         {modelMissing ? (

@@ -131,16 +131,30 @@ async function dialogFixture({
   }
 }
 
-test('open dialog updates unavailable Codex after a Machine discovery event', async () => {
+test('open dialog shows checking Codex until a Machine discovery event makes it ready', async () => {
   let ready = false
   let machineReads = 0
+  let releaseFirstRead
+  const firstRead = new Promise((resolve) => {
+    releaseFirstRead = resolve
+  })
   const fixture = await dialogFixture({
     getMachine: async () => {
       machineReads += 1
+      if (machineReads === 1) await firstRead
       return {
         machine,
+        ...(ready
+          ? {}
+          : { providerLifecycles: [{ provider: 'codex', installations: [] }] }),
         providers: [
-          ready ? descriptor : { ...descriptor, availability: 'unavailable' },
+          ready
+            ? descriptor
+            : {
+                ...descriptor,
+                availability: 'unavailable',
+                executionHealth: { state: 'unknown', freshness: 'current' },
+              },
         ],
       }
     },
@@ -149,11 +163,26 @@ test('open dialog updates unavailable Codex after a Machine discovery event', as
     const codexRadio = () =>
       fixture.container.querySelector('input[value="codex"]')
     const codexLabel = () => codexRadio()?.closest('label')
-    await fixture.until(() => codexLabel()?.textContent.includes('暂时不可用'))
     const dialog = fixture.container.querySelector('[role="dialog"]')
+    await fixture.until(
+      () =>
+        machineReads === 1 &&
+        fixture.container.textContent.includes('正在读取 AI 工具…'),
+    )
+    assert.equal(codexRadio(), null)
+    assert.doesNotMatch(fixture.container.textContent, /暂时不可用/u)
+    assert.equal(fixture.submit().disabled, true)
+
+    await fixture.perform(() => releaseFirstRead())
+    await fixture.until(() => codexLabel()?.textContent.includes('正在检查…'))
+    assert.equal(fixture.container.querySelector('[role="dialog"]'), dialog)
     assert.equal(codexRadio().disabled, true)
     assert.equal(fixture.submit().disabled, true)
     assert.equal(machineReads, 1)
+    assert.doesNotMatch(
+      fixture.container.textContent,
+      /此设备当前没有可通过 CodeTether 启动/u,
+    )
 
     ready = true
     await fixture.perform(() => invalidateMachineQueries(fixture.queryClient))
@@ -161,8 +190,9 @@ test('open dialog updates unavailable Codex after a Machine discovery event', as
     assert.equal(fixture.container.querySelector('[role="dialog"]'), dialog)
     assert.equal(codexRadio().disabled, false)
     assert.equal(machineReads, 2)
-    assert.doesNotMatch(codexLabel().textContent, /暂时不可用/u)
+    assert.doesNotMatch(codexLabel().textContent, /正在检查|暂时不可用/u)
   } finally {
+    releaseFirstRead()
     await fixture.close()
   }
 })

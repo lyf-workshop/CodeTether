@@ -118,7 +118,7 @@ test('Composer ignores empty and unchanged model or reasoning selections', async
       modelSettings: {
         currentModel: 'gpt-6.1-terra',
         availableModels: [
-          { id: 'gpt-6.1-terra', name: 'Terra' },
+          { id: 'gpt-6.1-terra', name: 'GPT-6.1 Terra' },
           { id: 'gpt-6.2-sol', name: 'Sol' },
         ],
         currentReasoning: 'medium',
@@ -139,7 +139,7 @@ test('Composer ignores empty and unchanged model or reasoning selections', async
     assert.ok(notice())
     assert.match(
       notice().textContent,
-      /gpt-6\.2-astra 不在 CodeTether 当前读取的模型列表中。此会话已改用列表的默认模型 gpt-6\.1-terra/u,
+      /gpt-6\.2-astra 当前不在模型列表中，CodeTether 已选择可用模型 GPT-6\.1 Terra。/u,
     )
     assert.equal(selectionHandlers.size, 2)
     for (const [control, value] of [

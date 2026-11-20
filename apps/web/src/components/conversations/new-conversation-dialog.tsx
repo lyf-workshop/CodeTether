@@ -153,10 +153,15 @@ export function NewConversationDialog({
     enabled:
       open && connectionState === 'connected' && project?.machine !== undefined,
   })
-  const providerOptions = conversationCreationProviderOptions(
-    providerPresentationsForMachine(machineDetailQuery.data?.providers ?? []),
-    machineDetailQuery.data?.providerLifecycles,
-  )
+  const machineDetail = machineDetailQuery.data
+  const providerOptions =
+    machineDetail === undefined
+      ? []
+      : conversationCreationProviderOptions(
+          providerPresentationsForMachine(machineDetail.providers),
+          machineDetail.providerLifecycles,
+          machineDetail.machine.kind,
+        )
   const selectedProvider = resolveConversationCreationProvider(
     providerOptions,
     selectedProviderId,
@@ -385,6 +390,7 @@ export function NewConversationDialog({
             {!loading &&
             project !== undefined &&
             project.unavailableReason === undefined &&
+            !providerOptions.some((option) => option.eligibility.checking) &&
             selectedProvider === undefined ? (
               <InlineNotice>
                 此设备当前没有可通过 CodeTether 启动可恢复流式会话的 AI

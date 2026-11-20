@@ -59,6 +59,7 @@ import {
   claudeCodeReasoningOptions,
 } from './claude-code-host-runtime.js'
 import { CodexHostRuntime } from './codex-host-runtime.js'
+import type { HostRuntimeDiagnostics } from './host-runtime-diagnostics.js'
 import {
   LocalProviderReadinessCache,
   localProviderReadinessSample,
@@ -75,6 +76,7 @@ export interface LocalProviderLifecycleCoordinatorOptions {
   readonly machineId: MachineId
   readonly persistence: ConversationStore
   readonly hostVersion: string
+  readonly diagnostics?: HostRuntimeDiagnostics
   readonly codexExecutable?: string
   readonly disableCodexHooks?: boolean
   readonly ephemeralCodexThreads?: boolean
@@ -947,6 +949,12 @@ export class LocalProviderLifecycleCoordinator {
       try {
         return CodexHostRuntime.deferred({
           version: this.#options.hostVersion,
+          ...(this.#options.diagnostics === undefined
+            ? {}
+            : { diagnostics: this.#options.diagnostics }),
+          ...(installation.version === undefined
+            ? {}
+            : { providerVersion: installation.version }),
           executable: candidate.executable,
           environment: selected.runtimeEnvironment(),
           providerInstallationId: installation.installationId,

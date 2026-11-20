@@ -15,6 +15,8 @@
 
 **References** (read with `git show origin/ux/design:<path>`):
 
+- `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 6–8, 11, 12 and 14
+
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 4, 5, 6, 7, 8 (computer and project pages; the conversation part belongs to D2.5), 15 and 16
 - `docs/PRODUCT.md`, Phase 4D (user copy avoids implementation terms) and `docs/ux-redesign/10-desktop-improvements.md` §3.1 (terminology mapping)
 - the prototype pages in `docs/ux-redesign/png/`: `02-01-devices`, `02-02-device-local`, `02-03-device-paired`, `02-04-project-detail`, `02-06-project-archived`, `02-11-inbox`, `02-14-new-session-project`, `02-23-add-device`, `02-34-settings-about`, `02-36-onboarding-tools`
@@ -65,9 +67,15 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - The archived view's breadcrumb no longer repeats the project ("本地电脑 › weather-cli › 已归档会话", not "… › weather-cli › weather-cli").
    - Check the terminology table in 10 §3.1 against every page header and breadcrumb, and report any other mismatch you fixed.
    - The New Conversation dialog's "思考强度" and the Composer's "推理" name the same setting; use one word. The local computer is "本地电脑" in the tree and on cards but "这台电脑" in sentences; pick one rule (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 8).
+   - **The detail pass** (`2026-11-19-main-detail-pass.md`):
+     - An Approval is "审批" in the dock ("等待你的审批", "命令审批") but "批准" everywhere else; use one word (finding 6).
+     - A model is "gpt-6-sol" under the conversation title but "GPT-6-Sol" in the Composer; show the model's display name everywhere (finding 7).
+     - "以前的会话" says "工作区" where the app says "项目" (finding 14).
+     - Claude's reasoning menu lists 低 to 最大, but its button can read "推理：默认", which the list cannot return to. Offer "默认" in the list. If clearing the choice needs a Host change, report it instead (finding 8).
 5. **Navigation and status shown once** (finding 8, computer and project pages).
    - Computer and project pages drop the "返回设备" link; the breadcrumb is the way back. The project page's back link also skips the computer level.
    - The computer card says "在线" once.
+   - The remote computer card says its status once, not again in its subtitle ("macOS · arm64 · 身份验证失败"). Its note "AI 工具显示上次已知的安装状态" keeps the card's spacing above the divider (`2026-11-19-main-detail-pass.md`, finding 12).
 6. **Quality gate:**
    - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`
    - `pnpm format:check` for changed files
@@ -82,6 +90,10 @@ Before starting, confirm this file has 4 second-level headings and that the last
 7. **One disclosure style** (finding 15). Replace the native `<details>` triangles ("会话信息", "查看详细状态", "技术详情") with one disclosure built on the Lucide chevrons used elsewhere. It must be keyboard operable and expose `aria-expanded`.
 8. **The offline group opens for the current conversation** (W0d carried item, `w0-small-fixes.md`). When the current conversation belongs to an offline computer, the sidebar's offline group opens so the tree can show where the user is.
 9. **Aligned AI-tool list** (finding 16). On the computer page, name, version and status sit in fixed columns, so they stay aligned whatever the tool name's length.
+10. **Text wraps cleanly** (`2026-11-19-main-detail-pass.md`, finding 11).
+    - Descriptions and body copy wrap without a last line of one or two characters. Today the devices subtitle ends with "话。", and the same happens in Settings › 后台运行, 账号 and 关于与检查, and in Inbox failure text.
+    - Use one global rule, for example `text-wrap: pretty` for body copy in `globals.css` (WebView2 supports it), not per-page fixes.
+    - No double space after "。" in any copy. The detail pass found it in "以前的会话", the New Conversation advisory and the failure copy. Add a test that scans the Chinese copy for it.
 
 ## Known facts
 

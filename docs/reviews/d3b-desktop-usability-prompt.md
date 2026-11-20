@@ -15,6 +15,8 @@
 
 **References** (read with `git show origin/ux/design:<path>`):
 
+- `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 5, 9, 10 and 13–17
+
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 9, 10, 11, 14, 17 and 18
 - the prototype pages in `docs/ux-redesign/png/`: `02-01-devices` (attention banner, per-project activity), `02-02-device-local`, `02-04-project-detail`, `02-05-project-previous`, `02-06-project-archived`, `02-07-project-search`, `02-08-add-project`, `02-14-new-session-project`
 - `docs/ux-redesign/02-dev-handoff.md`, row D1 (which reads the sidebar and devices pages may use, and the limit of 100 conversations)
@@ -50,6 +52,8 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - In-app "打开" uses an in-app icon, not the external-link icon.
    - **Archived view:** its status filters exclude "运行中" and "等待批准", which can never match an archived conversation.
    - **Empty state:** a project with no conversations does not suggest adjusting filters that are not set (hands-on review finding 11).
+   - **Rows:** a conversation row does not leave about 120 px empty to the right of its date. If the space is reserved for hover actions, show them in it without reserving it (`2026-11-19-main-detail-pass.md`, finding 13).
+   - **"以前的会话":** no lone icon box above the heading. When Claude Code cannot list earlier sessions, say so in one plain line, not in an amber box (finding 14).
 4. **Primary actions where the eye starts** (finding 11).
    - On a computer's page, "添加项目" sits in the Projects section header, and "配对新设备" in the page header actions (D3a `PageHeader`). Neither stays at the bottom of the page.
    - On the devices overview, when open Attention exists, a banner reads "N 件事需要你处理" and links to the Inbox (02-01). It uses the Attention summary the sidebar badge already reads; there is no new request.
@@ -71,12 +75,19 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - Devices-overview project cards show running and waiting-for-approval counts instead of only "1 个会话" and a date.
    - The sidebar tree shows a status dot on each conversation that is running or waiting for approval (02-01).
    - Use only fields the existing reads already return. If a count would need one extra request per project, or more than the 100-conversation index provides, leave that count out and report it. Do not add a Host endpoint.
+   - **While an Approval waits** (`2026-11-19-main-detail-pass.md`, finding 5), the timeline row "已请求批准 · 请在下方待处理操作中确认" and the dock do not repeat each other, and together they leave the timeline most of the window at 1100 px. W0e removes the Composer's own panel.
+   - **The inspector's "变更"** says which Turn each entry belongs to when one file appears more than once (finding 15).
+   - **An archived conversation's top bar** says it is archived, not its last Turn's "失败" (finding 17).
 7. **A quieter sidebar** (finding 14). Remove the per-project "查看已归档会话" row; the project page's archived view is the way in. An expanded project with no conversations shows no "还没有会话" filler row either (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 7). Keep a link to it on the project page next to the conversation list.
 8. **Short names stay visible** (finding 17). In the New Conversation dialog, the breadcrumb (at 800 px it reads "本… › v4-accep… › …") and elsewhere, a short name such as the computer name is not truncated ("本地…") while a long path beside it keeps its full width. The path gives way first.
+   - **Devices page at 800 px:** the computer cards drop to one column before their text wraps word by word ("macOS · / arm64 · / 身份验证 / 失败") (`2026-11-19-main-detail-pass.md`, finding 9).
+   - **The sidebar's computer rows:** at 1100 px and below, a computer's status no longer touches or overlaps its shortened name (finding 10).
 9. **No implementation detail in copy** (finding 18).
    - The command palette footer "这里只匹配已加载的标题" becomes user language, or goes.
    - The Add Project hint about offline computers appears only when the selected computer is a paired remote computer that can be offline, not for this computer.
    - Failure copy: the repeated "AI 工具未能完成本轮工作。 本轮工作可能不完整。已保存的会话历史仍可查看。" (with its stray double space) says what failed and what to do next, and "请查看电脑详情中的执行状态" links to that page (hands-on review finding 9).
+
+   - **"工具输出"** shows a command as the user would type it, not as escaped JSON (`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'node --test'`). This extends D2.5's carried item 3 (`2026-11-19-main-detail-pass.md`, finding 16).
 
 ## Known facts
 

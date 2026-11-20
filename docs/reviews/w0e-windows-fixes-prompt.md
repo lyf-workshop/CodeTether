@@ -24,6 +24,8 @@ The Owner also asked to fix existing problems before any new feature. **Do goals
 
 **References** (read with `git show origin/ux/design:<path>`):
 
+- `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/` (findings 1–4 and 18 are goal 10)
+
 - `docs/reviews/2026-11-19-alpha4-hands-on-ui-review.md`, findings 2–6, 12, 14 and 15, with screenshots in `D:/Projects/Software/agenthub-archive/ui-review-2026-11-19/`. The Owner's are `owner-composer-running.png`, `owner-codex-model-menu.png` and `owner-claude-model-menu.png`.
 - `docs/ux-redesign/10-desktop-improvements.md` §3.3, "While a Turn runs": the Composer design for goal 6, changed on 2026-11-19
 - `docs/reviews/2026-11-17-windows-completion-scope.md`, rows W0-20 to W0-26
@@ -176,6 +178,24 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - **Goal 3:** a test is enough, unless a real runtime failure happens during your checks.
    - **Goal 4:** the desktop development build's title bar in each theme.
 
+10. **Addendum from the detail pass** (added on 2026-11-19 after this task started; `2026-11-19-main-detail-pass.md`, findings 1–4 and 18). These come back to the surfaces goals 6 and 7 change.
+    - **A failed automatic model-list read stays quiet** (finding 1).
+      - Seen twice soon after the Host started: opening a conversation showed a red "CodeTether 暂时无法连接，请重试。" under the Composer. It stayed, because the automatic read never retries.
+      - If the automatic read fails, the Composer shows nothing. The error appears when the user opens the model menu, which reads the list again as today.
+      - The no-automatic-retry rule from the catalog fix stays.
+      - Report what the failed read returned, if your checks see it.
+    - **The current conversation is visible in the light sidebar** (finding 2).
+      - Today its row is `rgb(245,243,239)` on a `rgb(243,241,237)` sidebar.
+      - Fix the token so the current row is clearly marked in both themes, and report the contrast you reach.
+    - **A tool waiting for an Approval says so** (finding 3). While a command waits for the user's decision, its timeline row reads "等待批准", not "运行中" with a spinner.
+    - **The running placeholder is quiet** (finding 4).
+      - The timeline's "Codex 正在运行，实时活动将在这里显示。" box has a 2 px blue border, so it looks like a focused text field. Give it a quiet style.
+      - After goal 6, "running" should show only in the top bar, the Turn header, the Composer's action bar and the sidebar dot.
+    - **One keyboard hint for every tool** (finding 18).
+      - For Claude Code, the line under the Composer says "Claude Code 在这里只读取和搜索文件，不会修改代码。" instead of how to send.
+      - The hint line always says how to send. The read-only note appears once elsewhere, for example in the Composer's placeholder.
+    - **Tests:** one for each item, and screenshots before and after.
+
 ## Known facts
 
 Line numbers are at `13fa6b8`.
@@ -247,6 +267,7 @@ Push `fix/w0e-after-alpha4` to `origin`.
 
 Write to `D:/Projects/Software/agenthub-archive/w0e-windows-fixes-report.md`:
 
+- **Addendum (goal 10):** each item's change, with screenshots and tests.
 - **Composer:** the measurements of goal 6 in a table, with screenshots of each state, and the tests.
 - **Menus:** every menu you checked, with its screenshots before and after, and the tests.
 - **File links:** the rule for each destination form, its tests, and a screenshot of a real Codex answer.

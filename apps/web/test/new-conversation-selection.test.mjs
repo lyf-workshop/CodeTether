@@ -420,13 +420,26 @@ test('an older backend login observation does not disable a currently eligible t
   assert.doesNotMatch(eligibility.label, /需要登录/u)
 })
 
-test('legacy descriptor eligibility is preserved without Lifecycle, and runtime health stays advisory', () => {
+test('legacy descriptor eligibility is preserved without Lifecycle, and historical health stays secondary', () => {
   const item = provider('codex', {
-    executionHealth: { state: 'degraded', freshness: 'last_known' },
+    executionHealth: {
+      state: 'degraded',
+      freshness: 'last_known',
+      observedAt: '2026-10-22T12:00:00Z',
+      failure: {
+        reason: 'provider_service_unavailable',
+        userAction: 'retry',
+      },
+    },
   })
   const option = conversationCreationProviderOptions([item], undefined)[0]
   assert.equal(option.eligibility.eligible, true)
-  assert.ok(option.eligibility.executionAdvisory)
+  assert.equal(option.eligibility.summary.status.label, '可用')
+  assert.equal(option.eligibility.executionAdvisory, undefined)
+  assert.match(
+    option.eligibility.summary.executionHistoryLabel,
+    /上次运行受限 · 10月22日/u,
+  )
 })
 
 function fixtureGroups(remoteOverrides = {}) {

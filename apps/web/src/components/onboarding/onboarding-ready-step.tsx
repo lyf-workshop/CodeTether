@@ -103,6 +103,7 @@ export function OnboardingReadyStep(props: SetupStepProps) {
               <MachineProviderBadge
                 read={detail}
                 provider={provider.provider}
+                connectionState={selectedRemote?.connectionState}
               />
             }
           />

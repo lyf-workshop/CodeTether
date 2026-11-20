@@ -1,5 +1,6 @@
 import type {
   ConversationId,
+  MachineConnectionState,
   MachineId,
   MachineProviderLifecycle,
   MachineProviderDiscovery,
@@ -287,13 +288,19 @@ export function conversationCreationProviderOptions(
   providers: readonly ProviderPresentation[],
   lifecycles: readonly MachineProviderLifecycle[] | undefined,
   discovery?: MachineProviderDiscovery,
+  connectionState?: MachineConnectionState,
 ) {
   return providers.map((provider) => {
     const lifecycle =
       lifecycles === undefined
         ? undefined
         : providerLifecycleForMachine(lifecycles, provider.provider)
-    const summary = providerSummary(provider, lifecycle, discovery)
+    const summary = providerSummary(
+      provider,
+      lifecycle,
+      discovery,
+      connectionState,
+    )
     const eligibility = newConversationProviderEligibility(provider, summary)
     const selectedInstallation = lifecycle?.installations.find(
       (installation) =>

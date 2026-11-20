@@ -4,6 +4,8 @@ import type {
   DoctorBackendStatus,
   DoctorProviderStatus,
   MachineProviderDiscovery,
+  MachineConnectionState,
+  MachineSummary,
   ProviderAvailability,
   ProviderCapabilities,
   ProviderBackendMode,
@@ -133,6 +135,7 @@ type SummaryStatus = keyof typeof summaryStatuses
 export interface ProviderSummary {
   readonly status?: (typeof summaryStatuses)[SummaryStatus]
   readonly freshnessLabel: string
+  readonly executionHistoryLabel?: string
   readonly advisory?: string
 }
 
@@ -141,19 +144,13 @@ export function providerSummary(
   provider:
     | (Pick<
         ProviderDescriptor,
-        'availability' | 'displayName' | 'executionHealth'
+        'availability' | 'displayName' | 'executionHealth' | 'version'
       > & { readonly observed?: boolean })
     | undefined,
   lifecycle?: MachineProviderLifecycle,
   discovery?: MachineProviderDiscovery,
+  connectionState?: MachineConnectionState,
 ): ProviderSummary {
-  if (
-    !provider ||
-    provider.observed === false ||
-    discovery?.state === 'not_observed'
-  ) {
-    return { freshnessLabel: '尚未检查' }
-  }
   const selected = lifecycle?.installations.find(
     (item) =>
       item.selected && item.installationId === lifecycle.selectedInstallationId,
@@ -167,13 +164,22 @@ export function providerSummary(
     discovery?.state !== 'last_known'
       ? undefined
       : observedBackend
-  const health = provider.executionHealth
+  const health = provider?.executionHealth
+  const currentHealth = health?.freshness === 'current' ? health : undefined
+  const executionDate = formatExecutionDate(health?.observedAt)
+  const executionHistoryLabel =
+    health?.freshness === 'last_known' &&
+    (health.state === 'unavailable' || health.state === 'degraded')
+      ? `上次运行${health.state === 'unavailable' ? '失败' : '受限'}${executionDate === undefined ? '' : ` · ${executionDate}`}`
+      : undefined
   const observedAt = [
     selected?.lastObservedAt,
     compatibility?.observedAt,
     observedBackend?.observedAt,
     health?.observedAt,
-    discovery?.observedAt,
+    discovery?.state === 'current' || discovery?.state === 'last_known'
+      ? discovery.observedAt
+      : undefined,
   ].reduce<string | undefined>(
     (latest, value) =>
       value && (!latest || Date.parse(value) > Date.parse(latest))
@@ -184,13 +190,41 @@ export function providerSummary(
   const freshnessLabel = observedAt
     ? lifecycleObservationLabel('last_known', observedAt)
     : '尚未检查'
+  if (
+    connectionState !== undefined &&
+    connectionState !== 'local' &&
+    connectionState !== 'online'
+  ) {
+    const installationKnown =
+      (lifecycle?.installations.length ?? 0) > 0 ||
+      provider?.version !== undefined ||
+      provider?.availability === 'available' ||
+      provider?.availability === 'unsupported_version' ||
+      provider?.availability === 'misconfigured'
+    return installationKnown
+      ? {
+          status: summaryStatuses.unconfirmed,
+          freshnessLabel,
+          ...(executionHistoryLabel === undefined
+            ? {}
+            : { executionHistoryLabel }),
+        }
+      : { freshnessLabel: '电脑未连接' }
+  }
+  if (
+    !provider ||
+    provider.observed === false ||
+    discovery?.state === 'not_observed'
+  ) {
+    return { freshnessLabel: '尚未检查' }
+  }
   const displayName = provider.displayName
   function summary(state: SummaryStatus, nextStep?: string): ProviderSummary {
     const status = summaryStatuses[state]
     if (state === 'available' || state === 'unconfirmed')
-      return { status, freshnessLabel }
+      return { status, freshnessLabel, executionHistoryLabel }
     const advisory = `${displayName} ${status.label}${nextStep ? `，${nextStep}` : ''}。`
-    return { status, freshnessLabel, advisory }
+    return { status, freshnessLabel, executionHistoryLabel, advisory }
   }
 
   if (
@@ -204,17 +238,11 @@ export function providerSummary(
   }
   if (
     provider.availability === 'unsupported_version' ||
-    health?.failure?.reason === 'provider_unsupported_version'
+    currentHealth?.failure?.reason === 'provider_unsupported_version'
   ) {
     return summary('updateTool', '更新后请在电脑详情重新检查')
   }
-  const authFailure =
-    health?.failure?.userAction === 'login_on_machine' &&
-    !(
-      health.freshness === 'last_known' &&
-      backend?.freshness === 'current' &&
-      backend.readiness === 'ready'
-    )
+  const authFailure = currentHealth?.failure?.userAction === 'login_on_machine'
   if (backend?.readiness === 'authentication_required' || authFailure) {
     if (
       backend?.mode &&
@@ -237,23 +265,36 @@ export function providerSummary(
     (compatibility?.state === 'unavailable' &&
       compatibility.freshness !== 'not_observed') ||
     backend?.readiness === 'unavailable' ||
-    health?.state === 'unavailable'
+    currentHealth?.state === 'unavailable'
   ) {
     return summary(
       'unavailable',
-      providerHealthNextStep(health?.failure) ?? '请在电脑详情重新检查',
+      providerHealthNextStep(currentHealth?.failure) ?? '请在电脑详情重新检查',
     )
   }
-  if (compatibility?.state === 'limited' || health?.state === 'degraded') {
-    return summary('limited', providerHealthNextStep(health?.failure))
+  if (
+    compatibility?.state === 'limited' ||
+    currentHealth?.state === 'degraded'
+  ) {
+    return summary('limited', providerHealthNextStep(currentHealth?.failure))
   }
   if (
     compatibility?.freshness === 'not_observed' ||
-    (backend?.readiness === 'unknown' && health?.state !== 'healthy')
+    (backend?.readiness === 'unknown' && currentHealth?.state !== 'healthy')
   ) {
     return summary('unconfirmed')
   }
   return summary('available')
+}
+
+function formatExecutionDate(observedAt?: string): string | undefined {
+  if (observedAt === undefined) return undefined
+  const date = new Date(observedAt)
+  if (Number.isNaN(date.getTime())) return undefined
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+  }).format(date)
 }
 
 function providerHealthNextStep(
@@ -450,16 +491,19 @@ export function providerLifecyclePresentation(
 
 export function machineProviderSummary(
   detail: {
+    readonly machine?: Pick<MachineSummary, 'connectionState'>
     readonly providers: readonly ProviderDescriptor[]
     readonly providerLifecycles?: readonly MachineProviderLifecycle[]
     readonly providerDiscovery?: MachineProviderDiscovery
   },
   provider: ProviderId,
+  connectionState = detail.machine?.connectionState,
 ): ProviderSummary {
   return providerSummary(
     detail.providers.find((item) => item.provider === provider),
     providerLifecycleForMachine(detail.providerLifecycles ?? [], provider),
     detail.providerDiscovery,
+    connectionState,
   )
 }
 

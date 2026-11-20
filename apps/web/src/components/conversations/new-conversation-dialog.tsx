@@ -156,6 +156,7 @@ export function NewConversationDialog({
     providerPresentationsForMachine(machineDetailQuery.data?.providers ?? []),
     machineDetailQuery.data?.providerLifecycles,
     machineDetailQuery.data?.providerDiscovery,
+    project?.machine?.connectionState,
   )
   const selectedProvider = resolveConversationCreationProvider(
     providerOptions,

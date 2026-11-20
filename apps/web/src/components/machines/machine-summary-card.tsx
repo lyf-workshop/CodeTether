@@ -122,11 +122,20 @@ export function MachineSummaryCard({
               <dd>
                 {detail.data ? (
                   <ProviderSummaryBadge
-                    summary={machineProviderSummary(detail.data, provider)}
+                    summary={machineProviderSummary(
+                      detail.data,
+                      provider,
+                      machine.connectionState,
+                    )}
                   />
                 ) : (
                   <span className="text-text-muted">
-                    {detail.isError ? '状态暂不可用' : '正在读取…'}
+                    {machine.connectionState !== 'local' &&
+                    machine.connectionState !== 'online'
+                      ? '电脑未连接'
+                      : detail.isError
+                        ? '状态暂不可用'
+                        : '正在读取…'}
                   </span>
                 )}
               </dd>

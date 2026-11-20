@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { createElement as h } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import {
   machineProviderSummary,
   providerSummary,
 } from '../.tmp/test-dist/provider/provider-presentation.js'
 import { newConversationProviderEligibility } from '../.tmp/test-dist/components/conversations/new-conversation-provider-selection.js'
+import { conversationCreationProviderOptions } from '../.tmp/test-dist/components/conversations/new-conversation-selection.js'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
+
+const { MachineProviderBadge, ProviderSummaryBadge } = loadWebComponent(
+  'provider/provider-summary-badge.tsx',
+)
 
 const time = '2026-11-19T12:00:00Z'
 const descriptor = {
@@ -90,10 +98,10 @@ for (const [name, availability, group, health, label, variant] of [
     'danger',
   ],
   [
-    'unavailable health takes priority over limited compatibility',
+    'current unavailable health takes priority over limited compatibility',
     'available',
     lifecycle('limited'),
-    { state: 'unavailable', freshness: 'last_known' },
+    { state: 'unavailable', freshness: 'current' },
     '暂时不可用',
     'danger',
   ],
@@ -126,6 +134,182 @@ for (const [name, availability, group, health, label, variant] of [
   })
 }
 
+test('last-known execution failure and degradation stay dated secondary context', () => {
+  for (const [state, copy] of [
+    ['unavailable', '上次运行失败'],
+    ['degraded', '上次运行受限'],
+  ]) {
+    const summary = providerSummary(
+      {
+        ...descriptor,
+        executionHealth: {
+          state,
+          freshness: 'last_known',
+          observedAt: '2026-10-22T12:00:00Z',
+          failure: {
+            reason: 'provider_service_unavailable',
+            userAction: 'retry',
+          },
+        },
+      },
+      lifecycle('verified'),
+    )
+    assert.deepEqual(summary.status, { label: '可用', variant: 'success' })
+    assert.equal(summary.advisory, undefined)
+    assert.match(summary.executionHistoryLabel, new RegExp(copy, 'u'))
+    assert.match(summary.executionHistoryLabel, /10月22日/u)
+    const markup = renderToStaticMarkup(h(ProviderSummaryBadge, { summary }))
+    assert.match(markup, /可用/u)
+    assert.match(markup, /上次运行/u)
+    assert.doesNotMatch(markup, /danger/u)
+  }
+})
+
+test('current execution failure remains a red summary', () => {
+  const summary = providerSummary(
+    {
+      ...descriptor,
+      executionHealth: {
+        state: 'unavailable',
+        freshness: 'current',
+        observedAt: time,
+        failure: {
+          reason: 'provider_service_unavailable',
+          userAction: 'retry',
+        },
+      },
+    },
+    lifecycle('verified'),
+  )
+  assert.deepEqual(summary.status, {
+    label: '暂时不可用',
+    variant: 'danger',
+  })
+  assert.equal(summary.executionHistoryLabel, undefined)
+})
+
+test('last-known version and login failures cannot override current tool facts', () => {
+  for (const failure of [
+    { reason: 'provider_unsupported_version', userAction: 'update_provider' },
+    {
+      reason: 'provider_authentication_required',
+      userAction: 'login_on_machine',
+    },
+  ]) {
+    const summary = providerSummary(
+      {
+        ...descriptor,
+        executionHealth: {
+          state: 'unavailable',
+          freshness: 'last_known',
+          observedAt: '2026-10-22T12:00:00Z',
+          failure,
+        },
+      },
+      lifecycle('verified'),
+    )
+    assert.deepEqual(summary.status, { label: '可用', variant: 'success' })
+    assert.match(summary.executionHistoryLabel, /上次运行失败 · 10月22日/u)
+  }
+})
+
+test('a nonconnected computer has neutral tool rows with or without installation evidence', () => {
+  const states = [
+    'connecting',
+    'offline',
+    'recovery_required',
+    'authentication_failed',
+    'incompatible',
+  ]
+  for (const connectionState of states) {
+    const known = {
+      machine: { connectionState },
+      providers: [
+        {
+          ...descriptor,
+          availability: 'unavailable',
+          executionHealth: { state: 'unknown', freshness: 'last_known' },
+        },
+      ],
+      providerLifecycles: [lifecycle('verified')],
+      providerDiscovery: { state: 'last_known', observedAt: time },
+    }
+    const knownSummary = machineProviderSummary(known, 'codex')
+    assert.deepEqual(knownSummary.status, {
+      label: '已安装，待确认',
+      variant: 'secondary',
+    })
+    const knownMarkup = renderToStaticMarkup(
+      h(MachineProviderBadge, { read: { data: known }, provider: 'codex' }),
+    )
+    assert.match(knownMarkup, /data-variant="secondary"/u)
+    assert.doesNotMatch(knownMarkup, /data-variant="danger"/u)
+
+    const unknown = { ...known, providerLifecycles: [] }
+    const unknownSummary = machineProviderSummary(unknown, 'codex')
+    assert.equal(unknownSummary.status, undefined)
+    assert.equal(unknownSummary.freshnessLabel, '电脑未连接')
+    const markup = renderToStaticMarkup(
+      h(MachineProviderBadge, { read: { data: unknown }, provider: 'codex' }),
+    )
+    assert.match(markup, /电脑未连接/u)
+    assert.doesNotMatch(markup, /data-slot="badge"/u)
+  }
+  const noDataMarkup = renderToStaticMarkup(
+    h(MachineProviderBadge, {
+      provider: 'codex',
+      connectionState: 'offline',
+    }),
+  )
+  assert.match(noDataMarkup, /电脑未连接/u)
+  assert.doesNotMatch(noDataMarkup, /data-slot="badge"/u)
+})
+
+test('computer card summary uses the latest list connection state over cached detail', () => {
+  const cachedDetail = {
+    machine: { connectionState: 'online' },
+    providers: [{ ...descriptor, availability: 'unavailable' }],
+    providerLifecycles: [lifecycle('verified')],
+  }
+  const summary = machineProviderSummary(cachedDetail, 'codex', 'offline')
+  assert.equal(summary.status.variant, 'secondary')
+  assert.match(
+    renderToStaticMarkup(
+      h(MachineProviderBadge, {
+        read: { data: cachedDetail },
+        provider: 'codex',
+        connectionState: 'offline',
+      }),
+    ),
+    /data-variant="secondary"/u,
+  )
+})
+
+test('New Conversation renders neutral tool context for a fixed offline computer', () => {
+  const [option] = conversationCreationProviderOptions(
+    [
+      {
+        ...descriptor,
+        availability: 'unavailable',
+        available: false,
+        version: '1.0',
+        capabilities: { streaming: true, resume: true },
+      },
+    ],
+    undefined,
+    { state: 'last_known', observedAt: time },
+    'offline',
+  )
+  assert.equal(option.eligibility.eligible, false)
+  assert.equal(option.eligibility.summary.status.variant, 'secondary')
+  assert.match(
+    renderToStaticMarkup(
+      h(ProviderSummaryBadge, { summary: option.eligibility.summary }),
+    ),
+    /data-variant="secondary"/u,
+  )
+})
+
 test('check freshness is secondary to the summary; a never-discovered provider gets no status', () => {
   for (const state of ['current', 'last_known']) {
     const summary = providerSummary(descriptor, undefined, {
@@ -143,7 +327,7 @@ test('check freshness is secondary to the summary; a never-discovered provider g
   )
 })
 
-test('New Conversation only advises about a problem and never changes eligibility based on health', () => {
+test('New Conversation advises only on current health and never gates an installed tool on health', () => {
   const available = {
     ...descriptor,
     available: true,
@@ -166,10 +350,16 @@ test('New Conversation only advises about a problem and never changes eligibilit
         },
       })
       assert.equal(result.eligible, true)
-      assert.match(
-        result.executionAdvisory,
-        /^(?:Codex 可用，部分功能受限|Codex 暂时不可用)，请等待额度恢复。$/u,
-      )
+      if (freshness === 'current') {
+        assert.match(
+          result.executionAdvisory,
+          /^(?:Codex 可用，部分功能受限|Codex 暂时不可用)，请等待额度恢复。$/u,
+        )
+      } else {
+        assert.equal(result.executionAdvisory, undefined)
+        assert.equal(result.summary.status.label, '可用')
+        assert.match(result.summary.executionHistoryLabel, /11月19日/u)
+      }
     }
   }
 })

@@ -318,11 +318,14 @@ test('New Conversation keeps execution health advisory unless the executable pro
     executionHealth: {
       state: 'unavailable',
       freshness: 'last_known',
+      observedAt: '2026-09-02T20:00:00.000Z',
       failure,
     },
   })
   assert.equal(stale.eligible, true)
-  assert.match(stale.executionAdvisory, /未登录，请在电脑上完成登录/u)
+  assert.equal(stale.summary.status.label, '可用')
+  assert.equal(stale.executionAdvisory, undefined)
+  assert.match(stale.summary.executionHistoryLabel, /上次运行失败 · 9月2日/u)
 
   for (const reason of [
     'provider_session_lost',

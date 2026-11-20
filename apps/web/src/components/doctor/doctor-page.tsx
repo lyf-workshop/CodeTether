@@ -710,6 +710,7 @@ function RemoteComputerCard({
               <MachineProviderBadge
                 read={detail}
                 provider={provider.provider}
+                connectionState={machine.connectionState}
               />
             </div>
             <div className="mt-2 space-y-1">

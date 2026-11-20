@@ -137,6 +137,7 @@ export function MachineProvidersSection({
                 providerDiscovery: discovery,
               },
               provider.provider,
+              connection?.state ?? 'local',
             )}
             lifecycles={lifecycles}
             hostReady={hostReady}

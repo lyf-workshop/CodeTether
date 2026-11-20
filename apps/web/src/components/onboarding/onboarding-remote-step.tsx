@@ -100,6 +100,7 @@ export function OnboardingRemoteStep(props: SetupStepProps) {
                   <MachineProviderBadge
                     read={detail}
                     provider={provider.provider}
+                    connectionState={machine.connectionState}
                   />
                   <span className="text-text-primary">
                     {onboardingProviderInstallationLabel(provider)} ·{' '}

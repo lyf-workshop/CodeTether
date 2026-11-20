@@ -79,12 +79,12 @@ Claude Code used the installed app itself after the alpha.4 release, at the Owne
   - "查看已归档会话" on every project (goal 7)
   - "本…" (goal 8)
   - "这里只匹配已加载的标题" (goal 9)
-- **The release review:** restoring an archived conversation does not refresh the model catalog (`release-v0.1.0-alpha.4.md`).
+- **The release review:** restoring an archived conversation does not refresh the model catalog (`release-v0.1.0-alpha.4.md`). Fixed on a separate branch and accepted the same day (`restored-conversation-model-catalog.md`); it merges with D2.5.
 
 ## Recommended next steps
 
-1. **Merge D2.5 now** (the alpha.4 tag exists), and ship it soon as alpha.5. It removes the most visible daily problem.
-2. **W0e, Windows fixes after alpha.4:** findings 2, 4, 5 and 6, and the release review's catalog refresh. Add finding 3 if the Owner approves a bulk action.
+1. **Merge D2.5 now** (the alpha.4 tag exists), together with the separate model-catalog fix (`restored-conversation-model-catalog.md`), and ship them soon as alpha.5. It removes the most visible daily problem.
+2. **W0e, Windows fixes after alpha.4:** findings 2, 4, 5 and 6. The release review's catalog refresh was fixed separately. Add finding 3 if the Owner approves a bulk action.
    - It is web plus one small desktop-shell change.
    - Start from `main` after D2.5, which also changes the inspector and the Markdown renderer.
    - It ships in alpha.5 with D2.5.

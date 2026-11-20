@@ -323,6 +323,7 @@ export function NewConversationDialog({
               project={project}
               fixed={projectSelection.fixed}
               loading={loading}
+              providerReadFailed={machineDetailQuery.isError}
               busy={createMutation.isPending}
               providerOptions={providerOptions}
               selectedProvider={selectedProvider}
@@ -388,6 +389,7 @@ export function NewConversationDialog({
               <InlineNotice>{selectedProvider.eligibility.label}</InlineNotice>
             ) : null}
             {!loading &&
+            machineDetailQuery.isSuccess &&
             project !== undefined &&
             project.unavailableReason === undefined &&
             !providerOptions.some((option) => option.eligibility.checking) &&

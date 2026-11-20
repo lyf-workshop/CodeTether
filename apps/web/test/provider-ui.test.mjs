@@ -418,7 +418,11 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   ])
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)
-  assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
+  assert.match(dialog, /machineDetail === undefined\s*\?\s*\[\]/u)
+  assert.match(
+    dialog,
+    /providerPresentationsForMachine\(machineDetail\.providers\)/u,
+  )
   const fields = await readFile(
     new URL('components/conversations/new-conversation-fields.tsx', root),
     'utf8',

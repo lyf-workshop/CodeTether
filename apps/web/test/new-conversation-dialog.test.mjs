@@ -197,6 +197,29 @@ test('open dialog shows checking Codex until a Machine discovery event makes it 
   }
 })
 
+test('Machine detail read error shows no false AI tool empty state', async () => {
+  const fixture = await dialogFixture({
+    getMachine: async () => {
+      throw new Error('test-owned Machine detail failure')
+    },
+  })
+  try {
+    await fixture.until(() =>
+      fixture.container.textContent.includes(
+        'CodeTether 暂时无法读取设备，请重试。',
+      ),
+    )
+    assert.equal(fixture.submit().disabled, true)
+    assert.doesNotMatch(
+      fixture.container.textContent,
+      /这台设备当前没有可用的 AI 工具|此设备当前没有可通过 CodeTether 启动/u,
+    )
+    assert.equal(fixture.container.querySelector('input[value="codex"]'), null)
+  } finally {
+    await fixture.close()
+  }
+})
+
 test('real dialog double-submit dispatches one exact empty conversation without model or initial message', async () => {
   let complete
   const fixture = await dialogFixture({

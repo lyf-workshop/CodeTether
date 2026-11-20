@@ -6,35 +6,37 @@ import { loadUiComponent } from './fixtures/render-ui.mjs'
 
 test('Select shows a repeated label tooltip only after truncation', async (t) => {
   const dom = await createDom()
-  t.after(async () => {
-    // Radix's hidden native select can dispatch a change after the menu
-    // unmounts. Let that work finish before createDom restores global Event.
-    await dom.render(null)
-    await dom.perform(() => new Promise((resolve) => setImmediate(resolve)))
-    await dom.close()
-  })
   dom.window.HTMLElement.prototype.scrollIntoView = () => {}
   const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } =
     loadUiComponent('components/select.tsx')
-  await dom.render(
-    h(
-      Select,
-      { open: true, value: 'short', onValueChange() {} },
-      h(SelectTrigger, null, h(SelectValue)),
+  const renderSelect = (open) =>
+    dom.render(
       h(
-        SelectContent,
-        null,
-        h(SelectItem, { value: 'short' }, 'Short label'),
-        h(SelectItem, { value: 'long' }, 'A very long label'),
+        Select,
+        { open, value: 'short', onValueChange() {} },
+        h(SelectTrigger, null, h(SelectValue)),
         h(
-          SelectItem,
-          { value: 'described', title: 'Additional description' },
-          'Described',
+          SelectContent,
+          null,
+          h(SelectItem, { value: 'short' }, 'Short label'),
+          h(SelectItem, { value: 'long' }, 'A very long label'),
+          h(
+            SelectItem,
+            { value: 'described', title: 'Additional description' },
+            'Described',
+          ),
+          h(SelectItem, { value: 'keyboard' }, 'Keyboard label'),
         ),
-        h(SelectItem, { value: 'keyboard' }, 'Keyboard label'),
       ),
-    ),
-  )
+    )
+  t.after(async () => {
+    // FocusScope restores focus on a timer when the menu closes. Flush that
+    // callback while JSDOM's Event and CustomEvent globals are still active.
+    await renderSelect(false)
+    await dom.perform(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    await dom.close()
+  })
+  await renderSelect(true)
 
   const items = [
     ...dom.window.document.querySelectorAll('[data-slot="select-item"]'),

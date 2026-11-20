@@ -32,6 +32,7 @@ export function useLiveConversationControls(
   capabilities: ConversationCapabilitiesViewModel,
   machineKind: 'local' | 'remote' | undefined,
 ): ConversationControls {
+  const archived = model.archivedAt !== undefined
   const runtime = useHostRuntime()
   const connectionState = useHostConnectionState()
   const queryClient = useQueryClient()
@@ -330,6 +331,7 @@ export function useLiveConversationControls(
   const refreshModels = useCallback(async () => {
     if (
       modelCatalogGuard.current?.conversationId === model.id ||
+      archived ||
       !capabilities.canCompose
     )
       return
@@ -356,15 +358,21 @@ export function useLiveConversationControls(
         setModelCatalogLoading(undefined)
       }
     }
-  }, [capabilities.canCompose, model.id, model.provider, runtime])
+  }, [archived, capabilities.canCompose, model.id, model.provider, runtime])
 
   useEffect(() => {
-    if (automaticModelCatalog.current.conversationId !== model.id) {
+    if (automaticModelCatalog.current.conversationId !== model.id || archived) {
       modelCatalogGuard.current = undefined
       automaticModelCatalog.current = {
         conversationId: model.id,
         started: false,
       }
+    }
+    if (archived) {
+      setModelCatalog(undefined)
+      setModelCatalogLoading(undefined)
+      setModelSwitchError(undefined)
+      return
     }
     if (
       machineKind !== 'local' ||
@@ -374,7 +382,7 @@ export function useLiveConversationControls(
       return
     automaticModelCatalog.current.started = true
     void refreshModels()
-  }, [capabilities.canCompose, machineKind, model.id, refreshModels])
+  }, [archived, capabilities.canCompose, machineKind, model.id, refreshModels])
 
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision): Promise<void> => {

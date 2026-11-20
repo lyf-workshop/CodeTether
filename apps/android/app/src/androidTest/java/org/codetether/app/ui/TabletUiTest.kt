@@ -254,6 +254,16 @@ class TabletUiTest {
     }
 
     @Test
+    fun signInKeepsTheEmailDraftAcrossStateRestoration() {
+        val restoration = StateRestorationTester(compose)
+        state = TabletState()
+        restoration.setContent { TabletApp(state, actions) }
+        compose.onNodeWithText("邮箱").performTextInput("audit@example.invalid")
+        restoration.emulateSavedInstanceStateRestore()
+        compose.onNodeWithText("邮箱").assertTextContains("audit@example.invalid")
+    }
+
+    @Test
     fun connectionCheckIsStandaloneWithUserFacingDescriptionsAndDebugControls() {
         state = initial.copy(page = TabletPage.Settings())
         compose.setContent { TabletApp(state, actions) }

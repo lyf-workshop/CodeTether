@@ -5,7 +5,7 @@ import { AddMobileDeviceDialog } from './add-mobile-device-dialog'
 
 export function AddDevicePage() {
   return (
-    <main className="mx-auto w-full min-w-0 max-w-(--page-narrow-w) space-y-6 px-4 py-6 sm:px-8">
+    <div className="mx-auto w-full min-w-0 max-w-(--page-narrow-w) space-y-6 px-4 py-6 sm:px-8">
       <header>
         <h1 className="text-page font-semibold">添加设备</h1>
         <p className="mt-2 text-base text-text-secondary">
@@ -62,6 +62,6 @@ export function AddDevicePage() {
       <Button asChild variant="secondary">
         <Link to="/devices">返回设备</Link>
       </Button>
-    </main>
+    </div>
   )
 }

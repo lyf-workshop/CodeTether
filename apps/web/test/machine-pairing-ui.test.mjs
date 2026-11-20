@@ -80,7 +80,7 @@ test('computer cards show project counts and read Provider state without trigger
   assert.match(page, /projects=\{projectsQuery\.data\}/u)
   assert.match(card, /machineDetailQueryOptions/u)
   assert.match(card, /projectLocationForMachine/u)
-  assert.match(card, /machineSubtitleLabel/u)
+  assert.match(card, /machineEnvironmentLabel/u)
   assert.match(card, /lastSeenAt/u)
   assert.match(providers, /discovery\.state !== 'not_observed'/u)
   assert.match(providers, /discovery\?\.state === 'current'/u)

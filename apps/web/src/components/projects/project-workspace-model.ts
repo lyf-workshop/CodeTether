@@ -10,6 +10,7 @@ import {
   type ProjectRecord,
   type ProviderId,
 } from '@codetether/protocol'
+import { conversationArchiveBlockedReason } from '../conversations/conversation-organization-shared.js'
 
 export interface ProjectWorkspaceSearch {
   machineId?: MachineId
@@ -20,6 +21,17 @@ export interface ProjectWorkspaceSearch {
   status?: ConversationStatus
 }
 
+export function projectViewIncludesStatus(
+  view: ProjectWorkspaceSearch['view'],
+  status: ConversationStatus | 'all',
+): boolean {
+  return (
+    view !== 'archived' ||
+    status === 'all' ||
+    conversationArchiveBlockedReason({ status }) === undefined
+  )
+}
+
 export function parseProjectWorkspaceSearch(
   search: Record<string, unknown>,
 ): ProjectWorkspaceSearch {
@@ -27,6 +39,11 @@ export function parseProjectWorkspaceSearch(
   const query = ConversationSearchQueryTextSchema.safeParse(search.q)
   const provider = ProviderIdSchema.safeParse(search.provider)
   const status = ConversationStatusSchema.safeParse(search.status)
+  const view = search.view === 'archived' ? 'archived' : undefined
+  const eligibleStatus =
+    status.success && projectViewIncludesStatus(view, status.data)
+      ? status.data
+      : undefined
   return {
     ...(machine.success
       ? { machineId: machine.data }
@@ -34,9 +51,9 @@ export function parseProjectWorkspaceSearch(
         ? {}
         : { invalidMachineId: true as const }),
     ...(query.success ? { q: query.data } : {}),
-    ...(search.view === 'archived' ? { view: 'archived' as const } : {}),
+    ...(view === undefined ? {} : { view }),
     ...(provider.success ? { provider: provider.data } : {}),
-    ...(status.success ? { status: status.data } : {}),
+    ...(eligibleStatus === undefined ? {} : { status: eligibleStatus }),
   }
 }
 

@@ -376,7 +376,7 @@ export function Composer({
                 value={
                   availableModels.some((model) => model.id === currentModel)
                     ? currentModel
-                    : undefined
+                    : ''
                 }
                 onOpenChange={(open) => {
                   setModelOpen(open)
@@ -433,7 +433,7 @@ export function Composer({
                     (option) => option.id === currentReasoning,
                   )
                     ? currentReasoning
-                    : undefined
+                    : ''
                 }
                 onValueChange={(reasoning) =>
                   void modelSwitchController.update({ reasoning })

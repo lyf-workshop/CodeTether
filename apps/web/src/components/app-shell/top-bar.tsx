@@ -144,7 +144,7 @@ function TopBar({
           data-slot="desktop-breadcrumbs"
           className="min-w-0 flex-1 overflow-hidden"
         >
-          <ol className="flex min-w-0 items-center gap-3 text-md font-medium">
+          <ol className="grid min-w-0 auto-cols-[minmax(0,max-content)] grid-flow-col items-center justify-start gap-3 text-md font-medium">
             {resolvedBreadcrumbs.map((breadcrumb, index) => {
               const isCurrent = index === resolvedBreadcrumbs.length - 1
 

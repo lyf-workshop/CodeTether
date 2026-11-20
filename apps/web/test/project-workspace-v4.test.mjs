@@ -13,6 +13,31 @@ import {
 
 const firstId = 'machine_aaaaaaaaaaaa'
 const secondId = 'machine_bbbbbbbbbbbb'
+
+test('archived project links keep eligible filters and discard active-only statuses', () => {
+  for (const status of ['running', 'waiting']) {
+    assert.deepEqual(
+      parseProjectWorkspaceSearch({
+        view: 'archived',
+        status,
+        provider: 'codex',
+      }),
+      {
+        view: 'archived',
+        provider: 'codex',
+      },
+    )
+    assert.deepEqual(parseProjectWorkspaceSearch({ status }), { status })
+  }
+  assert.deepEqual(
+    parseProjectWorkspaceSearch({ view: 'archived', status: 'failed' }),
+    {
+      view: 'archived',
+      status: 'failed',
+    },
+  )
+})
+
 const project = {
   locations: [
     { machineId: firstId, rootPath: '/work/one' },

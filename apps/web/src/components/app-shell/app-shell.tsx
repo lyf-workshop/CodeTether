@@ -83,19 +83,26 @@ export function AppShell({
   useEffect(() => {
     writeWorkspaceSidebarCollapsed(optionalLocalStorage(), sidebarCollapsed)
   }, [sidebarCollapsed])
-  function openPalette(trigger?: HTMLElement) {
-    if (
-      globalDialogRef.current !== null ||
-      document.querySelector('[role="dialog"][data-state="open"]')
-    )
-      return
-    commandPaletteTriggerRef.current =
-      trigger ??
-      (document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null)
-    setGlobalDialog('command-palette')
-  }
+  const openPalette = useCallback(
+    (trigger?: HTMLElement) => {
+      if (
+        globalDialogRef.current !== null ||
+        document.querySelector('[role="dialog"][data-state="open"]')
+      )
+        return
+      const source = trigger ?? document.activeElement
+      // A rapid reopen may precede the previous dialog's focus restoration.
+      if (
+        source instanceof HTMLElement &&
+        source !== document.body &&
+        source.closest('[role="dialog"]') === null
+      ) {
+        commandPaletteTriggerRef.current = source
+      }
+      setGlobalDialog('command-palette')
+    },
+    [setGlobalDialog],
+  )
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent) {
@@ -137,11 +144,7 @@ export function AppShell({
         })
         setGlobalDialog('new-conversation')
       } else if (shortcut === 'palette') {
-        commandPaletteTriggerRef.current =
-          document.activeElement instanceof HTMLElement
-            ? document.activeElement
-            : null
-        setGlobalDialog('command-palette')
+        openPalette()
       } else {
         void navigate({
           to: '/settings/$section',
@@ -156,6 +159,7 @@ export function AppShell({
     currentProjectId,
     globalDialog,
     navigate,
+    openPalette,
     setGlobalDialog,
   ])
 
@@ -265,7 +269,13 @@ export function AppShell({
           onOpenChange={(open) =>
             setGlobalDialog(open ? 'command-palette' : null)
           }
-          returnFocusRef={commandPaletteTriggerRef}
+          onRestoreFocus={() => {
+            if (globalDialogRef.current !== null) return
+            const trigger = commandPaletteTriggerRef.current
+            commandPaletteTriggerRef.current = null
+            if (trigger?.getClientRects().length) trigger.focus()
+            else document.getElementById('main-content')?.focus()
+          }}
           onNewConversation={() => {
             newConversationTriggerRef.current = commandPaletteTriggerRef.current
             setNewConversationContext({

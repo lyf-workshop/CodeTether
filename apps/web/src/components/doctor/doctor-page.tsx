@@ -44,6 +44,7 @@ import {
 } from '../../runtime/host/doctor-refresh'
 import { onboardingQueryOptions } from '../../runtime/host/onboarding-query'
 import { machineConnectionStateLabel } from '../machines/machine-presentation'
+import { OfflineComputersGroup } from '../machines/offline-computers-group'
 import { AddProjectDialog } from '../projects/add-project-dialog'
 import {
   backendModeLabel,
@@ -53,6 +54,7 @@ import {
   doctorStateLabel,
   isProviderUsable,
   lifecycleObservationLabel,
+  partitionDoctorRemoteComputers,
   providerCompatibilityLabel,
   providerDisplayName,
   providerInstallationGuidance,
@@ -176,6 +178,7 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
 
   const doctor = doctorQuery.data
   const overallPresentation = doctorOverallPresentation(doctor)
+  const remoteGroups = partitionDoctorRemoteComputers(doctor.remoteComputers)
   const Heading = embedded ? 'h3' : 'h1'
 
   return (
@@ -387,10 +390,30 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4 lg:grid-cols-2">
-            {doctor.remoteComputers.map((machine) => (
-              <RemoteComputerCard key={machine.machineId} machine={machine} />
-            ))}
+          <div className="space-y-4">
+            {remoteGroups.other.length > 0 ? (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {remoteGroups.other.map((machine) => (
+                  <RemoteComputerCard
+                    key={machine.machineId}
+                    machine={machine}
+                  />
+                ))}
+              </div>
+            ) : null}
+            <OfflineComputersGroup
+              count={remoteGroups.offline.length}
+              surface="doctor"
+            >
+              <div className="grid gap-4 lg:grid-cols-2">
+                {remoteGroups.offline.map((machine) => (
+                  <RemoteComputerCard
+                    key={machine.machineId}
+                    machine={machine}
+                  />
+                ))}
+              </div>
+            </OfflineComputersGroup>
           </div>
         )}
       </section>
@@ -807,7 +830,7 @@ function sessionDiscoveryLabel(
     case 'supported':
       return '可用'
     case 'unsupported':
-      return '此 AI 工具版本不受支持'
+      return '此版本无法查找以前的会话'
     case 'unavailable':
       return '暂时不可用'
     case 'unknown':

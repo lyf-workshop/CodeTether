@@ -403,7 +403,7 @@ test('Host selection ignores candidate ordering and keeps runtime compatibility 
 test('Doctor composes exact selected lifecycle truth without paths or backend secrets', async (t) => {
   const fixture = await createFixture(t)
   const global = await fixture.service.getDoctor()
-  assert.equal(global.doctor.overall, 'needs_attention')
+  assert.equal(global.doctor.overall, 'ready')
   assert.equal(global.doctor.project, undefined)
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
@@ -430,6 +430,8 @@ test('Doctor composes exact selected lifecycle truth without paths or backend se
 
 test('Doctor keeps runtime compatibility separate from unavailable backend readiness', async (t) => {
   const fixture = await createFixture(t, { backendReadiness: 'unavailable' })
+  const global = await fixture.service.getDoctor()
+  assert.equal(global.doctor.overall, 'needs_attention')
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
     ({ provider }) => provider === 'codex',
@@ -499,6 +501,8 @@ test('Doctor reports a current nonfatal Provider health degradation without chan
       failure,
     },
   })
+  const global = await fixture.service.getDoctor()
+  assert.equal(global.doctor.overall, 'limited')
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
     ({ provider }) => provider === 'codex',

@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   acknowledgeInboxAttention,
+  bulkAcknowledgeInboxAttention,
   resolveInboxApproval,
   reviewCompletedAttention,
 } from '../.tmp/test-dist/components/inbox/inbox-actions.js'
@@ -91,6 +92,105 @@ test('failed acknowledgement resolves only Attention identity', async () => {
 
   assert.deepEqual(calls, [['attention', 'attn_failed01']])
   assert.equal(item.status, 'open')
+})
+
+test('bulk acknowledgement clears only review and failure items in the current tab', async () => {
+  const review = completedItem()
+  const failure = {
+    ...review,
+    attentionId: 'attn_failed_bulk01',
+    type: 'failed',
+    payload: {
+      conversationTitle: 'Failed work',
+      error: { code: 'provider_error', message: 'AI tool failed' },
+    },
+  }
+  const approval = {
+    ...review,
+    attentionId: 'attn_approval_bulk01',
+    type: 'approval',
+  }
+  const remaining = [failure, review, approval]
+  const calls = []
+  const client = {
+    async listAttention({ type }) {
+      return { items: remaining.filter((item) => item.type === type) }
+    },
+    async resolveAttention(attentionId) {
+      calls.push(attentionId)
+      const index = remaining.findIndex(
+        (item) => item.attentionId === attentionId,
+      )
+      remaining.splice(index, 1)
+    },
+  }
+  const summary = {
+    totalOpen: 3,
+    approvalOpen: 1,
+    completedReviewOpen: 1,
+    failedOpen: 1,
+  }
+
+  const failedTab = await bulkAcknowledgeInboxAttention(
+    client,
+    'failed',
+    summary,
+    () => {},
+  )
+  assert.deepEqual(calls, ['attn_failed_bulk01'])
+  assert.deepEqual(failedTab, {
+    attempted: 1,
+    total: 1,
+    cleared: 1,
+    failed: 0,
+  })
+
+  const allTab = await bulkAcknowledgeInboxAttention(
+    client,
+    'all',
+    { ...summary, failedOpen: 0 },
+    () => {},
+  )
+  assert.deepEqual(calls, ['attn_failed_bulk01', review.attentionId])
+  assert.deepEqual(remaining, [approval])
+  assert.equal(allTab.cleared, 1)
+})
+
+test('bulk acknowledgement reports partial failure and leaves failed items open', async () => {
+  const first = completedItem()
+  const second = { ...first, attentionId: 'attn_completed02' }
+  const open = [first, second]
+  const calls = []
+  const progress = []
+  const client = {
+    async listAttention({ type }) {
+      return { items: open.filter((item) => item.type === type) }
+    },
+    async resolveAttention(attentionId) {
+      calls.push(attentionId)
+      if (attentionId === second.attentionId)
+        throw new Error('Host rejected it')
+      open.splice(
+        open.findIndex((item) => item.attentionId === attentionId),
+        1,
+      )
+    },
+  }
+  const result = await bulkAcknowledgeInboxAttention(
+    client,
+    'completed_review',
+    { totalOpen: 2, approvalOpen: 0, completedReviewOpen: 2, failedOpen: 0 },
+    (value) => progress.push(value),
+  )
+  assert.deepEqual(calls, [first.attentionId, second.attentionId])
+  assert.deepEqual(open, [second])
+  assert.deepEqual(result, {
+    attempted: 2,
+    total: 2,
+    cleared: 1,
+    failed: 1,
+  })
+  assert.deepEqual(progress.at(-1), { attempted: 2, total: 2 })
 })
 
 function completedItem() {

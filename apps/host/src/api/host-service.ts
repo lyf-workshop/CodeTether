@@ -9223,6 +9223,11 @@ function doctorOverallState(
     if (unknownPath) return 'unknown'
     return 'needs_attention'
   }
+  if (providers.some((provider) => provider.state === 'ready')) return 'ready'
+  if (providers.some((provider) => provider.state === 'limited'))
+    return 'limited'
+  if (providers.some((provider) => provider.state === 'unknown'))
+    return 'unknown'
   return 'needs_attention'
 }
 

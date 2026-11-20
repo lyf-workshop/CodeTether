@@ -448,6 +448,7 @@ They are not shown greyed out once a real control exists. Revised 2026-11-14 (AD
 - While a Turn runs, the action bar's Send becomes Stop, in the same place and at the same size, when the Provider can be interrupted. Otherwise Send stays, disabled, with the reason as its tooltip.
 - The action bar's middle slot, which shows the character count when idle, shows the state: a small spinner and "Codex 正在工作" while running, "等你批准" while an Approval waits. The Approval dock keeps the decision itself.
 - The hint line under the Composer stays one line high; only its text changes.
+- The Composer's height depends only on its draft. Sending clears the draft, so a multi-line draft returns to the empty height at once, as in any chat app; the height never depends on the Turn's state or on what was sent before (added 2026-11-20, `docs/reviews/w0e-windows-fixes.md`).
 - Archived and unavailable conversations still show their explanation and action in place of the input. Those states never start from a send.
 
 ---

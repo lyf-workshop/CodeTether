@@ -15,6 +15,8 @@
 
 **References** (read with `git show origin/ux/design:<path>`):
 
+- `docs/reviews/ui-ux-runtime-audit.md`: the Owner's UI/UX runtime audit, merged before this task; it already fixed the empty-project state (goal 3), the devices page at 800 px and the conversation breadcrumb (goal 8).
+
 - `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 5, 9, 10 and 13–17
 
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 9, 10, 11, 14, 17 and 18
@@ -51,7 +53,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - When something new is waiting, it shows as today, but below the conversation list.
      - In-app "打开" uses an in-app icon, not the external-link icon.
    - **Archived view:** its status filters exclude "运行中" and "等待批准", which can never match an archived conversation.
-   - **Empty state:** a project with no conversations does not suggest adjusting filters that are not set (hands-on review finding 11).
+   - **Empty state:** a project with no conversations does not suggest adjusting filters that are not set (hands-on review finding 11). Done by the UI/UX runtime audit (`ui-ux-runtime-audit.md`, W07), which also drops a status filter the archived view cannot show; verify it.
    - **Rows:** a conversation row does not leave about 120 px empty to the right of its date. If the space is reserved for hover actions, show them in it without reserving it (`2026-11-19-main-detail-pass.md`, finding 13).
    - **"以前的会话":** no lone icon box above the heading. When Claude Code cannot list earlier sessions, say so in one plain line, not in an amber box (finding 14).
 4. **Primary actions where the eye starts** (finding 11).
@@ -79,15 +81,15 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - **The inspector's "变更"** says which Turn each entry belongs to when one file appears more than once (finding 15).
    - **An archived conversation's top bar** says it is archived, not its last Turn's "失败" (finding 17).
 7. **A quieter sidebar** (finding 14). Remove the per-project "查看已归档会话" row; the project page's archived view is the way in. An expanded project with no conversations shows no "还没有会话" filler row either (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 7). Keep a link to it on the project page next to the conversation list.
-8. **Short names stay visible** (finding 17). In the New Conversation dialog, the breadcrumb (at 800 px it reads "本… › v4-accep… › …") and elsewhere, a short name such as the computer name is not truncated ("本地…") while a long path beside it keeps its full width. The path gives way first.
-   - **Devices page at 800 px:** the computer cards drop to one column before their text wraps word by word ("macOS · / arm64 · / 身份验证 / 失败") (`2026-11-19-main-detail-pass.md`, finding 9).
+8. **Short names stay visible** (finding 17). In the New Conversation dialog, the breadcrumb (at 800 px it reads "本… › v4-accep… › …") and elsewhere, a short name such as the computer name is not truncated ("本地…") while a long path beside it keeps its full width. The path gives way first. The audit (W08) fixed the top-bar breadcrumb on a conversation page; the New Conversation dialog and other places remain.
+   - **Devices page at 800 px:** the computer cards drop to one column before their text wraps word by word ("macOS · / arm64 · / 身份验证 / 失败") (`2026-11-19-main-detail-pass.md`, finding 9). Done by the audit (W03); verify it.
    - **The sidebar's computer rows:** at 1100 px and below, a computer's status no longer touches or overlaps its shortened name (finding 10).
 9. **No implementation detail in copy** (finding 18).
    - The command palette footer "这里只匹配已加载的标题" becomes user language, or goes.
    - The Add Project hint about offline computers appears only when the selected computer is a paired remote computer that can be offline, not for this computer.
    - Failure copy: the repeated "AI 工具未能完成本轮工作。 本轮工作可能不完整。已保存的会话历史仍可查看。" (with its stray double space) says what failed and what to do next, and "请查看电脑详情中的执行状态" links to that page (hands-on review finding 9).
 
-   - **"工具输出"** shows a command as the user would type it, not as escaped JSON (`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'node --test'`). This extends D2.5's carried item 3 (`2026-11-19-main-detail-pass.md`, finding 16).
+   - **"工具输出"** shows a command as the user would type it, not as escaped JSON (`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'node --test'`). This extends D2.5's carried item 3 (`2026-11-19-main-detail-pass.md`, finding 16). The timeline row has the same problem with quotes: Codex's `rg` command reads `"rg --files -g ""!node_modules"" -g ""!vendor"""` (`w0e-windows-fixes.md`, carried item 4).
 
 ## Known facts
 

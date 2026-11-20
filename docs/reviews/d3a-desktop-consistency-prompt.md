@@ -15,6 +15,8 @@
 
 **References** (read with `git show origin/ux/design:<path>`):
 
+- `docs/reviews/ui-ux-runtime-audit.md`: the Owner's UI/UX runtime audit, merged before this task; it already fixed the devices page title and the computer card's status (goal 5). Start from `main` after it merges.
+
 - `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 6–8, 11, 12 and 14
 
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 4, 5, 6, 7, 8 (computer and project pages; the conversation part belongs to D2.5), 15 and 16
@@ -63,7 +65,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - The Inbox subtitle no longer touches its title.
    - No subsection heading is larger than its page heading (today "状态检查" on "关于与检查" is).
 4. **One name for one thing** (finding 7).
-   - The devices page title becomes "设备", matching the sidebar, breadcrumb and button. It lists computers and also "手机和平板".
+   - The devices page title becomes "设备", matching the sidebar, breadcrumb and button. It lists computers and also "手机和平板". Done by the UI/UX runtime audit (`ui-ux-runtime-audit.md`, W04); verify it, do not redo it.
    - The archived view's breadcrumb no longer repeats the project ("本地电脑 › weather-cli › 已归档会话", not "… › weather-cli › weather-cli").
    - Check the terminology table in 10 §3.1 against every page header and breadcrumb, and report any other mismatch you fixed.
    - The New Conversation dialog's "思考强度" and the Composer's "推理" name the same setting; use one word. The local computer is "本地电脑" in the tree and on cards but "这台电脑" in sentences; pick one rule (`2026-11-19-alpha4-hands-on-ui-review.md`, finding 8).
@@ -74,7 +76,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - Claude's reasoning menu lists 低 to 最大, but its button can read "推理：默认", which the list cannot return to. Offer "默认" in the list. If clearing the choice needs a Host change, report it instead (finding 8).
 5. **Navigation and status shown once** (finding 8, computer and project pages).
    - Computer and project pages drop the "返回设备" link; the breadcrumb is the way back. The project page's back link also skips the computer level.
-   - The computer card says "在线" once.
+   - The computer card says "在线" once. Done by the UI/UX runtime audit (`ui-ux-runtime-audit.md`, W04); verify it, do not redo it.
    - The remote computer card says its status once, not again in its subtitle ("macOS · arm64 · 身份验证失败"). Its note "AI 工具显示上次已知的安装状态" keeps the card's spacing above the divider (`2026-11-19-main-detail-pass.md`, finding 12).
 6. **Quality gate:**
    - `pnpm typecheck`, `pnpm lint`, `pnpm test`, `pnpm build`
@@ -113,7 +115,7 @@ Line numbers refer to `4801ef1`.
 - **Frozen recovery rule.** Historical execution health is advisory, never a permanent lock (FROZEN-BOUNDARIES, Phase 6D). This task changes wording and tone only, not which Providers can be chosen.
 - **Headers.** Pages hand-roll their `h1`: `text-page` with `mt-5`, `mb-5` or `mb-6`, plus `text-xl` and `text-2xl` in places.
   - At 1440 px, content starts at x = 352 (Inbox), 356 (Devices), 396 (Settings) and 496 (Add Device).
-  - `apps/web/src/components/machines/machines-page.tsx:57` titles the page "电脑".
+  - `apps/web/src/components/machines/machines-page.tsx:57` titles the page "电脑". (Fixed by the audit, W04.)
 - **Primitives.** `packages/ui` has no tests (assessment backlog). Add tests for what you add there.
 - **Screenshots.** The review's screenshots are in `C:\Users\Administrator\AppData\Local\Temp\claude\f1eed4d30b5bb503\60ba83ab-1cea-4a54-a949-667ddf3e701e\scratchpad\ui-review\shots\` on the Windows PC (02-devices, 03-device-local, 07-inbox, 09b-new-conversation-project, 14-onboarding, 15-about, 17-add-device, 19-archived). That folder is temporary; capture your own baseline.
 - **W0-04 moved to the W0 small fixes** (`w0-small-fixes-prompt.md`, goal 4; the Owner, 2026-11-18). That task puts this computer first on the devices page and moves offline remote computers into a closed group, there and in the sidebar. Start D3a after it has merged, and keep that order and grouping.

@@ -185,6 +185,8 @@ Inbox is an action-oriented queue for items that need the user's attention, such
 
 The current durable backend supports only semantics the Runtime can identify structurally: Approval, completed review, and failed Turn. Question / needs-reply remains a future Inbox capability until an Agent exposes a reliable structured question signal; punctuation, text heuristics, and extra LLM classification must not invent it.
 
+Open review and failure items of an archived Conversation are hidden from the Inbox list, its counts and the sidebar badge, and they return when it is restored; their records are kept. A pending Approval always stays visible. Each tab except Approvals has "全部知道了", which acknowledges that tab's items after one confirmation that states the count; it never changes Conversations or history (W0e, accepted 2026-11-20).
+
 ### Activity
 
 Activity provides a chronological view of meaningful events across conversations and machines. It supports awareness and navigation without replacing the full conversation history.

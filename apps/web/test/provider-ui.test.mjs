@@ -456,7 +456,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   )
   assert.match(
     composer,
-    /gate\.canInterrupt && interruptController !== undefined/u,
+    /gate\.kind === 'unavailable' &&\s*gate\.canInterrupt &&\s*interruptController !== undefined/u,
   )
   assert.match(composer, /interruptController\.execute\(\)/u)
   assert.doesNotMatch(chromeActions, /interruptController|supportsInterrupt/u)

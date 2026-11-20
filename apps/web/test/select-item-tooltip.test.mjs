@@ -6,7 +6,13 @@ import { loadUiComponent } from './fixtures/render-ui.mjs'
 
 test('Select shows a repeated label tooltip only after truncation', async (t) => {
   const dom = await createDom()
-  t.after(() => dom.close())
+  t.after(async () => {
+    // Radix's hidden native select can dispatch a change after the menu
+    // unmounts. Let that work finish before createDom restores global Event.
+    await dom.render(null)
+    await dom.perform(() => new Promise((resolve) => setImmediate(resolve)))
+    await dom.close()
+  })
   dom.window.HTMLElement.prototype.scrollIntoView = () => {}
   const { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } =
     loadUiComponent('components/select.tsx')

@@ -18,6 +18,7 @@ import type {
 import { BoundedAgentEventQueue } from '../runtime/bounded-agent-event-queue.js'
 import { IncrementalDeltaIntegrityTracker } from '../runtime/delta-integrity-tracker.js'
 import { ProviderConversationUnavailableError } from './agent-runtime.js'
+import type { HostRuntimeDiagnostics } from './host-runtime-diagnostics.js'
 import {
   LOCAL_CODEX_CAPABILITIES,
   UNAVAILABLE_PROVIDER_CAPABILITIES,
@@ -40,6 +41,8 @@ export interface CodexHostRuntimeOptions {
   readonly executable?: string
   readonly environment?: NodeJS.ProcessEnv
   readonly version: string
+  readonly providerVersion?: string
+  readonly diagnostics?: HostRuntimeDiagnostics
   readonly disableHooks?: boolean
   readonly ephemeralThreads?: boolean
   readonly providerInstallationId?: ProviderInstallationId
@@ -170,6 +173,19 @@ export class CodexHostRuntime implements AgentHostRuntime {
           : { environment: options.environment }),
       },
     )
+    if (child.pid !== undefined) {
+      options.diagnostics?.recordCodexStarted({
+        pid: child.pid,
+        version: options.providerVersion,
+      })
+    }
+    child.once('exit', (code, signal) => {
+      options.diagnostics?.recordCodexExited({
+        code,
+        signal,
+        expected: this.#closePromise !== undefined,
+      })
+    })
     this.#client = new CodexAppServerClient(child, {
       requestTimeoutMs: 30_000,
       onEvent: (event) => this.#enqueue(event),

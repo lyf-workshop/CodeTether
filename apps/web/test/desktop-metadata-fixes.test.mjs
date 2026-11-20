@@ -79,8 +79,9 @@ test('computer overview reads one project index and bounded per-card Provider st
   assert.equal(f.requests.filter(([kind]) => kind === 'detail').length, 2)
   assert.ok(html.indexOf('这台电脑') < html.indexOf('远程服务器'))
   assert.equal((html.match(/1 个项目/gu) ?? []).length, 2)
-  assert.match(html, /Windows · x64 · 在线/u)
-  assert.match(html, /Linux · x64 · 在线/u)
+  assert.match(html, /Windows · x64</u)
+  assert.match(html, /Linux · x64</u)
+  assert.equal((html.match(/>在线</gu) ?? []).length, 2)
   assert.doesNotMatch(html, /通过 Relay|局域网直连/u)
 })
 

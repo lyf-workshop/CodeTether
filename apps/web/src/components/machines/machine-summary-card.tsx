@@ -18,7 +18,7 @@ import {
   formatMachineLastSeen,
   machineConnectionStateLabel,
   machineConnectionTone,
-  machineSubtitleLabel,
+  machineEnvironmentLabel,
 } from './machine-presentation'
 
 interface MachineSummaryCardProps {
@@ -101,7 +101,7 @@ export function MachineSummaryCard({
             {machine.displayName}
           </h2>
           <p className="mt-1 text-sm text-text-muted">
-            {machineSubtitleLabel(machine)}
+            {machineEnvironmentLabel(machine)}
           </p>
           {machine.kind === 'local' ? (
             <p className="mt-1 text-sm text-text-secondary">

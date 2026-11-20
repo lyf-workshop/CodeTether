@@ -21,6 +21,7 @@ import type {
 
 import { HostEventPublisher } from './host-event-publisher.js'
 import { ConversationStore } from '../persistence/index.js'
+import { resolveCodeTetherDatabasePath } from '../persistence/data-directory.js'
 import type { AgentHostRuntime } from './agent-runtime.js'
 import { HostService, newEpoch } from './host-service.js'
 import {
@@ -51,6 +52,7 @@ import {
 import type { LocalProviderReadiness } from './local-provider-readiness.js'
 import { HostStartupTimeline } from './startup-timeline.js'
 import { safeErrorNameForLog } from './safe-log.js'
+import { HostRuntimeDiagnostics } from './host-runtime-diagnostics.js'
 import {
   SecureRemoteMachineCoordinator,
   type RemoteMachineCoordinator,
@@ -78,6 +80,7 @@ export interface LocalCodexHostOptions {
   readonly allowedOrigins: readonly string[]
   readonly hostVersion: string
   readonly productVersion?: string
+  readonly diagnostics?: HostRuntimeDiagnostics
   readonly port?: number
   readonly executable?: string
   readonly disableHooks?: boolean
@@ -125,6 +128,16 @@ export interface RunningLocalCodexHost {
 export async function startLocalCodexHost(
   options: LocalCodexHostOptions,
 ): Promise<RunningLocalCodexHost> {
+  const diagnostics =
+    options.diagnostics ??
+    new HostRuntimeDiagnostics({
+      databasePath:
+        options.persistence === false
+          ? undefined
+          : (options.databasePath ?? resolveCodeTetherDatabasePath()),
+      productVersion: options.productVersion ?? '0.0.0',
+      hostVersion: options.hostVersion,
+    })
   const timeline = options.startupTimeline ?? new HostStartupTimeline()
   timeline.mark('PROCESS_START')
   const workspacePolicy = await WorkspacePolicy.create(
@@ -157,6 +170,7 @@ export async function startLocalCodexHost(
             machineId: localMachine.machineId,
             persistence,
             hostVersion: options.hostVersion,
+            diagnostics,
             ...options.providerDiscoveryForTests,
             ...(options.executable === undefined
               ? {}
@@ -204,7 +218,7 @@ export async function startLocalCodexHost(
     ]
   try {
     const runningHost = await startLocalCodexHostWithRuntime(
-      { ...options, startupTimeline: timeline },
+      { ...options, diagnostics, startupTimeline: timeline },
       runtimes,
       workspacePolicy,
       persistence,
@@ -456,6 +470,9 @@ export async function startLocalCodexHostWithRuntime(
       workspacePolicy,
       publisher,
       hostVersion: options.hostVersion,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       desktopManaged: options.desktopManaged === true,
       ...(options.maxConversations === undefined
         ? {}
@@ -633,6 +650,9 @@ async function createLocalProviderRuntime(
   try {
     return await CodexHostRuntime.launch({
       version: options.hostVersion,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       ...(options.executable === undefined
         ? {}
         : { executable: options.executable }),

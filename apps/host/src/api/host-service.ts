@@ -296,6 +296,7 @@ import {
   type RemoteMachineCoordinator,
 } from './remote-machine-coordinator.js'
 import { WorkspacePolicy } from './workspace-policy.js'
+import type { HostRuntimeDiagnostics } from './host-runtime-diagnostics.js'
 import {
   classifyCanonicalFailure,
   failureAffectsProviderExecutionHealth,
@@ -388,6 +389,7 @@ export interface HostServiceOptions {
   readonly workspacePolicy: WorkspacePolicy
   readonly publisher: HostEventPublisher
   readonly hostVersion: string
+  readonly diagnostics?: HostRuntimeDiagnostics
   readonly now?: () => Date
   readonly historyLimits?: ConversationRuntimeHistoryLimits
   readonly maxConversations?: number
@@ -450,6 +452,7 @@ export class HostService {
   readonly #machineRuntimes: MachineProviderRuntimeResolver
   readonly #workspacePolicy: WorkspacePolicy
   readonly #hostVersion: string
+  readonly #diagnostics?: HostRuntimeDiagnostics
   readonly #now: () => Date
   readonly #actions = new ActionIdempotencyCache()
   readonly #inFlightActions = new Set<Promise<unknown>>()
@@ -542,6 +545,7 @@ export class HostService {
     this.#workspacePolicy = options.workspacePolicy
     this.publisher = options.publisher
     this.#hostVersion = options.hostVersion
+    this.#diagnostics = options.diagnostics
     this.#now = options.now ?? (() => new Date())
     this.#providerSessionCandidates = new ProviderSessionDiscoveryRegistry({
       now: () => this.#now().getTime(),
@@ -7011,6 +7015,20 @@ export class HostService {
   }
 
   #handlePersistenceFailure(error: Error): void {
+    try {
+      this.#diagnostics?.recordFailure({
+        event: 'persistence.failure',
+        canonical: classifyCanonicalFailure(
+          error,
+          this.#timestamp(),
+          'runtime_error',
+        ),
+        error,
+        affectedTurns: this.#activeFailureTurns(),
+      })
+    } catch {
+      // Diagnostic writes cannot change durability failure handling.
+    }
     if (this.#persistenceFailure !== undefined) return
     this.#persistenceFailure = error
     this.#dirtyTurns.clear()
@@ -7790,7 +7808,69 @@ export class HostService {
     return this.#now().toISOString()
   }
 
-  #handleRuntimeFailure(provider: AgentProvider, failure: Error): void {
+  #activeFailureTurns(
+    machineId?: MachineId,
+    provider?: AgentProvider,
+  ): readonly {
+    readonly turnId: TurnId
+    readonly provider: AgentProvider
+    readonly machineKind: 'local' | 'remote'
+  }[] {
+    const active: {
+      turnId: TurnId
+      provider: AgentProvider
+      machineKind: 'local' | 'remote'
+    }[] = []
+    for (const conversation of this.#conversations.values()) {
+      if (
+        (machineId !== undefined &&
+          conversation.record.machineId !== machineId) ||
+        (provider !== undefined && conversation.record.provider !== provider)
+      ) {
+        continue
+      }
+      const turnId = conversation.record.activeTurnId
+      if (turnId === undefined) continue
+      const turn = conversation.turns.get(turnId)
+      if (turn?.record.status !== 'running') continue
+      active.push({
+        turnId,
+        provider: conversation.record.provider,
+        machineKind:
+          conversation.record.machineId === this.#machines.localMachineId()
+            ? 'local'
+            : 'remote',
+      })
+    }
+    return active
+  }
+
+  #handleRuntimeFailure(
+    provider: AgentProvider,
+    failure: Error,
+    providerEvent?: { readonly type: string; readonly itemKind?: string },
+  ): void {
+    try {
+      const diagnosticCanonical = classifyCanonicalFailure(
+        failure,
+        this.#timestamp(),
+        'runtime_error',
+      )
+      this.#diagnostics?.recordFailure({
+        event: 'runtime.failure',
+        provider,
+        machineKind: 'local',
+        turnIds: this.#activeFailureTurns(
+          this.#machines.localMachineId(),
+          provider,
+        ).map(({ turnId }) => turnId),
+        canonical: diagnosticCanonical,
+        error: failure,
+        ...(providerEvent === undefined ? {} : { providerEvent }),
+      })
+    } catch {
+      // Diagnostic writes cannot change runtime failure handling.
+    }
     if (
       this.#runtimeFailures.has(provider) ||
       this.#closePromise !== undefined
@@ -8668,11 +8748,19 @@ export class HostService {
 
   #subscribeRuntime(runtime: AgentHostRuntime, machineId: MachineId): void {
     if (this.#runtimeSubscriptions.has(runtime)) return
-    const fail = (failure: Error): void => {
+    const fail = (
+      failure: Error,
+      providerEvent?: { readonly type: string; readonly itemKind?: string },
+    ): void => {
       if (machineId === this.#machines.localMachineId()) {
-        this.#handleRuntimeFailure(runtime.provider, failure)
+        this.#handleRuntimeFailure(runtime.provider, failure, providerEvent)
       } else {
-        this.#handleMachineRuntimeFailure(machineId, runtime.provider, failure)
+        this.#handleMachineRuntimeFailure(
+          machineId,
+          runtime.provider,
+          failure,
+          providerEvent,
+        )
       }
     }
     const unsubscribeEvents = runtime.subscribeEvents((event) => {
@@ -8686,7 +8774,12 @@ export class HostService {
         // translation or durability failures back through that callback,
         // because doing so can bypass the Runtime's exact-child cleanup.
         try {
-          fail(toError(error))
+          fail(toError(error), {
+            type: event.type,
+            ...('kind' in event && typeof event.kind === 'string'
+              ? { itemKind: event.kind }
+              : {}),
+          })
         } catch {
           // `fail` has already transitioned the scoped runtime as far as
           // durable authority permits. The Runtime must retain control of
@@ -8753,9 +8846,33 @@ export class HostService {
     machineId: MachineId,
     provider: AgentProvider,
     failure: Error,
+    providerEvent?: { readonly type: string; readonly itemKind?: string },
   ): void {
+    try {
+      const diagnosticCanonical = classifyCanonicalFailure(
+        failure,
+        this.#timestamp(),
+        machineId === this.#machines.localMachineId()
+          ? 'runtime_error'
+          : 'execution_lost',
+      )
+      this.#diagnostics?.recordFailure({
+        event: 'runtime.failure',
+        provider,
+        machineKind:
+          machineId === this.#machines.localMachineId() ? 'local' : 'remote',
+        turnIds: this.#activeFailureTurns(machineId, provider).map(
+          ({ turnId }) => turnId,
+        ),
+        canonical: diagnosticCanonical,
+        error: failure,
+        ...(providerEvent === undefined ? {} : { providerEvent }),
+      })
+    } catch {
+      // Diagnostic writes cannot change runtime failure handling.
+    }
     if (machineId === this.#machines.localMachineId()) {
-      this.#handleRuntimeFailure(provider, failure)
+      this.#handleRuntimeFailure(provider, failure, providerEvent)
       return
     }
     const key = machineRuntimeKey(machineId, provider)

@@ -57,6 +57,10 @@ async function renderApp() {
   }
 
   conversationDrafts.pruneExpired()
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) conversationDrafts.flushPending()
+  })
+  window.addEventListener('pagehide', conversationDrafts.flushPending)
 
   const [
     { QueryClientProvider },

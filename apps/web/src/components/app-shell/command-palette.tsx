@@ -1,10 +1,4 @@
-import {
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type RefObject,
-} from 'react'
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import {
@@ -39,7 +33,7 @@ import {
 interface CommandPaletteProps {
   readonly open: boolean
   readonly onOpenChange: (open: boolean) => void
-  readonly returnFocusRef?: RefObject<HTMLElement | null>
+  readonly onRestoreFocus: () => void
   readonly onNewConversation?: () => void
   readonly onAddProject?: () => void
   readonly onAddDevice?: () => void
@@ -49,7 +43,7 @@ interface CommandPaletteProps {
 export function CommandPalette({
   open,
   onOpenChange,
-  returnFocusRef,
+  onRestoreFocus,
   onNewConversation,
   onAddProject,
   onAddDevice,
@@ -74,6 +68,12 @@ export function CommandPalette({
   )
   const [query, setQuery] = useState('')
   const [highlightedId, setHighlightedId] = useState<string>()
+  // The shell can close the palette before Radix finishes its focus transition.
+  // Reset the search in the closed render so even an immediate reopen starts fresh.
+  if (!open && (query !== '' || highlightedId !== undefined)) {
+    setQuery('')
+    setHighlightedId(undefined)
+  }
   const inputRef = useRef<HTMLInputElement>(null)
   const skipCloseFocusRestore = useRef(false)
   const callbacks: Partial<Record<PaletteActionId, () => void>> = {
@@ -93,13 +93,6 @@ export function CommandPalette({
     paletteActionEntries(currentTheme, available),
   )
 
-  function close(nextOpen: boolean) {
-    onOpenChange(nextOpen)
-    if (!nextOpen) {
-      setQuery('')
-      setHighlightedId(undefined)
-    }
-  }
   async function select(id: string) {
     const entry = groups
       .flatMap((group) => group.entries)
@@ -110,7 +103,7 @@ export function CommandPalette({
       target.kind === 'action' &&
       (target.action === 'theme-light' || target.action === 'theme-dark')
     )
-    close(false)
+    onOpenChange(false)
     if (target.kind === 'action') callbacks[target.action]?.()
     else if (target.kind === 'conversation')
       await navigate({
@@ -132,7 +125,7 @@ export function CommandPalette({
   }
 
   return (
-    <Dialog open={open} onOpenChange={close}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
         className="ct-command-palette overflow-hidden p-0"
@@ -141,14 +134,12 @@ export function CommandPalette({
           inputRef.current?.focus()
         }}
         onCloseAutoFocus={(event) => {
+          event.preventDefault()
           if (skipCloseFocusRestore.current) {
             skipCloseFocusRestore.current = false
-            event.preventDefault()
             return
           }
-          if (returnFocusRef?.current === undefined) return
-          event.preventDefault()
-          returnFocusRef.current?.focus()
+          onRestoreFocus()
         }}
       >
         <DialogTitle className="sr-only">搜索与操作</DialogTitle>

@@ -17,13 +17,16 @@ export function createConversationDraftStore(
   saveDelayMs = 500,
 ) {
   const memory = new Map<string, string>()
-  const pending = new Map<string, ReturnType<typeof setTimeout>>()
+  const pending = new Map<
+    string,
+    { timer: ReturnType<typeof setTimeout>; save: () => void }
+  >()
   const unsynced = new Set<string>()
   const key = (conversationId: string) => draftPrefix + conversationId
 
   const cancelPending = (conversationId: string) => {
-    const timer = pending.get(conversationId)
-    if (timer !== undefined) clearTimeout(timer)
+    const draft = pending.get(conversationId)
+    if (draft !== undefined) clearTimeout(draft.timer)
     pending.delete(conversationId)
   }
 
@@ -99,22 +102,26 @@ export function createConversationDraftStore(
       unsynced.add(conversationId)
       cancelPending(conversationId)
       const editedAt = Date.now()
-      pending.set(
-        conversationId,
-        setTimeout(() => {
-          pending.delete(conversationId)
-          if (memory.get(conversationId) !== value) return
-          try {
-            const storage = getStorage()
-            if (storage === undefined) return
-            storage.setItem(draftTimestampKey(conversationId), String(editedAt))
-            storage.setItem(key(conversationId), value)
-            unsynced.delete(conversationId)
-          } catch {
-            // Keep the in-memory draft when storage is disabled or full.
-          }
-        }, saveDelayMs),
-      )
+      const save = () => {
+        cancelPending(conversationId)
+        if (memory.get(conversationId) !== value) return
+        try {
+          const storage = getStorage()
+          if (storage === undefined) return
+          storage.setItem(draftTimestampKey(conversationId), String(editedAt))
+          storage.setItem(key(conversationId), value)
+          unsynced.delete(conversationId)
+        } catch {
+          // Keep the in-memory draft when storage is disabled or full.
+        }
+      }
+      pending.set(conversationId, {
+        timer: setTimeout(save, saveDelayMs),
+        save,
+      })
+    },
+    flushPending(): void {
+      for (const draft of pending.values()) draft.save()
     },
     clear,
   }

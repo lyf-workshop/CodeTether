@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 
 import { canonicalFailure } from '@codetether/agent-core'
@@ -10,6 +10,7 @@ import { HostSnapshotSchema } from '@codetether/protocol'
 import { MAX_CANONICAL_TURN_INPUT_BYTES } from '../dist/api/conversation-runtime-history.js'
 import { MAX_PENDING_APPROVALS } from '../dist/api/approval-registry.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
+import { HostRuntimeDiagnostics } from '../dist/api/host-runtime-diagnostics.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
 import { LOCAL_CODEX_CAPABILITIES } from '../dist/api/provider-registry.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
@@ -204,6 +205,9 @@ async function createFixture(t, options = {}) {
     publisher,
     workspacePolicy,
     hostVersion: '0.0.0-test',
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
     now: () => new Date(timestamp),
     ...(options.historyLimits === undefined
       ? {}
@@ -1526,6 +1530,57 @@ test('projects a fatal runtime failure into terminal safe Host state', async (t)
   assert.equal(unavailableError.httpStatus, 500)
   assert.equal(unavailableError.failure?.reason, 'runtime_error')
   assert.equal(fixture.runtime.conversationCalls.length, 1)
+})
+
+test('records only bounded event identity and failed Turn IDs for a Provider callback failure', async (t) => {
+  const directory = await mkdtemp(resolve(tmpdir(), 'codetether-runtime-log-'))
+  t.after(async () => await rm(directory, { recursive: true, force: true }))
+  const diagnostics = new HostRuntimeDiagnostics({
+    databasePath: join(directory, 'test.sqlite3'),
+    productVersion: '0.0.0',
+    hostVersion: '0.0.0-test',
+  })
+  const fixture = await createFixture(t, { diagnostics })
+  const created = await createConversation(fixture, 'act_log_create01')
+  const started = await startTurn(
+    fixture,
+    created.data.conversation.conversationId,
+    'act_log_start01',
+  )
+  const secret = 'fake-secret-runtime-diagnostic'
+  fixture.runtime.emitEvent({
+    provider: 'claude-code',
+    timestamp,
+    threadId: 'untrusted-thread',
+    turnId: 'untrusted-turn',
+    itemId: 'untrusted-item',
+    type: 'tool.started',
+    kind: 'shell',
+    name: secret,
+    command: `${fixture.workspace} ${secret}`,
+  })
+
+  const log = await readFile(
+    join(directory, 'logs', 'host-diagnostics.jsonl'),
+    'utf8',
+  )
+  const failure = log
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+    .find((entry) => entry.event === 'runtime.failure')
+  assert.ok(failure)
+  assert.equal(failure.provider, 'codex')
+  assert.equal(failure.machineKind, 'local')
+  assert.equal(failure.reason, 'runtime_error')
+  assert.deepEqual(failure.turnIds, [started.data.turn.turnId])
+  assert.deepEqual(failure.providerEvent, {
+    type: 'tool.started',
+    itemKind: 'shell',
+  })
+  assert.equal(log.includes(secret), false)
+  assert.equal(log.includes(fixture.workspace), false)
+  assert.equal(fixture.service.snapshot().activeTurns.length, 0)
 })
 
 test('close declines pending approvals, closes runtime once, and unsubscribes', async (t) => {

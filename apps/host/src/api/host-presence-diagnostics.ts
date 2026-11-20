@@ -1,15 +1,6 @@
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from 'node:fs'
 import { dirname, join } from 'node:path'
+
+import { BoundedLocalJsonl } from './bounded-local-jsonl.js'
 
 export type HostPresenceDiagnosticEvent =
   | 'PRESENCE_PUBLISHER_CREATED'
@@ -81,13 +72,7 @@ export interface HostPresenceDiagnosticSnapshot {
   readonly lastPublishSuccessAt: string | null
   readonly lastPublishFailureAt: string | null
   readonly lastPublishFailureCategory: HostPresenceErrorCategory | null
-  readonly lastHttpStatusClass:
-    | '2xx'
-    | '3xx'
-    | '4xx'
-    | '5xx'
-    | 'other'
-    | null
+  readonly lastHttpStatusClass: '2xx' | '3xx' | '4xx' | '5xx' | 'other' | null
   readonly nextScheduledAttemptAt: string | null
   readonly consecutiveFailures: number
   readonly totalAttempts: number
@@ -103,13 +88,14 @@ export interface HostPresenceDiagnosticSnapshot {
  * lifecycle evidence instead of silently stopping at one full file.
  */
 export class HostPresenceDiagnostics {
-  readonly #path: string | undefined
+  readonly #writer: BoundedLocalJsonl
 
   constructor(databasePath?: string) {
-    this.#path =
+    this.#writer = new BoundedLocalJsonl(
       databasePath === undefined
         ? undefined
-        : join(dirname(databasePath), 'logs', 'host-presence.jsonl')
+        : join(dirname(databasePath), 'logs', 'host-presence.jsonl'),
+    )
   }
 
   record(
@@ -128,80 +114,7 @@ export class HostPresenceDiagnostics {
     } catch {
       // Diagnostics must never become a Host runtime dependency.
     }
-    this.#append(line)
-  }
-
-  #append(line: string): void {
-    if (this.#path === undefined) return
-    let descriptor: number | undefined
-    try {
-      const directory = dirname(this.#path)
-      mkdirSync(directory, { recursive: true, mode: 0o700 })
-      const noFollow = constants.O_NOFOLLOW ?? 0
-      const bytes = Buffer.byteLength(line, 'utf8')
-      descriptor = openSync(
-        this.#path,
-        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollow,
-        0o600,
-      )
-      const stat = fstatSync(descriptor)
-      if (!stat.isFile() ||
-        (typeof process.getuid === 'function' && stat.uid !== process.getuid())) {
-        return
-      }
-      if (
-        stat.size + bytes > HOST_PRESENCE_DIAGNOSTIC_MAX_FILE_BYTES
-      ) {
-        closeSync(descriptor)
-        descriptor = undefined
-        this.#rotate()
-        descriptor = openSync(
-          this.#path,
-          constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | noFollow,
-          0o600,
-        )
-      }
-      fchmodSync(descriptor, 0o600)
-      writeSync(descriptor, line, undefined, 'utf8')
-    } catch {
-      // Missing/unwritable local diagnostics must not affect Host liveness.
-    } finally {
-      if (descriptor !== undefined) {
-        try {
-          closeSync(descriptor)
-        } catch {
-          // Nothing to recover; this is a best-effort diagnostic sink.
-        }
-      }
-    }
-  }
-
-  #rotate(): void {
-    const path = this.#path
-    if (path === undefined) return
-    try {
-      try {
-        unlinkSync(`${path}.${HOST_PRESENCE_DIAGNOSTIC_MAX_FILES}`)
-      } catch {
-        // The oldest generation may not exist yet.
-      }
-      for (
-        let index = HOST_PRESENCE_DIAGNOSTIC_MAX_FILES - 2;
-        index >= 1;
-        index--
-      ) {
-        const source = `${path}.${index}`
-        const target = `${path}.${index + 1}`
-        try {
-          renameSync(source, target)
-        } catch {
-          // Missing older generations are normal during initial rotation.
-        }
-      }
-      renameSync(path, `${path}.1`)
-    } catch {
-      // A failed rotation must never affect Host liveness.
-    }
+    this.#writer.append(line)
   }
 }
 

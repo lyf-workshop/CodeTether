@@ -442,6 +442,14 @@ They are not shown greyed out once a real control exists. Revised 2026-11-14 (AD
 - Use key `composer-draft-${conversationId}`.
 - Restore when switching conversations.
 
+**While a Turn runs** (changed 2026-11-19, the Owner; this replaces the prototype's busy and waiting panels, `prototype/conv.js:71`)
+- The Composer keeps the same size and rows when idle, while sending, while a Turn runs and while an Approval waits. Sending never adds, removes or resizes a row, so the timeline above does not move.
+- The input stays editable, so the next message can be written while the agent works. Sending stays blocked until the Turn ends. Nothing is queued; messages while running are W10, a later design.
+- While a Turn runs, the action bar's Send becomes Stop, in the same place and at the same size, when the Provider can be interrupted. Otherwise Send stays, disabled, with the reason as its tooltip.
+- The action bar's middle slot, which shows the character count when idle, shows the state: a small spinner and "Codex 正在工作" while running, "等你批准" while an Approval waits. The Approval dock keeps the decision itself.
+- The hint line under the Composer stays one line high; only its text changes.
+- Archived and unavailable conversations still show their explanation and action in place of the input. Those states never start from a send.
+
 ---
 
 ### 3.4 Timeline Restyling (I5)

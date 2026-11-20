@@ -1,4 +1,4 @@
-# Task: W0e Windows Fixes After alpha.4 (File Links, Status Check, Inspector, Title Bar, 待处理)
+# Task: W0e Windows Fixes After alpha.4 (Composer, Menus, File Links, Status Check, Inspector, Title Bar, 待处理)
 
 **Where it runs.** On Windows. The Owner develops only on Windows for now (AD-13).
 
@@ -15,12 +15,18 @@
 - In dark mode the window's title bar stays white.
 - 待处理 only grows, and items can be cleared only one at a time.
 
-alpha.5 ships these fixes with D2.5.
+The Owner then found two more on 2026-11-19, and they come first:
+
+- Sending a message changes the Composer: a panel appears under the input, the input locks, and the timeline jumps.
+- The model menu is as narrow as its button, so model names wrap over three lines and the check mark covers "Opus".
+
+The Owner also asked to fix existing problems before any new feature. **Do goals 6 and 7 first.** alpha.5 ships these fixes with D2.5.
 
 **References** (read with `git show origin/ux/design:<path>`):
 
-- `docs/reviews/2026-11-19-alpha4-hands-on-ui-review.md`, findings 2–6, with screenshots in `D:/Projects/Software/agenthub-archive/ui-review-2026-11-19/`
-- `docs/reviews/2026-11-17-windows-completion-scope.md`, rows W0-20 to W0-24
+- `docs/reviews/2026-11-19-alpha4-hands-on-ui-review.md`, findings 2–6, 12, 14 and 15, with screenshots in `D:/Projects/Software/agenthub-archive/ui-review-2026-11-19/`. The Owner's are `owner-composer-running.png`, `owner-codex-model-menu.png` and `owner-claude-model-menu.png`.
+- `docs/ux-redesign/10-desktop-improvements.md` §3.3, "While a Turn runs": the Composer design for goal 6, changed on 2026-11-19
+- `docs/reviews/2026-11-17-windows-completion-scope.md`, rows W0-20 to W0-26
 - `docs/reviews/w0-small-fixes.md`: W0d's offline group, which goal 2 reuses
 - `docs/PRODUCT.md`: Phase 4D (user copy avoids implementation terms), and the Inbox (Attention) rules
 - `docs/FROZEN-BOUNDARIES.md`: the native-feature boundaries (Phase 4B, 4C, 4G.1, 4G.2)
@@ -108,7 +114,52 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - a partial failure leaves the failed items and reports their count
      - archiving hides a conversation's items, and restoring shows them again
      - the badge count matches the list
-6. **Quality gate:**
+6. **The Composer stays still when a message is sent** (W0-26; the Owner, 2026-11-19). This follows the new design in 10 §3.3, "While a Turn runs", which replaces the prototype's busy and waiting panels.
+   - **Today:**
+     - Sending adds a panel under the input: "Codex 正在工作", "这一轮完成后可以发送下一条消息" and "停止", at least 64 px high.
+     - The input becomes read-only, "发送" turns grey, and the hint line below changes its text.
+     - The Composer grows, and the timeline above it jumps (`owner-composer-running.png`).
+     - "剩余上下文" shows with no value, although 10 §3.3 says the label is absent until a value is known (hands-on finding 12).
+   - **Change,** as 10 §3.3 describes:
+     - **Same size, same rows.** The Composer keeps its size and rows through idle, sending, running and waiting for an Approval. Nothing is added, removed or resized.
+     - **The input stays editable while a Turn runs,** so the user can write the next message. The draft is kept as today. Sending stays blocked until the Turn ends, and nothing is queued.
+     - **"停止" in place of "发送".** While a Turn runs and the AI tool can be interrupted, "发送" becomes "停止" in the same place and at the same size. Otherwise "发送" stays, disabled, with the reason as its tooltip.
+     - **The state shows in the action bar,** in the slot that shows "字数" when idle:
+       - a small spinner and "Codex 正在工作" while a Turn runs
+       - "等你批准" while an Approval waits; the Approval dock keeps the decision
+     - **The hint line** under the Composer stays one line high; only its text changes.
+     - **"剩余上下文"** is not shown until a value is known.
+     - **Archived and unavailable conversations** keep their explanation and action in place of the input. Those states never start from a send.
+   - **Tests:**
+     - the same rows render in idle, running and waiting
+     - the input accepts text while a Turn runs, and sending stays blocked
+     - "停止" appears only when the AI tool can be interrupted
+     - Claude Code shows a disabled "发送" with its reason
+     - no "剩余上下文" without a value
+   - **Real check (Must):**
+     - In a development build at 1440 and 1100 px, measure the Composer's bounding box with the same draft text:
+       - before sending
+       - while running
+       - while waiting for an Approval
+       - after the Turn ends
+     - Its height may not change by more than 1 px.
+     - Record the scroll position of the timeline's last message at the moment of sending, to show it does not jump.
+7. **Menus fit their content** (W0-25; the Owner, 2026-11-19).
+   - **Today:**
+     - The shared `SelectContent` sets its width to its trigger's width. The model menu's trigger is a short "GPT-6-Sol".
+     - So the Codex list wraps every name over three lines ("GPT- / 6.1 / Terra"), and in the Claude list the check mark covers "Opus" (`owner-codex-model-menu.png`, `owner-claude-model-menu.png`).
+     - The New Conversation dialog caps its own menu at the trigger's width.
+   - **Change:**
+     - **Width.** A menu is at least as wide as its trigger, and as wide as its longest item allows within the window.
+     - **Labels.** Item labels never wrap inside a word. A label too long for the window ends with an ellipsis and shows in full as its tooltip.
+     - **The check mark** never overlaps a label.
+     - **Fix it once, in the primitive,** and remove page-level overrides that fight it. AGENTS.md: correct the primitive, not each page.
+     - **Check every menu:**
+       - every `Select`: the Composer's model and reasoning, New Conversation, Add Project, and the project's conversation list
+       - every other menu-like primitive (dropdown menus, popovers, the command palette) against the same three rules
+   - **Tests:** the primitive's width rule with a short trigger and long items, and with a wide trigger and short items.
+   - **Real check (Must):** a screenshot of every menu open, at 1440, 1100 and 800 px, in light and dark mode.
+8. **Quality gate:**
    - `pnpm typecheck`, `pnpm lint`, `pnpm build` and `pnpm test`
    - `cargo test` in `apps/desktop/src-tauri`
    - `cargo test` in `packages/supervisor-mobile` if anything the phone reads changes. Nothing should; say so if it did.
@@ -116,7 +167,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
 
 **Should:**
 
-7. **Real checks** with an isolated development build on this computer, with screenshots in light and dark mode at 1440 and 1100 px:
+9. **Real checks** with an isolated development build on this computer, with screenshots in light and dark mode at 1440 and 1100 px:
    - **Goal 1:** a scratch conversation in a copy of the W0 scratch project, asking Codex to list the project's files and name them as links.
    - **Goals 2 and 5:**
      - Use a copy of the pre-update database backup, made with SQLite's online backup API, the way the model-catalog fix did (`D:/Projects/Software/agenthub-archive/fix-restored-conversation-model-catalog-report.md`). Copy no credentials.
@@ -154,6 +205,17 @@ Line numbers are at `13fa6b8`.
   - `apps/web/src/runtime/host/attention-actions.ts` owns one idempotent action ID per acknowledgement.
   - The Host lists open Attention in `listAttention` (`host-service.ts:3609`).
   - The Android app reads Attention through the Supervisor projection (`apps/android/.../remote/RemoteProjection.kt`). Check whether it reads the same list.
+- **Goals 6 and 7:**
+  - `apps/web/src/components/conversation/composer.tsx`:
+    - The gate is computed at line 117, and `canEdit` (line 126) is false whenever a gate exists, which locks the input while a Turn runs.
+    - The model and reasoning menus are at lines 372–457.
+    - The panel is appended inside the form at lines 548–600, with `min-h-16`.
+    - The hint line is at lines 602–618.
+  - The gate texts are in `conversation-gate-presentation.ts:205–230`.
+  - The prototype's busy panel is in `docs/ux-redesign/prototype/conv.js:71`. 10 §3.3 now supersedes it.
+  - The width rule is `w-[var(--radix-select-trigger-width)] min-w-[var(--radix-select-trigger-width)]` in `packages/ui/src/components/select.tsx:79`, and items reserve `pr-8` for the check at line 117.
+  - The New Conversation cap is `max-w-[var(--radix-select-trigger-width)]` in `apps/web/src/components/conversations/new-conversation-fields.tsx:127`.
+  - Messages while a Turn runs (W10, group C) are a separate, later design. This task only keeps the input editable and blocked from sending.
 - **The W0 scratch project** `ta-budget-app` is at `E:/Projects/Software/agenthub/w0-audit/fixtures/windows-desktop-audit-scratch-projects-for-timing-and-path-display/ta-budget-app`. Work in a copy.
 - **The scope rule for native features.** This prompt authorizes exactly one native addition: setting the window theme. It does not authorize opening files or folders, revealing in Explorer, or any other window or filesystem permission.
 
@@ -185,6 +247,8 @@ Push `fix/w0e-after-alpha4` to `origin`.
 
 Write to `D:/Projects/Software/agenthub-archive/w0e-windows-fixes-report.md`:
 
+- **Composer:** the measurements of goal 6 in a table, with screenshots of each state, and the tests.
+- **Menus:** every menu you checked, with its screenshots before and after, and the tests.
 - **File links:** the rule for each destination form, its tests, and a screenshot of a real Codex answer.
 - **关于与检查:**
   - the Host change and its tests

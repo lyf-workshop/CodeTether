@@ -5,6 +5,7 @@ import * as query from '@tanstack/react-query'
 import { CodeTetherResponseError } from '@codetether/client'
 import { createDom, h } from './fixtures/dom.mjs'
 import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
+import { invalidateMachineQueries } from '../.tmp/test-dist/runtime/host/machine-query.js'
 
 const { conversationModelFallbackNotices } = loadWebComponent(
   'components/conversation/conversation-model-fallback-notices.ts',
@@ -39,6 +40,7 @@ const descriptor = {
 async function dialogFixture({
   projects = [project],
   providers = [descriptor],
+  getMachine,
   create,
 } = {}) {
   const dom = await createDom()
@@ -58,7 +60,7 @@ async function dialogFixture({
   const runtime = {
     listProjects: async () => ({ projects }),
     listMachines: async () => ({ machines: [machine] }),
-    getMachine: async () => ({ machine, providers }),
+    getMachine: getMachine ?? (async () => ({ machine, providers })),
     createConversation: async (...args) => {
       calls.push(args)
       return await create?.(...args)
@@ -120,6 +122,7 @@ async function dialogFixture({
     ...dom,
     calls,
     navigations,
+    queryClient,
     submit,
     async close() {
       await dom.close()
@@ -127,6 +130,42 @@ async function dialogFixture({
     },
   }
 }
+
+test('open dialog updates unavailable Codex after a Machine discovery event', async () => {
+  let ready = false
+  let machineReads = 0
+  const fixture = await dialogFixture({
+    getMachine: async () => {
+      machineReads += 1
+      return {
+        machine,
+        providers: [
+          ready ? descriptor : { ...descriptor, availability: 'unavailable' },
+        ],
+      }
+    },
+  })
+  try {
+    const codexRadio = () =>
+      fixture.container.querySelector('input[value="codex"]')
+    const codexLabel = () => codexRadio()?.closest('label')
+    await fixture.until(() => codexLabel()?.textContent.includes('暂时不可用'))
+    const dialog = fixture.container.querySelector('[role="dialog"]')
+    assert.equal(codexRadio().disabled, true)
+    assert.equal(fixture.submit().disabled, true)
+    assert.equal(machineReads, 1)
+
+    ready = true
+    await fixture.perform(() => invalidateMachineQueries(fixture.queryClient))
+    await fixture.until(() => fixture.submit().disabled === false)
+    assert.equal(fixture.container.querySelector('[role="dialog"]'), dialog)
+    assert.equal(codexRadio().disabled, false)
+    assert.equal(machineReads, 2)
+    assert.doesNotMatch(codexLabel().textContent, /暂时不可用/u)
+  } finally {
+    await fixture.close()
+  }
+})
 
 test('real dialog double-submit dispatches one exact empty conversation without model or initial message', async () => {
   let complete

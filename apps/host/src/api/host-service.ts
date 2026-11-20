@@ -8130,6 +8130,14 @@ export class HostService {
       if (replacement.available !== false) {
         this.#subscribeRuntime(replacement, machineId)
       }
+      // Startup discovery runs after the Host begins serving reads. Notify
+      // open Machine views when its committed Provider truth changes.
+      this.#publish({
+        conversationId: null,
+        timestamp: this.#timestamp(),
+        type: 'machine.updated',
+        payload: { machine: this.#machines.get(machineId) },
+      })
     }
     const refresh = handoffOwned
       ? performRefresh()

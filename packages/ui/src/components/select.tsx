@@ -17,8 +17,19 @@ function itemLabel(children: React.ReactNode): string {
   return ''
 }
 
-function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />
+function Select({
+  onValueChange,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  return (
+    <SelectPrimitive.Root
+      data-slot="select"
+      {...props}
+      onValueChange={(value) => {
+        if (value !== '') onValueChange?.(value)
+      }}
+    />
+  )
 }
 
 function SelectGroup(

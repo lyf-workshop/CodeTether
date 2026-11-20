@@ -1531,6 +1531,54 @@ test('a rejected Codex model leaves the installation ready to run another model'
   )
 })
 
+test('startup Provider discovery publishes Machine truth after its committed refresh', async (t) => {
+  const discoveryGate = deferred()
+  const replacement = new TrackingRuntime(installationAId, revisionA1)
+  let fixture
+  fixture = await createFixture(t, {
+    selectedUnavailable: true,
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      await discoveryGate.promise
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, { timestamp: changedAt }),
+      }
+    },
+  })
+  const events = []
+  const unsubscribe = fixture.service.publisher.subscribe((event) => {
+    events.push(event)
+  })
+  t.after(unsubscribe)
+
+  const discovery = fixture.service.discoverLocalProvidersOnStartup()
+  const before = await fixture.service.getMachine(fixture.machineId)
+  assert.equal(
+    selectedInstallation(before.providerLifecycles[0]).availability,
+    'unavailable',
+  )
+  assert.equal(events.length, 0)
+
+  discoveryGate.resolve()
+  await discovery
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['machine.updated'],
+  )
+  assert.equal(events[0].payload.machine.machineId, fixture.machineId)
+  const after = await fixture.service.getMachine(fixture.machineId)
+  assert.equal(
+    selectedInstallation(after.providerLifecycles[0]).availability,
+    'available',
+  )
+  assert.equal(
+    after.providers.find((provider) => provider.provider === 'codex')
+      .availability,
+    'available',
+  )
+})
+
 test('Host refresh presents an unchanged unchecked backend as last-known without changing runtime compatibility', async (t) => {
   let fixture
   fixture = await createFixture(t, {

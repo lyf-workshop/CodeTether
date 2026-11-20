@@ -50,6 +50,10 @@ import {
 } from './conversation-gate-presentation'
 import { conversationDrafts } from './conversation-drafts'
 import {
+  conversationModelFallbackNotices,
+  type ConversationModelFallbackNotice,
+} from './conversation-model-fallback-notices'
+import {
   COMPOSER_SEND_SHORTCUT_EVENT,
   COMPOSER_SEND_SHORTCUT_KEY,
   readComposerSendShortcut,
@@ -107,12 +111,11 @@ export function Composer({
   )
   const [acceptedActionId, setAcceptedActionId] = useState<string>()
   const [sendShortcut, setSendShortcut] = useState(readComposerSendShortcut)
-  // Clearing a submitted multiline draft must not move the timeline above it.
-  // The next user edit restores the textarea's normal content sizing.
-  const [heldEditorHeight, setHeldEditorHeight] = useState<{
+  const [modelFallback, setModelFallback] = useState<{
     conversationId: string
-    height: number
+    notice: ConversationModelFallbackNotice
   }>()
+  const fallbackHandledConversationIdRef = useRef<string | undefined>(undefined)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const restoreFocusRef = useRef(false)
   const compositionActive = useRef(false)
@@ -142,12 +145,6 @@ export function Composer({
   const editorValue =
     controlState === 'submitting' && optimisticSend?.text === value ? '' : value
   const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
-  const canSend =
-    canEdit &&
-    gate === undefined &&
-    modelSwitchController?.pending !== true &&
-    value.trim().length > 0 &&
-    !(optimisticSend?.state === 'uncertain' && optimisticSend.text === value)
   const feedback =
     controller.error ??
     modelSwitchController?.error ??
@@ -174,13 +171,31 @@ export function Composer({
     }
   }, [modelControlRequest])
   const catalog = modelSwitchController?.catalog
+  const currentModel = modelSettings?.currentModel ?? model
   const modelMissing =
     catalog?.availableModels !== undefined &&
-    modelSettings?.currentModel !== undefined &&
-    !catalog.availableModels.some(
-      (item) => item.id === modelSettings.currentModel,
+    currentModel !== undefined &&
+    !catalog.availableModels.some((item) => item.id === currentModel)
+  const canSend =
+    canEdit &&
+    gate === undefined &&
+    !modelMissing &&
+    modelSwitchController?.pending !== true &&
+    value.trim().length > 0 &&
+    !(optimisticSend?.state === 'uncertain' && optimisticSend.text === value)
+  useEffect(() => {
+    if (fallbackHandledConversationIdRef.current === conversationId) return
+    fallbackHandledConversationIdRef.current = conversationId
+    const notice = conversationModelFallbackNotices.take(conversationId)
+    setModelFallback(
+      notice === undefined ? undefined : { conversationId, notice },
     )
-  const currentModel = modelSettings?.currentModel ?? model
+  }, [conversationId])
+  const visibleModelFallback =
+    modelFallback?.conversationId === conversationId &&
+    modelFallback.notice.selectedModel === currentModel
+      ? modelFallback.notice
+      : undefined
   const modelName =
     availableModels.find((model) => model.id === currentModel)?.name ??
     currentModel ??
@@ -207,11 +222,13 @@ export function Composer({
     gate?.description ??
     (controlState === 'submitting'
       ? '正在发送消息'
-      : modelSwitchController?.pending
-        ? '正在更新模型设置'
-        : value.trim().length === 0
-          ? '输入消息后即可发送'
-          : undefined)
+      : modelMissing
+        ? '请先从模型菜单选择可用模型，再发送消息'
+        : modelSwitchController?.pending
+          ? '正在更新模型设置'
+          : value.trim().length === 0
+            ? '输入消息后即可发送'
+            : undefined)
 
   useEffect(() => {
     const syncShortcut = () => setSendShortcut(readComposerSendShortcut())
@@ -294,6 +311,7 @@ export function Composer({
         ? !canSend
         : retry === undefined ||
           !canEdit ||
+          modelMissing ||
           modelSwitchController?.pending === true
     )
       return
@@ -301,10 +319,6 @@ export function Composer({
     if (retry !== undefined && value === '') {
       conversationDrafts.write(conversationId, submittedValue)
       setValue(submittedValue)
-    }
-    const editorHeight = editorRef.current?.getBoundingClientRect().height
-    if (editorHeight !== undefined) {
-      setHeldEditorHeight({ conversationId, height: editorHeight })
     }
     restoreFocusRef.current = document.activeElement === editorRef.current
     submitActive.current = true
@@ -320,7 +334,6 @@ export function Composer({
           draftAfterSubmit(current, submittedValue, accepted),
         )
       }
-      if (!accepted) setHeldEditorHeight(undefined)
     } finally {
       submitActive.current = false
       restoreSubmitFocus()
@@ -333,7 +346,6 @@ export function Composer({
     if (event.key === 'Escape' && value !== '') {
       event.preventDefault()
       conversationDrafts.clear(conversationId)
-      setHeldEditorHeight(undefined)
       setValue('')
       return
     }
@@ -346,7 +358,6 @@ export function Composer({
     ) {
       event.preventDefault()
       conversationDrafts.write(conversationId, previousUserInput)
-      setHeldEditorHeight(undefined)
       setValue(previousUserInput)
       return
     }
@@ -403,9 +414,10 @@ export function Composer({
                   setModelOpen(open)
                   if (open) void modelSwitchController.refreshModels()
                 }}
-                onValueChange={(model) =>
+                onValueChange={(model) => {
+                  setModelFallback(undefined)
                   void modelSwitchController.update({ model })
-                }
+                }}
                 disabled={!modelCanChange}
               >
                 <SelectTrigger
@@ -478,9 +490,20 @@ export function Composer({
             )}
           </div>
         )}
+        {visibleModelFallback ? (
+          <p
+            role="status"
+            data-model-fallback-notice
+            className="break-words px-4 py-2 text-xs text-text-secondary"
+          >
+            Codex 配置的默认模型 {visibleModelFallback.configuredModel}
+            当前不在模型列表中，CodeTether 已选择可用模型{' '}
+            {visibleModelFallback.selectedModel}。可在上方菜单切换模型。
+          </p>
+        ) : null}
         {modelMissing ? (
           <p role="status" className="px-4 py-2 text-xs text-warning-text">
-            {currentModel} 不在此账号的可用模型中
+            {currentModel} 不在此账号的可用模型中。请先从模型菜单选择可用模型。
           </p>
         ) : null}
         {/* Only archived and unavailable gates replace the visible input. */}
@@ -496,7 +519,6 @@ export function Composer({
               if (!canEdit) return
               const next = event.currentTarget.value
               conversationDrafts.write(conversationId, next)
-              setHeldEditorHeight(undefined)
               setValue(next)
             }}
             onKeyDown={handleKeyDown}
@@ -507,11 +529,6 @@ export function Composer({
               compositionActive.current = false
             }}
             rows={2}
-            style={
-              heldEditorHeight?.conversationId === conversationId
-                ? { minHeight: heldEditorHeight.height }
-                : undefined
-            }
             readOnly={!canEdit}
             aria-disabled={!canEdit || undefined}
             aria-describedby={statusId}
@@ -639,7 +656,9 @@ export function Composer({
                 {gate.description}
               </p>
             </div>
-            {gate.canInterrupt && interruptController !== undefined ? (
+            {gate.kind === 'unavailable' &&
+            gate.canInterrupt &&
+            interruptController !== undefined ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -677,7 +696,7 @@ export function Composer({
             ? `这一轮结束后：${keyboardHint}`
             : gate?.kind === 'waiting'
               ? `批准后：${keyboardHint}`
-              : canEdit
+              : canEdit || controlState === 'submitting'
                 ? keyboardHint
                 : '草稿会保留，CodeTether 不会自动重发消息。')}
       </p>

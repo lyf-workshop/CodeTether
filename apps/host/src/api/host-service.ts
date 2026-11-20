@@ -3323,6 +3323,8 @@ export class HostService {
             'invalid_request',
             'The selected model is unavailable for this Agent',
             400,
+            undefined,
+            canonicalFailure('provider_model_unavailable', this.#timestamp()),
           )
         }
         const targetModel =
@@ -4043,6 +4045,35 @@ export class HostService {
                     machine.machineId,
                     request.provider,
                   )
+                  if (
+                    machine.kind === 'local' &&
+                    request.provider === 'codex'
+                  ) {
+                    const returnedModel = provider.model
+                    const listedModels = this.#providerDescriptorForMachine(
+                      machine.machineId,
+                      request.provider,
+                    )?.models
+                    if (
+                      (provider.modelFallback !== undefined &&
+                        provider.modelFallback.selectedModel !==
+                          returnedModel) ||
+                      (returnedModel !== undefined &&
+                        listedModels !== undefined &&
+                        !listedModels.some(({ id }) => id === returnedModel))
+                    ) {
+                      throw new HostServiceError(
+                        'invalid_request',
+                        'The selected model is unavailable for this Agent',
+                        400,
+                        undefined,
+                        canonicalFailure(
+                          'provider_model_unavailable',
+                          this.#timestamp(),
+                        ),
+                      )
+                    }
+                  }
 
                   const sessionKey = providerSessionKey(
                     machine.machineId,
@@ -4146,7 +4177,12 @@ export class HostService {
                     protocolVersion,
                     actionId: request.actionId,
                     status: 'completed',
-                    data: { conversation: record },
+                    data: {
+                      conversation: record,
+                      ...(provider.modelFallback === undefined
+                        ? {}
+                        : { modelFallback: provider.modelFallback }),
+                    },
                   }
                 } catch (error) {
                   return await this.#rollbackAcquiredProviderConversation(
@@ -10384,16 +10420,24 @@ function assertProviderConfiguration(
   model: string | undefined,
   reasoning: string | undefined,
 ): void {
+  if (model !== undefined && descriptor?.capabilities.modelSelection !== true) {
+    throw new HostServiceError(
+      'invalid_request',
+      'The selected model is unavailable for this Agent',
+      400,
+    )
+  }
   if (
     model !== undefined &&
-    (descriptor?.capabilities.modelSelection !== true ||
-      (descriptor.models !== undefined &&
-        !descriptor.models.some((option) => option.id === model)))
+    descriptor?.models !== undefined &&
+    !descriptor.models.some((option) => option.id === model)
   ) {
     throw new HostServiceError(
       'invalid_request',
       'The selected model is unavailable for this Agent',
       400,
+      undefined,
+      canonicalFailure('provider_model_unavailable', new Date().toISOString()),
     )
   }
   if (

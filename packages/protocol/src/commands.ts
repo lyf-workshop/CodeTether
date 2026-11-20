@@ -601,7 +601,16 @@ export type ResolveAttentionRequest = z.infer<
 >
 
 export const CreateConversationDataSchema = z
-  .object({ conversation: ConversationRecordSchema })
+  .object({
+    conversation: ConversationRecordSchema,
+    modelFallback: z
+      .object({
+        configuredModel: z.string().trim().min(1).max(240),
+        selectedModel: z.string().trim().min(1).max(240),
+      })
+      .strict()
+      .optional(),
+  })
   .strict()
 export type CreateConversationData = z.infer<
   typeof CreateConversationDataSchema

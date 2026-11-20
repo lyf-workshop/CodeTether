@@ -122,11 +122,23 @@ function SelectItem({
   className,
   textValue,
   title,
+  onFocus,
+  onPointerEnter,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Item>) {
   const label = textValue ?? itemLabel(children)
   const itemTitle =
     title === undefined || title === label ? label : `${label} · ${title}`
+  const [labelClipped, setLabelClipped] = React.useState(false)
+  const hasAdditionalDetail = title !== undefined && title !== label
+
+  const measureLabel = (element: HTMLElement): void => {
+    const text = element.querySelector<HTMLElement>(
+      '[data-slot="select-item-text"]',
+    )
+    setLabelClipped(text !== null && text.scrollWidth > text.clientWidth + 1)
+  }
+
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
@@ -138,10 +150,22 @@ function SelectItem({
         className,
       )}
       textValue={textValue}
-      title={itemTitle || undefined}
+      title={
+        hasAdditionalDetail || labelClipped ? itemTitle || undefined : undefined
+      }
+      onFocus={(event) => {
+        measureLabel(event.currentTarget)
+        onFocus?.(event)
+      }}
+      onPointerEnter={(event) => {
+        measureLabel(event.currentTarget)
+        onPointerEnter?.(event)
+      }}
       {...props}
     >
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemText data-slot="select-item-text">
+        {children}
+      </SelectPrimitive.ItemText>
       <span className="absolute right-2 flex size-4 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
           <Check aria-hidden="true" className="size-4 text-primary" />

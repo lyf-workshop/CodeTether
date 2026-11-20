@@ -2504,6 +2504,44 @@ test('onboarding and Doctor HTTP routes are durable, strict, and metadata-only',
   }
 })
 
+test('Host HTTP returns a structured model-unavailable envelope', async () => {
+  const runtime = new FakeAgentRuntime()
+  runtime.descriptor = {
+    provider: 'codex',
+    displayName: 'Codex',
+    availability: 'available',
+    capabilities: LOCAL_CODEX_CAPABILITIES,
+    models: [{ id: 'gpt-listed', label: 'Listed', isDefault: true }],
+  }
+  const harness = await createHarness({ persistence: true, runtime })
+  try {
+    const project = (await getJson(harness.baseUrl, '/api/v1/projects')).body
+      .projects[0]
+    const unavailable = await postJson(
+      harness.baseUrl,
+      '/api/v1/conversations',
+      {
+        actionId: 'act_http_model_unlisted',
+        provider: 'codex',
+        projectId: project.projectId,
+        machineId: harness.machineId,
+        model: 'gpt-unlisted',
+      },
+    )
+    assert.equal(unavailable.status, 400)
+    assert.equal(unavailable.body.code, 'invalid_request')
+    assert.equal(unavailable.body.failure?.reason, 'provider_model_unavailable')
+    assert.deepEqual(
+      SafeErrorEnvelopeSchema.parse(unavailable.body),
+      unavailable.body,
+    )
+    assert.equal(runtime.startConversationCalls.length, 0)
+    assert.deepEqual(harness.persistence.listConversations(), [])
+  } finally {
+    await harness.close()
+  }
+})
+
 test('local model PATCH validates catalog and changes only the next Turn', async () => {
   const runtime = new FakeAgentRuntime()
   const catalog = [

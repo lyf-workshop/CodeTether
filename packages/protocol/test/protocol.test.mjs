@@ -2237,6 +2237,20 @@ test('separates mutation success and safe HTTP error envelopes', () => {
     data: { conversation },
   }
   assert.deepEqual(CreateConversationResponseSchema.parse(success), success)
+  const withFallback = {
+    ...success,
+    data: {
+      conversation,
+      modelFallback: {
+        configuredModel: 'gpt-unlisted',
+        selectedModel: 'gpt-listed',
+      },
+    },
+  }
+  assert.deepEqual(
+    CreateConversationResponseSchema.parse(withFallback),
+    withFallback,
+  )
   assert.equal(
     CreateConversationResponseSchema.safeParse({
       protocolVersion,

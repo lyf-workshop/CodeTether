@@ -46,6 +46,7 @@ import {
   commandPaletteCacheSubscription,
   readCommandPaletteCache,
 } from '../app-shell/command-palette-cache'
+import { conversationModelFallbackNotices } from '../conversation/conversation-model-fallback-notices'
 import {
   effectiveProviderReasoning,
   providerDefaultReasoningSelection,
@@ -222,6 +223,12 @@ export function NewConversationDialog({
         await queryClient.invalidateQueries({
           queryKey: conversationListQueryKeys.projectScope(projectId),
         })
+      if (response.data.modelFallback !== undefined) {
+        conversationModelFallbackNotices.queue(
+          response.data.conversation.conversationId,
+          response.data.modelFallback,
+        )
+      }
       skipCloseFocusRestore.current = true
       await navigate({
         to: '/c/$conversationId',

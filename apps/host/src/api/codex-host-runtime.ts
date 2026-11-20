@@ -119,7 +119,11 @@ export class CodexHostRuntime implements AgentHostRuntime {
         : UNAVAILABLE_PROVIDER_CAPABILITIES,
       ...(available && models !== undefined
         ? {
-            models: models.map(({ id, name }) => ({ id, label: name })),
+            models: models.map(({ id, name, isDefault }) => ({
+              id,
+              label: name,
+              ...(isDefault === true ? { isDefault: true } : {}),
+            })),
             availableModels: models.map(({ id, name, description }) => ({
               id,
               name,
@@ -252,12 +256,31 @@ export class CodexHostRuntime implements AgentHostRuntime {
     readonly reasoning?: string
   }): Promise<ProviderConversationResult> {
     const client = await this.#readyClient()
+    let selectedModel = options.model
+    let modelFallback: ProviderConversationResult['modelFallback']
+    if (selectedModel === undefined) {
+      const models = await client.listAvailableModels()
+      this.#availableModels = models
+      const configuredModel = await client.readConfiguredModel()
+      if (
+        configuredModel !== undefined &&
+        models.length > 0 &&
+        !models.some(({ id }) => id === configuredModel)
+      ) {
+        selectedModel =
+          models.find(({ isDefault }) => isDefault === true)?.id ??
+          models[0]?.id
+        if (selectedModel !== undefined) {
+          modelFallback = { configuredModel, selectedModel }
+        }
+      }
+    }
     const result = await client.startThread({
       cwd: options.cwd,
       ephemeral: this.#ephemeralThreads,
       approvalPolicy: 'on-request',
       sandbox: 'workspace-write',
-      ...(options.model === undefined ? {} : { model: options.model }),
+      ...(selectedModel === undefined ? {} : { model: selectedModel }),
     })
     if (!this.#ephemeralThreads) {
       const stored = await client.readStoredThread({
@@ -280,6 +303,7 @@ export class CodexHostRuntime implements AgentHostRuntime {
     return {
       providerThreadId: result.thread.id,
       model: result.model,
+      ...(modelFallback === undefined ? {} : { modelFallback }),
     }
   }
 

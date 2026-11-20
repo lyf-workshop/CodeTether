@@ -37,11 +37,15 @@ async function fixture(t, initial = {}) {
   })
   dom.window.HTMLElement.prototype.scrollIntoView = () => {}
   const requests = []
+  const modelUpdates = []
   const runtime = {
     refreshConversationModels(conversationId) {
       const request = { conversationId, ...Promise.withResolvers() }
       requests.push(request)
       return request.promise
+    },
+    async updateConversationModel(conversationId, selection) {
+      modelUpdates.push({ conversationId, selection })
     },
   }
   let connectionState = 'connected'
@@ -69,6 +73,7 @@ async function fixture(t, initial = {}) {
         provider: 'codex',
         archivedAt,
         turns: [],
+        messages: [],
         pendingApprovals: [],
         currentTurn:
           turnStatus === undefined ? undefined : { status: turnStatus },
@@ -107,6 +112,8 @@ async function fixture(t, initial = {}) {
   return {
     ...dom,
     requests,
+    modelUpdates,
+    client,
     render,
     controls: () => controls,
     setConnection: (state) => {
@@ -131,6 +138,35 @@ async function fixture(t, initial = {}) {
     },
   }
 }
+
+test('changing the model clears a previous failed send error', async (t) => {
+  const view = await fixture(t)
+  await view.perform(() =>
+    view.client.setQueryData(['host', 'optimistic-send', 'conv_refresh_a'], {
+      state: 'failed',
+      actionId: 'action_failed',
+      text: 'Earlier message',
+      timestamp: '2026-11-20T12:00:00.000Z',
+      previousTurnIds: new Set(),
+      message: '所选模型不可用',
+      canRetry: false,
+    }),
+  )
+  await view.until(() => view.controls().composer.error === '所选模型不可用')
+  assert.equal(view.controls().composer.error, '所选模型不可用')
+  await view.perform(() =>
+    view.controls().modelSwitch.update({ model: 'available-model' }),
+  )
+  assert.deepEqual(view.modelUpdates, [
+    {
+      conversationId: 'conv_refresh_a',
+      selection: { model: 'available-model' },
+    },
+  ])
+  await view.until(() => view.controls().composer.error === undefined)
+  assert.equal(view.controls().composer.error, undefined)
+  assert.equal(view.controls().composer.optimisticSend, undefined)
+})
 
 test('local opening refreshes once and Turn completion or reconnection never repeats it', async (t) => {
   const view = await fixture(t)

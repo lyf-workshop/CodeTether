@@ -6,6 +6,10 @@ import { CodeTetherResponseError } from '@codetether/client'
 import { createDom, h } from './fixtures/dom.mjs'
 import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
 
+const { conversationModelFallbackNotices } = loadWebComponent(
+  'components/conversation/conversation-model-fallback-notices.ts',
+)
+
 const machineId = 'machine_dom01',
   projectId = 'proj_dom01'
 const machine = {
@@ -61,6 +65,10 @@ async function dialogFixture({
     },
   }
   const dependencies = new Map([
+    [
+      '../conversation/conversation-model-fallback-notices',
+      { conversationModelFallbackNotices },
+    ],
     ['@tanstack/react-query', query],
     [
       '../../runtime/host/host-runtime-hooks',
@@ -150,6 +158,45 @@ test('real dialog double-submit dispatches one exact empty conversation without 
     )
     await fixture.until(() => fixture.navigations.length === 1)
     assert.deepEqual(fixture.navigations[0].search, { focus: 'composer' })
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('creation hands a fallback explanation to the new conversation once', async () => {
+  const fixture = await dialogFixture({
+    create: async () => ({
+      data: {
+        conversation: { conversationId: 'conv_fallback01', projectId },
+        modelFallback: {
+          configuredModel: 'gpt-6.2-astra',
+          selectedModel: 'gpt-6.1-terra',
+        },
+      },
+    }),
+  })
+  try {
+    await fixture.until(() => fixture.submit()?.disabled === false)
+    await fixture.perform(() =>
+      fixture
+        .submit()
+        .closest('form')
+        .dispatchEvent(
+          new fixture.window.Event('submit', {
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+    )
+    await fixture.until(() => fixture.navigations.length === 1)
+    assert.deepEqual(conversationModelFallbackNotices.take('conv_fallback01'), {
+      configuredModel: 'gpt-6.2-astra',
+      selectedModel: 'gpt-6.1-terra',
+    })
+    assert.equal(
+      conversationModelFallbackNotices.take('conv_fallback01'),
+      undefined,
+    )
   } finally {
     await fixture.close()
   }

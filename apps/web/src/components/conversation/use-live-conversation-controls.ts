@@ -325,6 +325,12 @@ export function useLiveConversationControls(
       setModelSwitchError(undefined)
       try {
         await runtime.updateConversationModel(model.id, selection)
+        if (selection.model !== undefined) {
+          setSubmitError(undefined)
+          queryClient.setQueryData<OptimisticSend | null>(sendKey, (current) =>
+            current?.state === 'failed' ? null : current,
+          )
+        }
       } catch (error) {
         setModelSwitchError(mutationErrorMessage(error, '更新模型设置'))
       } finally {
@@ -332,7 +338,14 @@ export function useLiveConversationControls(
         setModelSwitchPending(false)
       }
     },
-    [capabilities.canCompose, model.id, runtime, submitPhase],
+    [
+      capabilities.canCompose,
+      model.id,
+      queryClient,
+      runtime,
+      sendKey,
+      submitPhase,
+    ],
   )
 
   const readModels = useCallback(

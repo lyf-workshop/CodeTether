@@ -57,6 +57,7 @@ export interface CodexAvailableModel {
   readonly name: string
   readonly description?: string
   readonly reasoningOptions: readonly string[]
+  readonly isDefault?: boolean
 }
 
 export interface ApprovalPrompt {
@@ -385,6 +386,7 @@ export class CodexAppServerClient {
           ? {}
           : { description }),
         reasoningOptions,
+        ...(model.isDefault === true ? { isDefault: true } : {}),
       })
     }
     return models
@@ -582,6 +584,25 @@ export class CodexAppServerClient {
       includeLayers: false,
     })
     return parseCodexBackendProviderSettings(result, environment)
+  }
+
+  /** Reads only the configured model slug; all other config fields stay private. */
+  async readConfiguredModel(): Promise<string | undefined> {
+    this.#assertExecutionProfile('local')
+    const result = await this.#transport.request<unknown>('config/read', {
+      includeLayers: false,
+    })
+    const response = requireRecord(result, 'config/read response')
+    const config = requireRecord(response.config, 'config/read config')
+    if (config.model === null || config.model === undefined) return undefined
+    if (
+      typeof config.model !== 'string' ||
+      config.model.trim().length === 0 ||
+      config.model.length > 240
+    ) {
+      throw new CodexProtocolError('config/read returned an invalid model')
+    }
+    return config.model.trim()
   }
 
   /** Reads one stored thread's metadata without loading turns or resuming it. */

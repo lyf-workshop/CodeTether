@@ -309,8 +309,11 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   )
   assert.match(header, /conversation\.model/u)
   assert.match(inspector, /conversation\.machine/u)
-  assert.match(inspector, /conversation\.capabilities\.supportsDiff/u)
-  assert.match(inspector, /conversation\.capabilities\.supportsShell/u)
+  assert.match(inspector, /conversation\.agent === 'codex'/u)
+  assert.match(
+    inspector,
+    /const supportsToolOutput = localCodex \|\| hasToolOutput/u,
+  )
   assert.match(inspector, /resolveConversationInspectorTab/u)
   assert.doesNotMatch(header, /switchMachine|onMachineChange/u)
 })

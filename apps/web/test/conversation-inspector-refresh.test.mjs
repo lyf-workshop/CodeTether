@@ -33,8 +33,11 @@ test('Inspector exposes only truthful Files, Changes, and Tool Output surfaces',
   assert.doesNotMatch(source, /value="context"/u)
   assert.doesNotMatch(source, /<input[^>]*terminal/u)
   assert.match(source, /supportsDiff/u)
-  assert.match(source, /supportsShell/u)
   assert.match(source, /supportsToolOutput/u)
+  assert.match(source, /conversation\.agent === 'codex'/u)
+  assert.match(source, /displayContext\?\.machineKind === 'local'/u)
+  assert.match(source, /hasToolOutput/u)
+  assert.doesNotMatch(source, /conversation\.capabilities\.supportsDiff/u)
   assert.match(source, /execution\.tool\.outputSummary/u)
 })
 

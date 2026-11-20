@@ -95,7 +95,7 @@ At most two tasks run at once (AD-11), both on Windows: the Owner develops only 
 2. **Done on 2026-11-18:** task 5 merged into `main` (`3a97f6f`), then B3a, which includes W0-18 (`8bedb8b`), and the W0-11 sandbox fix (`49dcd89`).
 3. **Done on 2026-11-19:** the W0 small fixes, with goal 4 in round 2, and D2.5 were accepted.
 4. **Done on 2026-11-19: alpha.4 released** (`release-v0.1.0-alpha.4.md`), with task 5, B3a, the W0-11 fix and the small fixes, through the first real one-click update. Claude Code then used it hands-on (`2026-11-19-alpha4-hands-on-ui-review.md`) and added W0-19 to W0-24.
-5. **Now: alpha.5.** D2.5 and the separate model-catalog fix (`restored-conversation-model-catalog.md`) merge; then W0e (W0-20 to W0-24) alongside W0f (W0-19). alpha.5 ships D2.5, the catalog fix and W0e. alpha.4 is the first real one-click update (U1), so every later batch ships the same way.
+5. **Now: alpha.5.** D2.5 and the separate model-catalog fix (`restored-conversation-model-catalog.md`) merged on 2026-11-19 (`main` at `13fa6b8`). Next, W0e (W0-20 to W0-24) alongside W0f (W0-19). alpha.5 ships D2.5, the catalog fix and W0e. alpha.4 is the first real one-click update (U1), so every later batch ships the same way.
 6. **Run group B with group A's fixes in between:** 10 when W0e or W0f frees a slot; then 12 ∥ 11, then 13, then 14. D2.5 (task 9) carried four of W0b's findings, two of them High, so it went first.
 7. **Group C:**
    - W17 goes first, because it shapes Approvals, which W12 depends on.

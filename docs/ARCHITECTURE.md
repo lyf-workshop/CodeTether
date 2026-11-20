@@ -785,7 +785,7 @@ Phase 4D keeps durable and live normalized data intact and derives only render-t
 
 Long titles and paths are constrained with truncation and full-text affordances; unsupported Composer and primary-navigation controls are hidden rather than simulated. Product copy uses CodeTether/user language, while Host, Runtime, projection, and provider terms remain valid internal architecture vocabulary.
 
-**Timeline restyle (D2.5, accepted 2026-11-19; `docs/reviews/d2-5-timeline-restyle.md`; merges after the alpha.4 tag).**
+**Timeline restyle (D2.5, accepted 2026-11-19; `docs/reviews/d2-5-timeline-restyle.md`; merged into `main` after the alpha.4 tag, `9932e70`).**
 
 - **Highlighting.** Fenced code is highlighted with `refractor` 5.0.0 (Prism grammars). It is pinned, and each of the ten languages loads lazily.
   - Its syntax tree is converted to plain text tokens with a fixed set of semantic tones, and React renders them.

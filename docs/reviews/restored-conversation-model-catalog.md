@@ -15,7 +15,7 @@
 
 **Verdict.** Accepted, no must-fix.
 
-- It merges into `main` together with D2.5 and ships in alpha.5.
+- It merged into `main` on 2026-11-19 as `13fa6b8`, right after D2.5 (`9932e70`), and ships in alpha.5.
 - It fixes the one failed alpha.4 acceptance check in code. The installed check comes with alpha.5.
 - The catalog refresh is removed from W0e.
 

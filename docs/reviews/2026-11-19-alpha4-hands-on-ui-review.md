@@ -62,7 +62,7 @@ Claude Code used the installed app itself after the alpha.4 release, at the Owne
 
 ## Confirmed still open on alpha.4, already in a task
 
-- **D2.5 (accepted, not yet merged):**
+- **D2.5 (merged after alpha.4 as `9932e70`; ships in alpha.5):**
   - tool rows that show the last output line
   - repeated Turn headers
   - "已完成" on a message while its Turn runs
@@ -83,7 +83,7 @@ Claude Code used the installed app itself after the alpha.4 release, at the Owne
 
 ## Recommended next steps
 
-1. **Merge D2.5 now** (the alpha.4 tag exists), together with the separate model-catalog fix (`restored-conversation-model-catalog.md`), and ship them soon as alpha.5. It removes the most visible daily problem.
+1. **Merge D2.5 now** (the alpha.4 tag exists), together with the separate model-catalog fix (`restored-conversation-model-catalog.md`), and ship them soon as alpha.5. It removes the most visible daily problem. Both merged the same day; `main` is at `13fa6b8`.
 2. **W0e, Windows fixes after alpha.4:** findings 2, 4, 5 and 6. The release review's catalog refresh was fixed separately. Add finding 3 if the Owner approves a bulk action.
    - It is web plus one small desktop-shell change.
    - Start from `main` after D2.5, which also changes the inspector and the Markdown renderer.

@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   MESSAGE_OUTPUT_MAX_BYTES,
   TERMINAL_OUTPUT_MAX_BYTES,
+  TOOL_ROW_OUTPUT_MAX_BYTES,
   applyHostEvent,
   includeConversationDetail,
   projectConversationDetail,
@@ -783,6 +784,13 @@ test('projects Tool lifecycle and retains only a bounded UTF-8 terminal tail', (
       TERMINAL_OUTPUT_MAX_BYTES,
   )
 
+  assert.equal(conversation.tools[0].outputTruncated, true)
+  assert.equal(conversation.tools[0].output.endsWith('尾'), true)
+  assert.ok(
+    new TextEncoder().encode(conversation.tools[0].output).byteLength <=
+      TOOL_ROW_OUTPUT_MAX_BYTES,
+  )
+
   const terminalBeforeCompletion = conversation.terminal.text
   projection = apply(
     projection,
@@ -810,6 +818,41 @@ test('projects Tool lifecycle and retains only a bounded UTF-8 terminal tail', (
     projection.conversations[conversationId].tools.at(-1).status,
     'failed',
   )
+})
+
+test('keeps bounded output on its own Tool across interleaved output and completion', () => {
+  let projection = projectSnapshot(snapshot())
+  for (const event of [
+    envelope(1, 'tool.started', { name: 'first command' }),
+    envelope(2, 'tool.output', { output: 'first output\n' }),
+    envelope(
+      3,
+      'tool.started',
+      { name: 'second command' },
+      { itemId: 'item_demo02' },
+    ),
+    envelope(
+      4,
+      'tool.output',
+      { output: 'second output' },
+      { itemId: 'item_demo02' },
+    ),
+    envelope(5, 'tool.output', { output: 'later output' }),
+    envelope(
+      6,
+      'tool.completed',
+      { name: 'first command', success: true },
+      { timestamp: '2026-08-26T07:00:01.200Z' },
+    ),
+  ]) {
+    projection = apply(projection, event)
+  }
+
+  const [first, second] = projection.conversations[conversationId].tools
+  assert.equal(first.output, 'first output\nlater output')
+  assert.equal(first.durationMs, 1200)
+  assert.equal(second.output, 'second output')
+  assert.equal(second.durationMs, undefined)
 })
 
 test('creates an orphan Tool placeholder when snapshot lands during execution', () => {

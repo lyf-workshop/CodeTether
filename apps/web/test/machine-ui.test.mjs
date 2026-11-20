@@ -303,14 +303,15 @@ test('Project and Conversation surfaces resolve Machine display without a switch
   assert.match(controls, /远程执行电脑当前离线/u)
   assert.match(workspace, /to="\/devices\/\$machineId"/u)
   assert.match(workspace, /params=\{\{ machineId: recoveryMachineId \}\}/u)
-  assert.match(header, /to="\/devices\/\$machineId"/u)
-  assert.match(header, /params=\{\{ machineId: context\.machineId \}\}/u)
-  assert.match(header, /\{context\.machineName\}/u)
-  assert.match(header, /\{conversation\.machine\}/u)
+  assert.doesNotMatch(
+    header,
+    /context\.machineName|context\.projectName|conversation\.machine/u,
+  )
+  assert.match(header, /conversation\.model/u)
   assert.match(inspector, /conversation\.machine/u)
   assert.match(inspector, /conversation\.capabilities\.supportsDiff/u)
   assert.match(inspector, /conversation\.capabilities\.supportsShell/u)
-  assert.match(inspector, /requestedTab === 'terminal'/u)
+  assert.match(inspector, /resolveConversationInspectorTab/u)
   assert.doesNotMatch(header, /switchMachine|onMachineChange/u)
 })
 

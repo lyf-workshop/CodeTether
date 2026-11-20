@@ -56,7 +56,7 @@ export function ConversationDetailPage({
   executionBoundary,
   projectBoundary,
   displayContext,
-  initialInspectorTab = 'files',
+  initialInspectorTab,
   machineId,
   controls,
   modelSettings,
@@ -69,8 +69,8 @@ export function ConversationDetailPage({
   )
   const [inspector, setInspector] = useState(() =>
     createConversationInspectorState(
-      initialInspectorTab,
-      initialInspectorTab !== 'files' && usesInspectorDialogLayout(),
+      initialInspectorTab ?? 'overview',
+      initialInspectorTab !== undefined && usesInspectorDialogLayout(),
     ),
   )
   const [inspectorCollapsed, setInspectorCollapsed] = useState(

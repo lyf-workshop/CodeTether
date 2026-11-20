@@ -130,7 +130,7 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   )
   assert.match(
     timeline,
-    /relative min-h-0 min-w-0 overflow-hidden bg-background/u,
+    /relative min-h-0 min-w-0 overflow-hidden bg-timeline-background/u,
   )
 })
 

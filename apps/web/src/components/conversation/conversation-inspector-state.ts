@@ -17,6 +17,42 @@ export function normalizeConversationInspectorTab(
   return 'files'
 }
 
+export function resolveConversationInspectorTab(
+  requested: InspectorTab | undefined,
+  options: {
+    readonly supportsDiff: boolean
+    readonly hasChanges: boolean
+    readonly hasViewedFiles: boolean
+    readonly supportsToolOutput: boolean
+    readonly hasToolOutput: boolean
+  },
+): VisibleInspectorTab | undefined {
+  const {
+    supportsDiff,
+    hasChanges,
+    hasViewedFiles,
+    supportsToolOutput,
+    hasToolOutput,
+  } = options
+  const showViewedFiles = !supportsDiff && hasViewedFiles
+  if (requested === 'changes' && supportsDiff) return 'changes'
+  if (requested === 'files') {
+    if (supportsDiff) return 'changes'
+    if (showViewedFiles) return 'files'
+  }
+  if (
+    (requested === 'tools' || requested === 'terminal') &&
+    supportsToolOutput
+  ) {
+    return 'tools'
+  }
+  if (supportsDiff && hasChanges) return 'changes'
+  if (showViewedFiles) return 'files'
+  if (supportsToolOutput && hasToolOutput) return 'tools'
+  if (supportsDiff) return 'changes'
+  return supportsToolOutput ? 'tools' : undefined
+}
+
 export interface ConversationInspectorState {
   readonly open: boolean
   readonly tab: InspectorTab

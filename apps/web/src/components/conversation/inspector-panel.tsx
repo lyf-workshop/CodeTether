@@ -23,38 +23,9 @@ import type {
   ConversationViewModel,
 } from './conversation-view-model'
 import {
-  normalizeConversationInspectorTab,
+  resolveConversationInspectorTab,
   type InspectorTab,
 } from './conversation-inspector-state'
-
-interface InspectorSectionProps extends Omit<
-  ComponentPropsWithoutRef<'section'>,
-  'title'
-> {
-  title: string
-}
-
-function InspectorSection({
-  title,
-  className,
-  children,
-  ...props
-}: InspectorSectionProps) {
-  return (
-    <section
-      className={cn(
-        'border-b border-border/55 py-3 last:border-b-0',
-        className,
-      )}
-      {...props}
-    >
-      <h3 className="truncate text-md font-semibold text-text-primary">
-        {title}
-      </h3>
-      <div className="mt-3 min-w-0">{children}</div>
-    </section>
-  )
-}
 
 function LiveDuration({
   conversation,
@@ -147,41 +118,41 @@ function ConversationMetadata({
 
 interface ChangesSummaryProps {
   changes: ConversationChangesViewModel
-  title: string
   onChangeSelect?: (changeId: string) => void
   selectedChangeId?: string
-  unsupportedMessage?: string
 }
 
 function ChangesSummary({
   changes,
-  title,
   onChangeSelect,
   selectedChangeId,
-  unsupportedMessage,
 }: ChangesSummaryProps) {
   const { files, totals } = changes
 
   return (
-    <InspectorSection title={title}>
+    <section aria-label="变更文件列表" className="space-y-3 py-2">
       {files.length > 0 ? (
         <>
           <div
             className="mb-2 flex justify-end gap-1"
             aria-label={`新增 ${totals.additions} 行，删除 ${totals.deletions} 行`}
           >
-            <Badge
-              variant="success"
-              className="h-5 border-transparent bg-success-muted/45 px-2 text-xs tabular-nums"
-            >
-              +{totals.additions}
-            </Badge>
-            <Badge
-              variant="danger"
-              className="h-5 border-transparent bg-danger-muted/45 px-2 text-xs tabular-nums"
-            >
-              -{totals.deletions}
-            </Badge>
+            {totals.additions > 0 ? (
+              <Badge
+                variant="success"
+                className="h-5 border-transparent px-2 text-xs tabular-nums"
+              >
+                +{totals.additions}
+              </Badge>
+            ) : null}
+            {totals.deletions > 0 ? (
+              <Badge
+                variant="danger"
+                className="h-5 border-transparent px-2 text-xs tabular-nums"
+              >
+                -{totals.deletions}
+              </Badge>
+            ) : null}
           </div>
           <ul aria-label={`${files.length} 个变更文件`} className="space-y-0.5">
             {files.map((change) => (
@@ -212,12 +183,16 @@ function ChangesSummary({
                   >
                     {change.path}
                   </span>
-                  <span className="shrink-0 font-medium tabular-nums text-success-text">
-                    +{change.additions}
-                  </span>
-                  <span className="w-5 shrink-0 font-medium tabular-nums text-danger-text/90">
-                    {change.deletions > 0 ? `-${change.deletions}` : ''}
-                  </span>
+                  {change.additions > 0 ? (
+                    <span className="shrink-0 font-medium tabular-nums text-success-text">
+                      +{change.additions}
+                    </span>
+                  ) : null}
+                  {change.deletions > 0 ? (
+                    <span className="shrink-0 font-medium tabular-nums text-danger-text">
+                      -{change.deletions}
+                    </span>
+                  ) : null}
                 </button>
               </li>
             ))}
@@ -225,10 +200,10 @@ function ChangesSummary({
         </>
       ) : (
         <p role="status" className="text-sm text-text-muted">
-          {unsupportedMessage ?? '暂无相关文件。'}
+          暂无文件变更。
         </p>
       )}
-    </InspectorSection>
+    </section>
   )
 }
 
@@ -246,7 +221,10 @@ function ToolOutputSummary({
             return [
               {
                 id: execution.id,
-                title: execution.tool.title,
+                title:
+                  execution.tool.displayCommand ??
+                  execution.tool.subject ??
+                  execution.tool.title,
                 summary:
                   execution.tool.outputSummary ?? execution.tool.description,
                 status: execution.tool.status,
@@ -273,7 +251,7 @@ function ToolOutputSummary({
   ].join('\n')
 
   return (
-    <InspectorSection title="工具输出">
+    <section aria-label="工具执行结果" className="py-2">
       {toolEntries.length > 0 ? (
         <ul aria-label="工具执行记录" className="mb-4 space-y-2">
           {toolEntries.map((entry) => (
@@ -320,7 +298,7 @@ function ToolOutputSummary({
           暂无工具输出。
         </p>
       ) : null}
-    </InspectorSection>
+    </section>
   )
 }
 
@@ -349,7 +327,7 @@ export function InspectorPanel({
   displayContext,
   changes,
   terminal,
-  initialTab = 'files',
+  initialTab,
   tab,
   onTabChange,
   onChangeSelect,
@@ -358,22 +336,30 @@ export function InspectorPanel({
   className,
   ...props
 }: InspectorPanelProps) {
-  const requestedTab = tab ?? initialTab
-  const visibleTab = normalizeConversationInspectorTab(requestedTab)
   const supportsDiff =
     conversation.capabilities.supportsDiff &&
     displayContext?.machineKind === 'local'
   const supportsToolOutput =
     conversation.capabilities.supportsToolOutput ||
     conversation.capabilities.supportsShell
-  const effectiveTab =
-    (requestedTab === 'changes' && !supportsDiff) ||
-    (visibleTab === 'changes' && !supportsDiff) ||
-    (requestedTab === 'terminal' && !supportsToolOutput)
-      ? 'files'
-      : visibleTab === 'tools' && !supportsToolOutput
-        ? 'files'
-        : visibleTab
+  const viewedFiles = conversation.viewedFiles ?? []
+  const showViewedFiles = !supportsDiff && viewedFiles.length > 0
+  const effectiveTab = resolveConversationInspectorTab(tab ?? initialTab, {
+    supportsDiff,
+    hasChanges: changes.files.length > 0,
+    hasViewedFiles: showViewedFiles,
+    supportsToolOutput,
+    hasToolOutput:
+      terminal.lines.length > 0 ||
+      conversation.timeline.blocks.some(
+        (block) =>
+          block.kind === 'agent-run' &&
+          block.executions.some(
+            (execution) =>
+              execution.kind === 'tool' || execution.kind === 'shell',
+          ),
+      ),
+  })
 
   return (
     <aside
@@ -385,75 +371,76 @@ export function InspectorPanel({
       {...props}
     >
       <Tabs
-        value={effectiveTab}
+        value={effectiveTab ?? ''}
         onValueChange={(value) => onTabChange?.(value as InspectorTab)}
         className="min-h-0 flex-1 gap-0"
       >
-        <div className="flex shrink-0 items-center gap-2 px-4 pt-2 pb-2">
-          <TabsList
-            variant="line"
-            aria-label="文件面板视图"
-            className="h-9 w-full gap-1 bg-transparent"
-          >
-            {supportsDiff ? (
-              <TabsTrigger value="changes" className="h-9 flex-1 px-1 text-sm">
-                变更
-              </TabsTrigger>
+        {effectiveTab === undefined && onClose === undefined ? null : (
+          <div className="flex shrink-0 items-center gap-2 px-4 pt-2 pb-2">
+            {effectiveTab === undefined ? null : (
+              <TabsList
+                variant="line"
+                aria-label="文件面板视图"
+                className="h-9 w-full gap-1 bg-transparent"
+              >
+                {supportsDiff ? (
+                  <TabsTrigger
+                    value="changes"
+                    className="h-9 flex-1 px-1 text-sm"
+                  >
+                    变更
+                  </TabsTrigger>
+                ) : null}
+                {showViewedFiles ? (
+                  <TabsTrigger
+                    value="files"
+                    className="h-9 flex-1 px-1 text-sm"
+                  >
+                    <Files aria-hidden="true" />
+                    已查看文件
+                  </TabsTrigger>
+                ) : null}
+                {supportsToolOutput ? (
+                  <TabsTrigger
+                    value="tools"
+                    className="h-9 flex-1 px-1 text-sm"
+                  >
+                    <SquareTerminal aria-hidden="true" />
+                    工具输出
+                  </TabsTrigger>
+                ) : null}
+              </TabsList>
+            )}
+            {onClose ? (
+              <IconButton
+                label="关闭文件与工具输出"
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={onClose}
+              >
+                <PanelRightClose aria-hidden="true" />
+              </IconButton>
             ) : null}
-            <TabsTrigger value="files" className="h-9 flex-1 px-1 text-sm">
-              <Files aria-hidden="true" />
-              文件
-            </TabsTrigger>
-            {supportsToolOutput ? (
-              <TabsTrigger value="tools" className="h-9 flex-1 px-1 text-sm">
-                <SquareTerminal aria-hidden="true" />
-                工具输出
-              </TabsTrigger>
-            ) : null}
-          </TabsList>
-          {onClose ? (
-            <IconButton
-              label="关闭文件与工具输出"
-              variant="ghost"
-              size="sm"
-              onClick={onClose}
-            >
-              <PanelRightClose aria-hidden="true" />
-            </IconButton>
-          ) : null}
-        </div>
+          </div>
+        )}
 
-        <TabsContent value="files" className="min-h-0 overflow-hidden">
-          <ScrollArea className="h-full">
-            <div className="px-4 pb-4">
-              {!supportsDiff ? (
-                <p role="status" className="py-3 text-sm text-text-secondary">
-                  {displayContext?.readSearchOnly
-                    ? '这个 AI 工具在这里只读取和搜索文件，不会修改代码，因此没有“变更”。'
-                    : displayContext?.machineKind === 'remote'
-                      ? '在配对设备上运行的会话暂不报告文件差异，因此没有“变更”。'
-                      : '当前 AI 工具不报告文件差异，因此没有“变更”。'}
-                </p>
-              ) : null}
-              <InspectorSection title="文件">
-                <ConversationFilesSurface
-                  changes={changes}
-                  onOpenChange={onChangeSelect}
-                  selectedChangeId={selectedChangeId}
-                  supportsDiff={supportsDiff}
-                />
-              </InspectorSection>
-            </div>
-          </ScrollArea>
-        </TabsContent>
+        {showViewedFiles ? (
+          <TabsContent value="files" className="min-h-0 overflow-hidden">
+            <ScrollArea className="h-full">
+              <div className="w-full min-w-0 px-4 pb-4 [contain:inline-size]">
+                <ConversationFilesSurface files={viewedFiles} />
+              </div>
+            </ScrollArea>
+          </TabsContent>
+        ) : null}
 
         {supportsDiff ? (
           <TabsContent value="changes" className="min-h-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="px-4 pb-4">
+              <div className="w-full min-w-0 px-4 pb-4 [contain:inline-size]">
                 <ChangesSummary
                   changes={changes}
-                  title="变更"
                   onChangeSelect={onChangeSelect}
                   selectedChangeId={selectedChangeId}
                 />
@@ -465,7 +452,7 @@ export function InspectorPanel({
         {supportsToolOutput ? (
           <TabsContent value="tools" className="min-h-0 overflow-hidden">
             <ScrollArea className="h-full">
-              <div className="px-4 pb-4">
+              <div className="w-full min-w-0 px-4 pb-4 [contain:inline-size]">
                 <ToolOutputSummary
                   conversation={conversation}
                   terminal={terminal}

@@ -35,7 +35,7 @@ test('ready composer renders the real editable textarea and canonical form', () 
   assert.match(markup, /data-composer-state="ready"/u)
   assert.match(markup, /<textarea[^>]*id="conversation-composer"/u)
   assert.doesNotMatch(markup, /hidden=""|readOnly=""/u)
-  assert.match(markup, /支付项目 · 这台电脑/u)
+  assert.doesNotMatch(markup, /支付项目 · 这台电脑/u)
 })
 
 test('disabled attachment and voice controls leave hover hints on pointer-receiving wrappers', () => {

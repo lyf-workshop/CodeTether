@@ -24,37 +24,90 @@ export interface ToolPresentationInput {
   readonly outputSummary?: string
 }
 
+export interface TimelineToolPresentation extends ToolPresentation {
+  /** Full display-only command after removing a recognized PowerShell wrapper. */
+  readonly displayCommand: string
+  readonly subject?: string
+  readonly failureSummary?: string
+}
+
 const MAX_SUBTITLE_CHARACTERS = 80
 
 /**
  * Builds the small, provider-neutral label shown by the frozen Tool row.
  * Parsing is deliberately lexical: wrapper text is inspected but never run.
  */
-export function createToolPresentation({
+export function createToolPresentation(
+  input: ToolPresentationInput,
+): ToolPresentation {
+  const { rawCommand, classification } = inspectToolCommand(input)
+  const failure =
+    input.status === 'failed'
+      ? summarizeToolFailure(
+          input.outputSummary,
+          input.kind === 'shell' || input.kind === undefined,
+        )
+      : undefined
+  return presentTool(classification, rawCommand, failure)
+}
+
+/** Timeline labels keep the operation and failure detail separate. */
+export function createTimelineToolPresentation(
+  input: ToolPresentationInput,
+): TimelineToolPresentation {
+  const { rawCommand, displayCommand, classification } =
+    inspectToolCommand(input)
+  const failureSummary =
+    input.status === 'failed'
+      ? summarizeToolFailure(
+          input.outputSummary,
+          input.kind === 'shell' || input.kind === undefined,
+          false,
+        )
+      : undefined
+  let subject = classification.subtitle
+  if (classification.kind === 'edit-file') {
+    subject = canonicalToolSubject(displayCommand, 'Edit')
+  }
+  if (
+    classification.kind === 'command' ||
+    classification.kind === 'git-status' ||
+    classification.kind === 'test'
+  ) {
+    subject = summarizeCommand(displayCommand)
+  }
+
+  return {
+    ...presentTool(classification, rawCommand, failureSummary),
+    displayCommand,
+    ...(subject === undefined ? {} : { subject }),
+    ...(failureSummary === undefined ? {} : { failureSummary }),
+  }
+}
+
+function inspectToolCommand({
   command,
   kind,
-  status,
-  outputSummary,
-}: ToolPresentationInput): ToolPresentation {
+}: Pick<ToolPresentationInput, 'command' | 'kind'>) {
   const rawCommand = command.trim() || '执行命令'
-  const inspectedCommand = unwrapPowerShellCommand(rawCommand)
-  const tokens = tokenizeCommandPrefix(inspectedCommand, 6)
+  const displayCommand = unwrapPowerShellCommand(rawCommand)
+  const tokens = tokenizeCommandPrefix(displayCommand, 6)
   const executable = normalizeExecutable(tokens[0]?.value)
   const classification =
     kind === undefined
-      ? hasCompoundCommandSyntax(inspectedCommand)
+      ? hasCompoundCommandSyntax(displayCommand)
         ? ({ kind: 'command', title: '执行命令' } as const)
         : classifyCommand(executable, tokens)
-      : classifyCanonicalTool(kind, inspectedCommand)
-  const failure =
-    status === 'failed'
-      ? summarizeToolFailure(
-          outputSummary,
-          kind === 'shell' || kind === undefined,
-        )
-      : undefined
-  const subtitle = failure ?? classification.subtitle
+      : classifyCanonicalTool(kind, displayCommand)
+  return { rawCommand, displayCommand, classification }
+}
 
+function presentTool(
+  classification: CommandClassification,
+  rawCommand: string,
+  failure: string | undefined,
+): ToolPresentation {
+  const subtitle = failure ?? classification.subtitle
   return {
     kind: classification.kind,
     title: classification.title,
@@ -98,7 +151,7 @@ function classifyCanonicalTool(
 /** Extracts only the bounded, presentation-safe clue emitted by a canonical adapter. */
 function canonicalToolSubject(
   command: string,
-  prefix: 'Glob' | 'Grep' | 'Read',
+  prefix: 'Glob' | 'Grep' | 'Read' | 'Edit',
 ): string | undefined {
   if (!command.startsWith(`${prefix} `)) return undefined
   const subject = command.slice(prefix.length + 1).trim()
@@ -213,6 +266,7 @@ function readFileTarget(tokens: readonly CommandToken[]): string | undefined {
 function summarizeToolFailure(
   output: string | undefined,
   command: boolean,
+  includeOutputExitText = true,
 ): string {
   const normalized = output?.replace(/\s+/gu, ' ').trim() ?? ''
   if (
@@ -247,6 +301,8 @@ function summarizeToolFailure(
   if (/timed out|timeout/iu.test(normalized)) return '操作超时'
   if (/tests? failed|failed tests?/iu.test(normalized)) return '测试未通过'
 
+  if (!includeOutputExitText) return '命令执行失败'
+
   const exitCode =
     /(?:exit(?:ed)?(?: with)?(?: code)?|process exited with code)\s*[:=]?\s*(-?\d+)/iu.exec(
       normalized,
@@ -279,6 +335,79 @@ function unwrapPowerShellCommand(command: string): string {
     return unwrapPowerShellScriptBlock(unwrapWholeQuotedValue(wrapped))
   }
   return command
+}
+
+/** Lexically summarizes top-level commands without evaluating shell syntax. */
+function summarizeCommand(command: string): string {
+  let first = ''
+  let count = 0
+  let start = 0
+  let quote: "'" | '"' | undefined
+  const nested: string[] = []
+
+  const record = (end: number): void => {
+    const part = command.slice(start, end).trim()
+    if (part.length === 0) return
+    if (count === 0) first = part
+    count += 1
+  }
+
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]
+    const next = command[index + 1]
+    if (
+      quote !== "'" &&
+      (character === '\x60' ||
+        (character === '\\' &&
+          next !== undefined &&
+          /[\\ "';&|\n]/u.test(next)))
+    ) {
+      index += 1
+      continue
+    }
+    if (quote !== undefined) {
+      if (character === quote) {
+        if (quote === "'" && next === "'") index += 1
+        else quote = undefined
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === '(' || character === '{') {
+      nested.push(character === '(' ? ')' : '}')
+      continue
+    }
+    if (nested.length > 0) {
+      if (character === nested.at(-1)) nested.pop()
+      continue
+    }
+    if (
+      character === '&' &&
+      next !== '&' &&
+      command.slice(start, index).trim() === ''
+    ) {
+      continue
+    }
+    if (
+      character === ';' ||
+      character === '|' ||
+      character === '&' ||
+      character === '\n' ||
+      character === '\r'
+    ) {
+      record(index)
+      if ((character === '&' || character === '|') && next === character)
+        index += 1
+      start = index + 1
+    }
+  }
+  record(command.length)
+  return count < 2
+    ? compactSubtitle(command)
+    : `${compactSubtitle(first)} 等 ${count} 条`
 }
 
 /** Avoids giving a compound command a narrower, potentially misleading label. */

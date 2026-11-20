@@ -202,20 +202,26 @@ test('legacy inspector values normalize without rendering legacy tabs', () => {
   assert.equal(normalizeConversationInspectorTab('changes'), 'changes')
 })
 
-test('Files consumes only existing change evidence and opens the existing change view', async () => {
-  const source = await readFile(
-    new URL('conversation-files-surface.tsx', componentRoot),
-    'utf8',
-  )
+test('Changes and Viewed Files expose only existing projection evidence', async () => {
+  const [panel, viewedFiles] = await Promise.all([
+    readFile(new URL('inspector-panel.tsx', componentRoot), 'utf8'),
+    readFile(new URL('conversation-files-surface.tsx', componentRoot), 'utf8'),
+  ])
 
-  assert.match(source, /changes\.files\.map/u)
-  assert.match(source, /change\.path/u)
-  assert.match(source, /change\.additions/u)
-  assert.match(source, /change\.deletions/u)
-  assert.match(source, /onOpenChange\?\.\(change\.id\)/u)
-  assert.match(source, /查看变更/u)
-  assert.match(source, /本次会话没有已知文件变更/u)
-  assert.match(source, /当前 AI 工具未提供文件变更信息/u)
-  assert.doesNotMatch(source, /fetch\(|readProjectFile|absolutePath|directory/u)
-  assert.doesNotMatch(source, /<input|<textarea/u)
+  assert.match(panel, /\{ files, totals \} = changes/u)
+  assert.match(panel, /files\.map\(\(change\)/u)
+  assert.match(panel, /change\.path/u)
+  assert.match(panel, /change\.additions > 0/u)
+  assert.match(panel, /change\.deletions > 0/u)
+  assert.match(panel, /onChangeSelect\?\.\(change\.id\)/u)
+  assert.match(
+    panel,
+    /showViewedFiles[\s\S]*<ConversationFilesSurface files=\{viewedFiles\}/u,
+  )
+  assert.match(viewedFiles, /files\.map\(\(path\)/u)
+  assert.doesNotMatch(viewedFiles, /onOpenChange|<button|<input|<textarea/u)
+  assert.doesNotMatch(
+    panel + viewedFiles,
+    /fetch\(|readProjectFile|absolutePath/u,
+  )
 })

@@ -300,7 +300,10 @@ test('uses semantic Tool titles and keeps failure output out of the row title', 
   )
   assert.equal(tools[1].title.includes('powershell'), false)
   assert.equal(tools[0].title.includes('Cannot find path'), false)
-  assert.equal(JSON.stringify(tools).includes('Write-Output safe'), false)
+  assert.equal(tools[0].subject, 'missing.ts')
+  assert.equal(tools[0].failureSummary, '找不到路径')
+  assert.equal(tools[1].subject, 'Write-Output safe')
+  assert.equal(tools[1].displayCommand, 'Write-Output safe')
   assert.equal(viewModel.terminal.lines.join('\n'), fullFailure)
 })
 

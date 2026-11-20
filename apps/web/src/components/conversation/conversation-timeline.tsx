@@ -7,12 +7,7 @@ import {
   type UIEvent,
   type ReactNode,
 } from 'react'
-import {
-  CheckCircle2,
-  ChevronDown,
-  ChevronUp,
-  LoaderCircle,
-} from 'lucide-react'
+import { ChevronUp, FilePenLine, LoaderCircle } from 'lucide-react'
 
 import type { MachineId, ProjectId } from '@codetether/protocol'
 import {
@@ -40,13 +35,19 @@ import { ConversationFailureCard } from './conversation-failure-card'
 import {
   createTimelineAnchorRequestKey,
   decideTimelineScroll,
+  groupTimelineTurns,
   timelineContainsTurn,
   type TimelineUpdateKind,
 } from './conversation-timeline-behavior'
 import { createToolPresentation } from './tool-presentation'
 import { groupRunExecutions } from './tool-grouping'
-import { presentProjectPaths } from './message-presentation'
-import { AgentMessage, UserMessage } from './message'
+import {
+  AgentMessage,
+  AgentMessageBody,
+  AgentTurnHeader,
+  UserMessage,
+} from './message'
+import { RoutineToolGroup, ToolExecutionRow } from './conversation-tool-rows'
 import type { OptimisticMessage } from './optimistic-send'
 
 interface ConversationTimelineProps {
@@ -67,102 +68,6 @@ interface ConversationTimelineProps {
   targetChangeId?: string
   targetChangeRequestKey?: number
   targetTurnId?: string
-}
-
-type ToolExecution = Extract<
-  ConversationRunExecutionViewModel,
-  { readonly kind: 'tool' }
->
-
-function ToolExecutionRow({
-  execution,
-  projectRootPath,
-}: {
-  readonly execution: ToolExecution
-  readonly projectRootPath?: string
-}) {
-  const { tool } = execution
-  return (
-    <ToolCallCard
-      title={presentProjectPaths(tool.title, projectRootPath)}
-      status={tool.status}
-      description={
-        tool.description === undefined
-          ? undefined
-          : presentProjectPaths(tool.description, projectRootPath)
-      }
-      metadata={
-        tool.outputSummary === undefined
-          ? undefined
-          : presentProjectPaths(tool.outputSummary, projectRootPath)
-      }
-      delta={tool.delta}
-      action={
-        tool.actionLabel ? (
-          <button
-            type="button"
-            className="rounded-xs text-sm font-medium text-primary outline-none hover:text-primary-hover hover:underline focus-visible:ring-2 focus-visible:ring-ring/50"
-          >
-            {tool.actionLabel}
-          </button>
-        ) : undefined
-      }
-    />
-  )
-}
-
-function RoutineToolGroup({
-  executions,
-  projectRootPath,
-}: {
-  readonly executions: readonly ToolExecution[]
-  readonly projectRootPath?: string
-}) {
-  const [expanded, setExpanded] = useState(false)
-  const label = `已完成 ${executions.length} 个操作`
-
-  return (
-    <section
-      aria-label={label}
-      data-tool-group="routine"
-      data-tool-group-count={executions.length}
-      className="min-w-0 border-t border-border/50"
-    >
-      <button
-        type="button"
-        aria-expanded={expanded}
-        className="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xs px-1 text-left text-sm text-text-secondary outline-none transition-colors hover:bg-surface-muted/35 hover:text-text-primary focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 motion-reduce:transition-none"
-        onClick={() => setExpanded((current) => !current)}
-      >
-        <CheckCircle2
-          aria-hidden="true"
-          className="size-4 shrink-0 text-success-text"
-        />
-        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-        <span className="shrink-0 text-xs text-text-muted">
-          {expanded ? '收起' : '展开'}
-        </span>
-        <ChevronDown
-          aria-hidden="true"
-          className={`size-4 shrink-0 transition-transform motion-reduce:transition-none ${expanded ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {expanded ? (
-        <div
-          data-tool-group-items="mounted"
-          className="border-t border-border/40"
-        >
-          {executions.map((execution) => (
-            <ToolExecutionRow
-              key={execution.id}
-              execution={execution}
-              projectRootPath={projectRootPath}
-            />
-          ))}
-        </div>
-      ) : null}
-    </section>
-  )
 }
 
 interface AgentRunExecutionsProps {
@@ -218,12 +123,15 @@ function AgentRunExecutions({
           aria-label={`变更详情：${change.path}`}
           className="min-w-0 rounded-sm outline-none data-[selected=true]:ring-1 data-[selected=true]:ring-primary/45 focus-visible:ring-2 focus-visible:ring-ring/60"
         >
+          <p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-success-text">
+            <FilePenLine aria-hidden="true" className="size-3.5" />
+            编辑
+            <span className="ml-auto tabular-nums text-text-secondary">
+              {`改动 ${change.additions + change.deletions} 行`}
+            </span>
+          </p>
           {change.lines.length > 0 ? (
-            <DiffCard
-              className="mt-3"
-              fileName={change.path}
-              lines={change.lines}
-            />
+            <DiffCard fileName={change.path} lines={change.lines} />
           ) : (
             <div className="mt-3 border-t border-border/50">
               <ToolCallCard
@@ -288,14 +196,6 @@ function AgentRunExecutions({
       </div>
     )
   })
-}
-
-function emptyRunMessage(
-  id: string,
-  time: string,
-  status: ConversationMessageViewModel['status'],
-): ConversationMessageViewModel {
-  return { id: `${id}-message`, author: 'agent', body: '', time, status }
 }
 
 function NativeConversationHistory({
@@ -374,7 +274,6 @@ function NativeConversationHistory({
             key={entry.id}
             agent={agent}
             message={message}
-            className="py-2"
             projectRootPath={projectRootPath}
           />
         )
@@ -414,6 +313,12 @@ export function ConversationTimeline({
   >(undefined)
   const lastFocusedChangeRequest = useRef<string | undefined>(undefined)
   const lastFocusedTurnRequest = useRef<string | undefined>(undefined)
+  const clearTurnHighlight = useRef<(() => void) | undefined>(undefined)
+  useLayoutEffect(() => () => clearTurnHighlight.current?.(), [])
+  const turnGroups = useMemo(
+    () => groupTimelineTurns(timeline.blocks, timeline.turnHeaders),
+    [timeline.blocks, timeline.turnHeaders],
+  )
   const waiting = pendingApprovals.length > 0
   const waitingRef = useRef(waiting)
   const [showJumpToLatest, setShowJumpToLatest] = useState(false)
@@ -481,7 +386,7 @@ export function ConversationTimeline({
             : `${block.id}:${block.status}:${block.executions
                 .map((execution) =>
                   execution.kind === 'tool'
-                    ? `${execution.id}:${execution.tool.status}:${execution.tool.outputSummary?.length ?? 0}`
+                    ? `${execution.id}:${execution.tool.status}:${execution.tool.output?.length ?? execution.tool.outputSummary?.length ?? 0}`
                     : execution.id,
                 )
                 .join(',')}:${block.outcome ?? ''}`,
@@ -579,6 +484,7 @@ export function ConversationTimeline({
 
   useLayoutEffect(() => {
     if (targetTurnId === undefined) {
+      clearTurnHighlight.current?.()
       lastFocusedTurnRequest.current = undefined
       return
     }
@@ -593,6 +499,8 @@ export function ConversationTimeline({
     const target = findTimelineAnchor(viewport, 'turnAnchor', targetTurnId)
     if (target === undefined) return
     lastFocusedTurnRequest.current = requestKey
+    clearTurnHighlight.current?.()
+    clearTurnHighlight.current = highlightTimelineTurn(target)
     focusTimelineAnchor(viewport, target, followsLatest, setShowJumpToLatest)
   }, [activityVersion, anchorRequestKey, targetTurnId])
 
@@ -627,7 +535,7 @@ export function ConversationTimeline({
   }, [])
 
   return (
-    <div className="relative min-h-0 min-w-0 overflow-hidden bg-background">
+    <div className="relative min-h-0 min-w-0 overflow-hidden bg-timeline-background">
       {missingTurnTarget ? (
         <p
           role="status"
@@ -642,8 +550,12 @@ export function ConversationTimeline({
         viewportRef={viewportRef}
         onViewportScroll={handleScroll}
       >
-        <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-8 max-sm:px-4">
-          {header}
+        <div className="mx-auto w-full min-w-0 max-w-(--read-w) px-8 pb-8 [contain:inline-size] max-sm:px-4">
+          {header === undefined ? null : (
+            <div className="sticky top-0 z-10 -mx-8 bg-timeline-background/95 px-8 backdrop-blur-sm max-sm:-mx-4 max-sm:px-4">
+              {header}
+            </div>
+          )}
           <p className="flex h-[var(--layout-conversation-day-marker-height)] items-center justify-center text-center text-xs text-text-muted">
             {timeline.dayLabel}
           </p>
@@ -670,107 +582,98 @@ export function ConversationTimeline({
             <div
               className={
                 timeline.nativeHistory === undefined
-                  ? 'space-y-3'
-                  : 'mt-3 space-y-3'
+                  ? 'space-y-(--timeline-message-spacing)'
+                  : 'mt-3 space-y-(--timeline-message-spacing)'
               }
             >
-              {timeline.blocks.map((block, index) => {
-                const firstBlockForTurn =
-                  index === 0 ||
-                  timeline.blocks[index - 1]?.turnId !== block.turnId
-                let content
-                if (block.kind === 'message') {
-                  content =
+              {turnGroups.map(({ id, header: turnHeader, blocks }) => (
+                <section
+                  key={id}
+                  data-turn-anchor={id}
+                  role="group"
+                  tabIndex={-1}
+                  aria-label={`会话轮次：${turnHeader.time}`}
+                  className="relative min-w-0 space-y-(--timeline-message-spacing) rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                >
+                  {blocks.map((block) =>
+                    block.kind === 'message' &&
                     block.message.author === 'user' ? (
-                      <UserMessage message={block.message} className="min-h-19">
-                        {optimisticSend?.projectedTurnId === block.turnId
+                      <UserMessage key={block.id} message={block.message}>
+                        {optimisticSend?.projectedTurnId === id
                           ? sendStatus
                           : null}
                       </UserMessage>
-                    ) : (
-                      <AgentMessage
-                        agent={agent}
-                        message={block.message}
-                        className="py-2"
-                        projectRootPath={projectRootPath}
-                      />
-                    )
-                } else {
-                  const message =
-                    block.message ??
-                    emptyRunMessage(block.id, block.time, block.status)
-                  const runContent =
-                    block.executions.length > 0 ||
-                    block.outcomeText ||
-                    block.failure ? (
-                      <>
-                        {block.executions.length > 0 ? (
-                          <AgentRunExecutions
-                            executions={block.executions}
-                            changesById={changesById}
-                            approvalsById={approvalsById}
-                            projectRootPath={projectRootPath}
-                            selectedChangeId={targetChangeId}
-                          />
-                        ) : null}
-                        {block.outcomeText ? (
-                          <p
-                            role="status"
-                            data-outcome={block.outcome}
-                            className="mt-3 text-sm font-regular text-text-secondary"
+                    ) : null,
+                  )}
+                  <article className="min-w-0 rounded-lg bg-timeline-message px-5 py-4">
+                    <AgentTurnHeader agent={agent} header={turnHeader} turn />
+                    <div className="min-w-0 space-y-(--timeline-message-spacing) mt-2 pl-11 empty:hidden max-sm:pl-0">
+                      {blocks.map((block) =>
+                        block.kind === 'message' ? (
+                          block.message.author === 'agent' &&
+                          block.message.body ? (
+                            <AgentMessageBody
+                              key={block.id}
+                              message={block.message}
+                              projectRootPath={projectRootPath}
+                            />
+                          ) : null
+                        ) : (
+                          <div
+                            key={block.id}
+                            className="min-w-0 space-y-3 empty:hidden"
                           >
-                            {block.outcomeText}
-                          </p>
-                        ) : null}
-                        {block.failure === undefined ? null : (
-                          <ConversationFailureCard
-                            failure={block.failure}
-                            machineId={machineId}
-                            projectId={projectId}
-                            retryController={
-                              optimisticSend?.projectedTurnId === block.turnId
-                                ? undefined
-                                : retryController
-                            }
-                            onOpenModelControl={onOpenModelControl}
-                            turnId={block.turnId}
-                          />
-                        )}
-                      </>
-                    ) : undefined
-
-                  content = (
-                    <AgentMessage
-                      agent={agent}
-                      message={message}
-                      projectRootPath={projectRootPath}
-                    >
-                      {runContent}
-                    </AgentMessage>
-                  )
-                }
-
-                return (
-                  <div
-                    key={block.id}
-                    {...(firstBlockForTurn
-                      ? {
-                          'data-turn-anchor': block.turnId,
-                          role: 'group',
-                          tabIndex: -1,
-                          'aria-label': `会话轮次：${
-                            block.kind === 'message'
-                              ? block.message.time
-                              : block.time
-                          }`,
-                        }
-                      : {})}
-                    className="min-w-0 scroll-mt-4 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
-                  >
-                    {content}
-                  </div>
-                )
-              })}
+                            {block.message?.body ? (
+                              <AgentMessageBody
+                                message={block.message}
+                                projectRootPath={projectRootPath}
+                              />
+                            ) : null}
+                            {block.executions.length > 0 ? (
+                              <AgentRunExecutions
+                                executions={block.executions}
+                                changesById={changesById}
+                                approvalsById={approvalsById}
+                                projectRootPath={projectRootPath}
+                                selectedChangeId={targetChangeId}
+                              />
+                            ) : null}
+                            {block.outcomeText ? (
+                              <p
+                                role="status"
+                                data-outcome={block.outcome}
+                                data-turn-running={
+                                  block.status === 'running' ||
+                                  block.status === 'waiting'
+                                    ? block.status
+                                    : undefined
+                                }
+                                className="rounded-md border-2 border-status-idle bg-timeline-system px-4 py-3 text-sm text-text-secondary data-[turn-running=running]:border-status-running data-[turn-running=waiting]:border-status-waiting"
+                              >
+                                {block.outcomeText}
+                              </p>
+                            ) : null}
+                            {block.failure === undefined ? null : (
+                              <ConversationFailureCard
+                                failure={block.failure}
+                                machineId={machineId}
+                                projectId={projectId}
+                                retryController={
+                                  optimisticSend?.projectedTurnId === id
+                                    ? undefined
+                                    : retryController
+                                }
+                                onOpenModelControl={onOpenModelControl}
+                                turnId={id}
+                              />
+                            )}
+                          </div>
+                        ),
+                      )}
+                    </div>
+                  </article>
+                </section>
+              ))}
               {showOptimisticRow ? (
                 <UserMessage
                   key={optimisticSend.actionId}
@@ -780,7 +683,6 @@ export function ConversationTimeline({
                     body: optimisticSend.text,
                     time: historicalTime(optimisticSend.timestamp),
                   }}
-                  className="min-h-19"
                 >
                   {sendStatus}
                 </UserMessage>
@@ -849,6 +751,17 @@ function focusTimelineAnchor(
   )
   followsLatest.current = nearBottom
   setShowJumpToLatest(!nearBottom)
+}
+
+function highlightTimelineTurn(target: HTMLElement): () => void {
+  target.dataset.turnHighlight = 'true'
+  const timer = window.setTimeout(clear, 2000)
+  return clear
+
+  function clear() {
+    window.clearTimeout(timer)
+    delete target.dataset.turnHighlight
+  }
 }
 
 function compactContext(value: string | undefined): string {

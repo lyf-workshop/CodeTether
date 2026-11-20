@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { readFile } from 'node:fs/promises'
+import { createDom, h } from './fixtures/dom.mjs'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 import {
   groupRunExecutions,
   isRoutineCompletedTool,
+  routineToolGroupLabel,
 } from '../.tmp/test-dist/components/conversation/tool-grouping.js'
 
 test('groups three or more adjacent routine completed Tools deterministically', () => {
@@ -73,35 +75,115 @@ test('keeps generic commands, tests, failures, active Tools, actions, changes, a
   )
 })
 
-test('collapsed Tool groups defer mounting detail rows until explicit expansion', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/conversation/conversation-timeline.tsx',
-      import.meta.url,
-    ),
-    'utf8',
+test('tool rows keep bounded output out of the collapsed subject and support native button activation', async (t) => {
+  const { ToolExecutionRow } = loadWebComponent(
+    'components/conversation/conversation-tool-rows.tsx',
   )
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const execution = tool('command', 'command', {
+    subject: 'Get-Content "C:\\scratch\\fixtures\\sample.txt" 等 2 条',
+    displayCommand:
+      'Get-Content "C:\\scratch\\fixtures\\sample.txt"; node --test',
+    output: 'first output line\nlast output line',
+    durationMs: 1200,
+  })
 
-  assert.match(source, /aria-expanded=\{expanded\}/u)
-  assert.match(
-    source,
-    /\{expanded \? \(\s*<div\s+data-tool-group-items="mounted"/u,
+  await dom.render(
+    h(ToolExecutionRow, { execution, projectRootPath: 'C:\\scratch' }),
   )
-  assert.match(source, /<ToolExecutionRow\s+key=\{execution\.id\}/u)
-  assert.doesNotMatch(source, /<details/u)
+  const button = dom.container.querySelector('button')
+  assert.equal(button.type, 'button')
+  assert.equal(button.getAttribute('aria-expanded'), 'false')
+  assert.match(
+    button.textContent,
+    /Get-Content "fixtures\/sample.txt" 等 2 条/u,
+  )
+  assert.match(button.textContent, /1\.2 秒/u)
+  assert.doesNotMatch(button.textContent, /last output line/u)
+  assert.equal(dom.container.querySelector('pre'), null)
+
+  button.focus()
+  assert.equal(dom.window.document.activeElement, button)
+  await dom.perform(() => button.click())
+  assert.equal(button.getAttribute('aria-expanded'), 'true')
+  assert.equal(
+    dom.window.document.getElementById(button.getAttribute('aria-controls'))
+      .hidden,
+    false,
+  )
+  assert.equal(
+    dom.container.querySelector('pre').textContent,
+    'Get-Content "fixtures/sample.txt"; node --test',
+  )
+  assert.equal(
+    dom.container.querySelector('[aria-label="工具输出"]').textContent,
+    execution.tool.output,
+  )
+  assert.equal(dom.window.document.activeElement, button)
 })
 
-test('Tool rows apply the same display-only Project path presentation', async () => {
-  const source = await readFile(
-    new URL(
-      '../src/components/conversation/conversation-timeline.tsx',
-      import.meta.url,
-    ),
-    'utf8',
+test('a tool row expands by default when it fails during streaming', async (t) => {
+  const { ToolExecutionRow } = loadWebComponent(
+    'components/conversation/conversation-tool-rows.tsx',
   )
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const render = (status) =>
+    dom.render(
+      h(ToolExecutionRow, {
+        execution: tool('failing', 'command', {
+          status,
+          subject: 'Get-Content missing.txt',
+          displayCommand: 'Get-Content missing.txt',
+          failureSummary: '找不到路径',
+          output: "Cannot find path 'missing.txt'",
+        }),
+      }),
+    )
 
-  assert.match(source, /presentProjectPaths\(tool\.title, projectRootPath\)/u)
-  assert.match(source, /projectRootPath=\{projectRootPath\}/u)
+  await render('running')
+  const button = dom.container.querySelector('button')
+  assert.equal(button.getAttribute('aria-expanded'), 'false')
+  await render('failed')
+  assert.equal(button.getAttribute('aria-expanded'), 'true')
+  assert.match(dom.container.textContent, /找不到路径/u)
+  assert.match(dom.container.textContent, /Cannot find path/u)
+  await dom.perform(() => button.click())
+  assert.equal(button.getAttribute('aria-expanded'), 'false')
+  assert.equal(dom.container.querySelector('pre'), null)
+})
+
+test('homogeneous group labels name the work and expansion reveals each original row', async (t) => {
+  const { RoutineToolGroup } = loadWebComponent(
+    'components/conversation/conversation-tool-rows.tsx',
+  )
+  const dom = await createDom()
+  t.after(() => dom.close())
+  const executions = [
+    tool('a.txt', 'read-file'),
+    tool('b.txt', 'read-file'),
+    tool('c.txt', 'read-file'),
+  ]
+  await dom.render(h(RoutineToolGroup, { executions }))
+  const button = dom.container.querySelector('button')
+  assert.match(button.textContent, /读取 3 个文件/u)
+  assert.equal(dom.container.querySelector('[data-tool-row]'), null)
+  await dom.perform(() => button.click())
+  assert.equal(dom.container.querySelectorAll('[data-tool-row]').length, 3)
+  assert.deepEqual(
+    [...dom.container.querySelectorAll('[data-tool-row] button')].map(
+      (row) => row.querySelector('[title]').textContent,
+    ),
+    executions.map((execution) => execution.tool.title),
+  )
+  assert.equal(
+    routineToolGroupLabel([
+      ...executions.slice(0, 2),
+      tool('git', 'git-status'),
+    ]),
+    '已完成 3 个操作',
+  )
 })
 
 function tool(id, presentationKind, extra = {}) {

@@ -17,6 +17,12 @@
 [data-theme='light'] {
   color-scheme: light;
   --ct-bg: #fbfaf8;
+  --timeline-background: #fafafa;
+  --timeline-message: #ffffff;
+  --timeline-system: #f3f3f3;
+  --message-code-header: #2d2d2d;
+  --message-code-background: #1e1e1e;
+  --tool-search: #6d3da4;
   --ct-side: #f3f1ed;
   --ct-surface: #ffffff;
   --ct-hover: #ece9e3;
@@ -62,6 +68,12 @@
 [data-theme='dark'] {
   color-scheme: dark;
   --ct-bg: #1b1a19;
+  --timeline-background: #0a0a0a;
+  --timeline-message: #1a1a1a;
+  --timeline-system: #262626;
+  --message-code-header: #1a1a1a;
+  --message-code-background: #0d0d0d;
+  --tool-search: #c6a2ef;
   --ct-side: #151413;
   --ct-surface: #232221;
   --ct-hover: #24231f;
@@ -134,7 +146,14 @@
   --r-full: 999px;
   --titlebar-h: 44px;
   --side-w: 248px;
-  --read-w: 740px;
+  --read-w: 800px;
+  --timeline-message-spacing: 20px;
+  --timeline-turn-highlight: color-mix(
+    in srgb,
+    var(--warning) 24%,
+    transparent
+  );
+  --motion-timeline-highlight: 2s;
   --page-w: 1040px;
   --page-narrow-w: 760px;
   --pairing-w: 680px;
@@ -330,6 +349,29 @@
   --layout-inbox-empty-height: 20rem;
 }
 
+[data-turn-highlight]::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background-color: var(--timeline-turn-highlight);
+  animation: timeline-turn-highlight var(--motion-timeline-highlight) ease-out;
+}
+
+@keyframes timeline-turn-highlight {
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-turn-highlight]::after {
+    animation: none;
+  }
+}
+
 @theme inline {
   --breakpoint-desktop: 73.75rem;
   --font-sans: var(--ct-font);
@@ -394,6 +436,19 @@
 
   --color-background: var(--background);
   --color-navigation: var(--navigation);
+  --text-timeline-message-size: 15px;
+  --color-timeline-background: var(--timeline-background);
+  --color-timeline-message: var(--timeline-message);
+  --color-timeline-system: var(--timeline-system);
+  --color-tool-search: var(--tool-search);
+  --color-message-code-header: var(--message-code-header);
+  --color-message-code-background: var(--message-code-background);
+  --color-message-code-text: #f2f2f2;
+  --color-message-code-muted: #b4b4b4;
+  --color-message-code-keyword: #d5a6f4;
+  --color-message-code-string: #a7d68c;
+  --color-message-code-name: #82cfff;
+  --color-message-code-value: #f1bd82;
   --color-surface: var(--surface);
   --color-surface-muted: var(--surface-muted);
   --color-surface-elevated: var(--surface-elevated);

@@ -106,7 +106,7 @@ export function PendingActionDock({
       ref={dockRef}
       aria-labelledby="pending-action-dock-title"
       className={cn(
-        'min-w-0 rounded-md border border-status-waiting/30 bg-surface-elevated shadow-sm',
+        'min-w-0 rounded-md border-2 border-status-waiting bg-timeline-system shadow-sm',
         className,
       )}
     >

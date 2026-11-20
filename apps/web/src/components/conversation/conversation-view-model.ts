@@ -34,6 +34,12 @@ export interface ConversationToolViewModel {
   readonly presentationKind?: ToolPresentationKind
   readonly description?: string
   readonly outputSummary?: string
+  readonly subject?: string
+  readonly displayCommand?: string
+  readonly output?: string
+  readonly outputTruncated?: boolean
+  readonly durationMs?: number
+  readonly failureSummary?: string
   readonly actionLabel?: string
   readonly delta?: {
     readonly additions: number
@@ -121,10 +127,18 @@ export interface ConversationFailureViewModel extends ExecutionFailurePresentati
   readonly retryInput?: string
 }
 
+export interface ConversationTurnHeaderViewModel {
+  readonly time: string
+  readonly status?: ExecutionStatus | 'interrupted'
+}
+
 export interface ConversationTimelineViewModel {
   readonly dayLabel: string
   readonly nativeHistory?: ConversationNativeHistoryViewModel
   readonly blocks: readonly ConversationTimelineBlockViewModel[]
+  readonly turnHeaders?: Readonly<
+    Record<string, ConversationTurnHeaderViewModel>
+  >
 }
 
 export interface ConversationNativeHistoryViewModel {
@@ -185,6 +199,7 @@ export interface ConversationViewModel {
   readonly projectRootPath?: string
   readonly timeline: ConversationTimelineViewModel
   readonly changes: ConversationChangesViewModel
+  readonly viewedFiles?: readonly string[]
   readonly terminal: ConversationTerminalViewModel
   readonly context: readonly ConversationContextReferenceViewModel[]
   readonly pendingApprovals: readonly ConversationApprovalViewModel[]

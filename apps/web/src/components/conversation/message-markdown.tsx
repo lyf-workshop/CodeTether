@@ -1,4 +1,15 @@
-import { memo, type ReactNode } from 'react'
+import { memo, useEffect, useState, type ReactNode } from 'react'
+
+import {
+  CodeBlock,
+  type CodeBlockToken,
+} from '@codetether/ui/components/product/code-block'
+
+import {
+  highlightMessageCode,
+  messageCodeLanguage,
+  messageCodeLanguageLabel,
+} from './message-code-highlight'
 
 import {
   parseMessageMarkdown,
@@ -8,17 +19,19 @@ import { presentProjectPaths } from './message-presentation'
 
 interface MessageMarkdownProps {
   readonly children: string
+  readonly messageId?: string
   readonly projectRootPath?: string
 }
 
 export const MessageMarkdown = memo(function MessageMarkdown({
   children,
+  messageId,
   projectRootPath,
 }: MessageMarkdownProps) {
   const blocks = parseMessageMarkdown(children)
 
   return (
-    <div className="mt-2 min-w-0 space-y-3 break-words text-base font-regular leading-normal text-text-primary [overflow-wrap:anywhere]">
+    <div className="mt-2 min-w-0 space-y-3 break-words text-timeline-message-size font-regular leading-normal text-text-primary [overflow-wrap:anywhere]">
       {blocks.map((block, index) => {
         const key = `${block.kind}:${index}`
         if (block.kind === 'paragraph') {
@@ -81,21 +94,66 @@ export const MessageMarkdown = memo(function MessageMarkdown({
           )
         }
         return (
-          <pre
+          <MessageCodeBlock
             key={key}
-            tabIndex={0}
-            aria-label={
-              block.language ? `${block.language} 代码块` : 'AI 工具代码块'
+            code={presentProjectPaths(block.value, projectRootPath)}
+            fence={block.language}
+            expansionKey={
+              messageId === undefined ? undefined : messageId + ':' + index
             }
-            className="max-w-full overflow-x-auto rounded-sm border border-border/70 bg-surface-code/80 p-3 text-sm leading-relaxed text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            <code>{presentProjectPaths(block.value, projectRootPath)}</code>
-          </pre>
+          />
         )
       })}
     </div>
   )
 })
+
+function MessageCodeBlock({
+  code,
+  fence,
+  expansionKey,
+}: {
+  readonly code: string
+  readonly fence?: string
+  readonly expansionKey?: string
+}) {
+  const language = messageCodeLanguage(fence)
+  const [highlight, setHighlight] = useState<{
+    readonly code: string
+    readonly language: typeof language
+    readonly lines: readonly (readonly CodeBlockToken[])[]
+  }>()
+
+  useEffect(() => {
+    if (language === undefined) return
+    let active = true
+    void highlightMessageCode(code, language).then(
+      (lines) => {
+        if (active) setHighlight({ code, language, lines })
+      },
+      () => {
+        // Plain text stays readable if a grammar cannot load or tokenize.
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [code, language])
+
+  return (
+    <CodeBlock
+      appearance="message"
+      code={code}
+      language={messageCodeLanguageLabel(language)}
+      expansionKey={expansionKey}
+      highlightedLines={
+        highlight?.code === code && highlight.language === language
+          ? highlight.lines
+          : undefined
+      }
+    />
+  )
+}
 
 function InlineContent({
   projectRootPath,

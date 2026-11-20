@@ -44,7 +44,7 @@ export function ConversationFailureCard({
       aria-labelledby={titleId}
       aria-describedby={descriptionId}
       data-execution-failure="true"
-      className="mt-3 min-w-0 rounded-md border border-danger/35 bg-danger-muted/45 p-4"
+      className="min-w-0 rounded-md border-2 border-danger bg-timeline-system px-4 py-3"
     >
       <div className="flex min-w-0 items-start gap-3">
         <AlertTriangle

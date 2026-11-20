@@ -598,18 +598,6 @@ export function Composer({
         )}
       </form>
 
-      {context === undefined ? null : (
-        <p
-          className="mt-2 flex min-w-0 items-center justify-center gap-1.5 text-xs text-text-secondary"
-          title={context.projectPath}
-        >
-          <FolderOpen aria-hidden="true" className="size-3.5 shrink-0" />
-          <span className="truncate">
-            {context.projectName} · {context.machineName}
-          </span>
-        </p>
-      )}
-
       <p
         id={statusId}
         role={feedback ? 'alert' : 'status'}

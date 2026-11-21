@@ -1,6 +1,6 @@
 # Task: D3b Desktop Usability (Project Page, Computer Page, Sidebar)
 
-**Where it runs.** On Windows or the Mac, whichever is free. This is web-only work, except for the small adapter change in goal 2.
+**Where it runs.** On Windows or the Mac, whichever is free. This is web-only work, except for the small adapter change in goal 2 and the desktop shell change in goal 13.
 
 **Windows-only scope (Owner, 2026-11-18; AD-13).** Run it on Windows only: the Owner develops only on Windows for now. The report's screenshots and the acceptance come from the Windows desktop app.
 
@@ -72,8 +72,9 @@ Before starting, confirm this file has 4 second-level headings and that the last
      - the archived filter set
      - the attention banner
    - if the adapter test in `packages/adapter-codex` covers the fallback title, update it
+   - for goal 13: `cargo test` in `apps/desktop/src-tauri`, with tests for the fallback rules (off-screen, below the minimum, larger than the screen)
 
-**Should:**
+**Should:** goals 6 to 9. Goals 10 to 13 are must: they fix problems found after this prompt was written, and goal 13 is the Owner's request.
 
 6. **Activity where work happens** (findings 11 and 14).
    - Devices-overview project cards show running and waiting-for-approval counts instead of only "1 个会话" and a date.
@@ -108,6 +109,22 @@ Before starting, confirm this file has 4 second-level headings and that the last
     - "检查时间 · 检查于 2026/11/21 05:24" says "检查" once.
     - The "以前的会话" card's two label–value pairs are spaced or stacked so that a value never runs into the next label ("支持查找 Claude Code").
 
+13. **The window remembers its size and position** (`2026-11-21-alpha5-hands-on-ui-review.md`, finding 5).
+    - **Authorization.** The Owner authorized this native feature on 2026-11-21. It is the only native feature this task adds.
+    - **Today:** every start opens the window at 1440 × 900, centered (`tauri.conf.json`). The Owner works at 1900 × 1250 px at 150 % scaling, so after each restart or update they resize it again.
+    - **Change:** the main window reopens with the size, position and maximized state it had last. Use Tauri's official window-state plugin, or explain why not.
+      - Restore only size, position and maximized state. Never restore visibility: the window starts hidden, and `host_supervisor.rs` shows it when the Host is ready. That stays as it is, and so does closing to the tray.
+      - The last state survives each of these: closing to the tray and reopening from it, quitting from the tray and starting again from the Start menu, and the one-click update's restart. The update exits the app to run the installer, so save before it exits, or whenever the window is moved or resized.
+      - **A saved position that no longer fits** falls back to the default centered window, and so does a saved size below the minimum (1100 × 700) or larger than the screen. Examples: a monitor that was removed, or a different scaling.
+      - **Dev and diagnostic builds** never read or write the installed app's saved state, including the W0f diagnostic profile.
+    - **Report:**
+      - where the state is stored, and confirm it holds only window geometry
+      - what happens on the first start after updating from alpha.5, when nothing is saved yet
+    - **Verify on Windows** with an isolated desktop build:
+      - Set 1900 × 1250 px at (304, 34), quit from the tray, start again, and measure the window. Repeat with the window maximized.
+      - Plant an off-screen position in the isolated build's saved state, then start it.
+      - Quote each measured rectangle.
+
 ## Known facts
 
 Line numbers refer to `4801ef1`.
@@ -132,6 +149,11 @@ Line numbers refer to `4801ef1`.
 - **Demo data.** The README demo data gives two local projects, one conversation each, all completed, and two open Attention items. To check counts and dots, create running and waiting states with a real local Codex run in a scratch project.
 - **The review's screenshots** are in `C:\Users\Administrator\AppData\Local\Temp\claude\f1eed4d30b5bb503\60ba83ab-1cea-4a54-a949-667ddf3e701e\scratchpad\ui-review\shots\` on the Windows PC (02-devices, 03-device-local, 04-project, 09b-new-conversation-project, 19-archived, 31-add-project). That folder is temporary; capture your own baseline.
 
+- **The main window** (`apps/desktop/src-tauri/tauri.conf.json` at `5aa8ae5`):
+  - It is 1440 × 900, centered, with a minimum of 1100 × 700, and starts hidden (`"visible": false`).
+  - `host_supervisor.rs` shows it once the Host is ready, and closing it hides it to the tray (Phase 4G.1).
+  - The desktop already uses the official dialog, notification, shell, single-instance, deep-link and updater plugins.
+
 ## Boundaries
 
 - **Decide yourself:**
@@ -147,6 +169,7 @@ Line numbers refer to `4801ef1`.
   - a layout that departs from the prototype pages listed above
 - **Do not:**
   - change the conversation page (D2.5) or the Composer (X1 tasks)
+  - add any native feature other than goal 13's window state, or change how the window starts, hides or quits
   - edit `AGENTS.md` or `docs/`
   - push `main`, merge or tag
   - read or print credentials

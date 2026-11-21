@@ -41,6 +41,7 @@ Claude Code used the installed app itself after the alpha.5 release, as it did a
 - **Narrow windows.**
   - At 1100 and 800 CSS px, the conversation, 设备 and Settings hold together.
   - At 800 px the inspector hides, and Settings' section list becomes tabs.
+  - The window's minimum is 1100 × 700 (`tauri.conf.json`). Claude Code reached 800 px with `MoveWindow`, which ignores that minimum; a user cannot drag the window that narrow.
   - After the stale state described under "Not counted", four resizes of the conversation took effect in 37–53 ms each.
 - **The default-model notice** shows in a new conversation. Once the conversation's first Turn has run, the conversation has its own model, so on reopening the notice is gone. That is correct.
 
@@ -70,7 +71,7 @@ Claude Code used the installed app itself after the alpha.5 release, as it did a
 5. **The window forgets its size.**
    - After the restart the window opened at 2182 × 1406 px, not the Owner's 1900 × 1250 at (304, 34). The release agent saw the same after the update.
    - Remembering the window's size and position is a native feature. AGENTS.md keeps native features out of scope until a task prompt authorizes them.
-   - **Owner decision:** add it to D3b, for example with Tauri's window-state plugin, or leave it.
+   - **The Owner decided on 2026-11-21:** the app remembers the window's size and position. This is D3b, goal 13.
 
 **Already in D3b:**
 

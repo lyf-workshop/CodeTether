@@ -140,3 +140,4 @@ Nothing was rewritten to pass a check, and the tag stands.
 - **New dependencies:** add a release's new dependencies to the store before the offline install.
 - **The cold-start observer** should keep sampling when the window is briefly hidden.
 - **Clean-up:** removing the pnpm links before `git worktree remove` worked, and can be reused.
+- **The window's rectangle** (D3b goal 13): set a non-default size and position before the update, then check that the updated app opens with it and stays hidden until the Host is ready (`d3b-desktop-usability.md`, decision 5).

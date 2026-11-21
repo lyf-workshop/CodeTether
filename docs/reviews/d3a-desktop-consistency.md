@@ -23,7 +23,7 @@
 
 On the Owner's real data, however, the new status vocabulary turns stale and unreachable facts into red "暂时不可用" badges (must-fix 1 and 2). D3a merges after W0e, so it ships after alpha.5 unless both finish together.
 
-**Status.** Follow-up round 1 (`f1db6cd`) met must-fix 1 and 2, but its dated note moves titles and badges (must-fix 4). Must-fix 3 and 4 and the merge with W0e remain; see "Follow-up round 1" at the end.
+**Status.** Accepted on 2026-11-21 at `6f3dc65`, after two follow-up rounds and the merge with W0e. D3a and W0e finished together, so D3a ships in alpha.5: the alpha.5 release prompt merges it first (`release-alpha5-prompt.md`). See the follow-up sections at the end.
 
 ## Checked hands-on
 
@@ -125,3 +125,68 @@ W0e merges first; it is the last change before alpha.5. The report predicts five
 - **Check:** measure the three surfaces above. Titles agree within 1 px, badges' right edges agree within 1 px, and the two New Conversation options are the same height. Add before and after screenshots.
 
 This does not depend on W0e. Do it now with must-fix 3's preparation, then merge `main` when W0e lands.
+
+## Follow-up round 2 and the merge with W0e (2026-11-21, `6f3dc65`)
+
+**What changed.**
+
+- `cdcd287`: must-fix 4. `ProviderSummaryBadge` has two placements:
+  - **row:** the badge is right-aligned, with the note below it
+  - **inline:** the badge sits beside the tool's name, with the note on its own left-aligned line
+- `6f3dc65` merges `origin/main` at W0e's `6553480`:
+  - It resolves eight conflicted files.
+  - It moves W0e's "正在检查…" derivation unchanged into `providerSummary` (must-fix 3).
+- Report: the same file, extended. Evidence:
+  - `d3a-followup-round2-2026-11-20/`: native Windows screenshots and measurements
+  - `d3a-post-w0e-2026-11-20/`: the checks after the merge, some from labelled fixtures
+- **Gates (as reported) on the merged tree:**
+  - typecheck, lint, build and test passed: 2,634 passed, 14 skipped
+  - desktop `cargo test`: 93 tests
+  - Prettier on the changed files
+
+**Merge checked.**
+
+- `6553480` is W0e's two-parent merge (`6fb9dd3`, `dc9cfe2`). Its tree equals the clean `git merge-tree` result, and no tag was added.
+- In `6f3dc65`, W0e's Host, Protocol, desktop, Composer and Select files equal `main`'s.
+- The 关于与检查 summary "CodeTether 可以使用" and "等待批准" are kept.
+- The "正在检查…" condition reads exactly as W0e's, now with the computer's kind as a parameter. It applies to Devices, the computer page, Setup, 关于与检查 and New Conversation.
+
+**Checked hands-on.**
+
+- **Setup:** `6f3dc65` built in Claude Code's review worktree, with the same isolated Host and data as the first review. Viewed in headless Chromium at 1440 px.
+- **Evidence:** `d3a-review-2026-11-20/`:
+  - `cold-devices.txt`, `cold-computer.txt`, `cold-about.txt`, `cold-dialog.txt`
+  - `r2-measure.txt`, `r2-warm.txt`
+  - the `cold-*` and `warm-*` screenshots
+- **Cold start on four surfaces,** one cold Host start each, read every 250 ms:
+  - Devices, the computer page and New Conversation:
+    - Both local tools read "正在检查…", then "可用", after 7.3–7.8 s.
+    - "暂时不可用" never showed, and no badge was red apart from two unreachable project folders.
+    - In the dialog, Codex was selectable as soon as it read "可用".
+  - 关于与检查 showed the same sequence. Its one "暂时不可用" is a plain detail row ("运行环境") of an unreachable computer, under that card's note that the details are last known.
+- **Must-fix 4, met:**
+
+| Surface          | Codex                             | Claude Code (with the note) |
+| ---------------- | --------------------------------- | --------------------------- |
+| Computer page    | badge's right edge at 1,311.0 px  | 1,311.0 px                  |
+| 关于与检查       | title at y 871.3 px               | 871.3 px                    |
+| New Conversation | 82 px option, badge at y 488.1 px | 82 px, 488.1 px             |
+
+- **The ready dialog** shows no amber notice. W0e's round 2 had seen "执行正常 · 上次已知。…" there.
+- **A Codex Turn through one Approval,** live, in the scratch project:
+  - The tool row and the dock read "等待批准" while the request was pending.
+  - "允许一次" let the Turn complete, in 43 s.
+- **The conversation header** reads "Codex GPT-6.1 Terra", as the Composer's menu does.
+- **关于与检查 with no project** reads "CodeTether 可以使用 · 这台电脑至少有一个 AI 工具可用。选择项目后即可开始工作。"
+- **The sidebar.** The two paired computers report `authentication_failed`, so they stay in the list, which is correct. W0e's offline group holds only `offline` computers; the agent showed it with a labelled fixture.
+
+**Verdict.** Accepted. D3a merges into `main` and ships in alpha.5. The release prompt merges it first and checks that the merge's tree equals `6f3dc65`'s.
+
+**Carried items.**
+
+1. **A badge that contradicts its rows.**
+   - On 关于与检查, the Raspberry Pi's Codex reads "已安装，待确认", while its 版本 and 运行环境 rows read "未安装".
+   - The Host's last-known facts hold one installation (0.161.0) that is unusable and not selected, and no version on the tool.
+   - This goes to D3b (`d3b-desktop-usability-prompt.md`, goal 10).
+2. **The vocabulary** is recorded in 10 §3.1 with this review.
+3. **"正在检查…" stays inferred** until the Host reports it. The task is in the plan's backlog with the reasoning reset (carried item 1 above).

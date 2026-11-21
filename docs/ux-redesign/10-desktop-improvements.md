@@ -324,6 +324,40 @@ Note (2026-11-13): file paths in this document such as `apps/web/app/(main)/devi
 | Local Machine | This computer |
 | Remote Machine | Computer name |
 
+#### AI Tool Status (D3a, accepted 2026-11-21)
+
+One function, `providerSummary` in `apps/web/src/provider/provider-presentation.ts`, gives every surface the same summary for a tool: Devices, a computer's page, 关于与检查, Setup and New Conversation. Do not give a page its own status logic.
+
+Two cases come before the table:
+
+- **A computer that is not connected.** Its tools get no red badge. A known installation reads the neutral "已安装，待确认"; otherwise the row reads "电脑未连接" with no badge. The computer's own status explains why.
+- **This computer, right after CodeTether starts.** Until the Host's first check of a tool finishes, the tool reads the neutral "正在检查…" and cannot be chosen for a new conversation.
+
+Otherwise, the first row that applies wins:
+
+| Order | Summary | Tone | When |
+| --- | --- | --- | --- |
+| 1 | 未安装 | Neutral | No installation was found. |
+| 2 | 需要更新 CodeTether | Warning | The selected installation needs a newer CodeTether. |
+| 3 | 需要更新此 AI 工具 | Warning | The tool's version is not supported. |
+| 4 | 未登录 | Warning | The tool's service needs sign-in. A custom service that fails sign-in reads 暂时不可用, with a configuration step. |
+| 5 | 暂时不可用 | Danger | The installation or its service cannot be used, or the current execution check failed. |
+| 6 | 可用，部分功能受限 | Warning | Compatibility is limited, or the current execution check is degraded. |
+| 7 | 已安装，待确认 | Neutral | Installed, but compatibility or the service is not confirmed yet. |
+| 8 | 可用 | Success | None of the above. |
+
+Rules:
+
+- **Only a current execution check changes the summary.** That is one made since CodeTether last started.
+  - An older failure or degradation shows as a dated note, such as "上次运行失败 · 10月22日".
+  - It changes neither the summary nor whether the tool can be chosen.
+- A tool that was never checked shows "尚未检查" with no badge.
+- A current problem gets one plain sentence with the next step.
+- **The badge has two placements,** and the note never moves a title or a badge:
+  - **in a row:** right-aligned, with the note below it
+  - **inline:** beside the tool's name, with the note on its own line
+- "正在检查…" is inferred from missing facts today. A later Host task reports it directly (plan backlog).
+
 ---
 
 ### 3.2 Provider Differentiation (I2)

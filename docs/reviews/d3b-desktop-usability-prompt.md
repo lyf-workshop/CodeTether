@@ -90,6 +90,11 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - Failure copy: the repeated "AI 工具未能完成本轮工作。 本轮工作可能不完整。已保存的会话历史仍可查看。" (with its stray double space) says what failed and what to do next, and "请查看电脑详情中的执行状态" links to that page (hands-on review finding 9).
 
    - **"工具输出"** shows a command as the user would type it, not as escaped JSON (`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'node --test'`). This extends D2.5's carried item 3 (`2026-11-19-main-detail-pass.md`, finding 16). The timeline row has the same problem with quotes: Codex's `rg` command reads `"rg --files -g ""!node_modules"" -g ""!vendor"""` (`w0e-windows-fixes.md`, carried item 4).
+10. **A tool's badge agrees with the rows under it** (`d3a-desktop-consistency.md`, follow-up round 2, carried item 1).
+    - On 关于与检查, the Raspberry Pi's Codex reads "已安装，待确认", while its 版本 and 运行环境 rows read "未安装".
+    - The Host's last-known facts hold one installation (0.161.0) that is unusable and not selected, and no version on the tool.
+    - Decide in `provider-presentation.ts` whether such an installation counts as installed. The badge and the rows then say the same thing on every surface.
+    - Add a test with these facts.
 
 ## Known facts
 

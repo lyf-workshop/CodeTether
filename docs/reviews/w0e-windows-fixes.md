@@ -17,7 +17,7 @@
 - `cargo test` in `packages/supervisor-mobile`: 8 unit tests and 4 interop tests. It was run because the phone reads the same filtered 待处理 list.
 - Prettier passed on every changed file. The repository-wide `pnpm format:check` fails on the Windows line-ending baseline (W0f carried item 5).
 
-**Status.** Accepted on 2026-11-20 at `dc9cfe2`, after two follow-up rounds. Merge it into `main`, then release alpha.5.
+**Status.** Accepted on 2026-11-20 at `dc9cfe2`, after two follow-up rounds. Merged into `main` on 2026-11-20 as `6553480`, and ships in alpha.5.
 
 - Round 1 (`74969a8`) fixed both must-fix items.
 - Claude Code's live check then found the real cause of the cold-start error that goal 10 targeted.

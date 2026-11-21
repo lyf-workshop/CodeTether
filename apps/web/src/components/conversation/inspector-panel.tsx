@@ -337,29 +337,28 @@ export function InspectorPanel({
   className,
   ...props
 }: InspectorPanelProps) {
-  const supportsDiff =
-    conversation.capabilities.supportsDiff &&
-    displayContext?.machineKind === 'local'
-  const supportsToolOutput =
-    conversation.capabilities.supportsToolOutput ||
-    conversation.capabilities.supportsShell
+  const localCodex =
+    conversation.agent === 'codex' && displayContext?.machineKind === 'local'
+  const supportsDiff = localCodex
   const viewedFiles = conversation.viewedFiles ?? []
   const showViewedFiles = !supportsDiff && viewedFiles.length > 0
+  const hasToolOutput =
+    terminal.lines.length > 0 ||
+    conversation.timeline.blocks.some(
+      (block) =>
+        block.kind === 'agent-run' &&
+        block.executions.some(
+          (execution) =>
+            execution.kind === 'tool' || execution.kind === 'shell',
+        ),
+    )
+  const supportsToolOutput = localCodex || hasToolOutput
   const effectiveTab = resolveConversationInspectorTab(tab ?? initialTab, {
     supportsDiff,
     hasChanges: changes.files.length > 0,
     hasViewedFiles: showViewedFiles,
     supportsToolOutput,
-    hasToolOutput:
-      terminal.lines.length > 0 ||
-      conversation.timeline.blocks.some(
-        (block) =>
-          block.kind === 'agent-run' &&
-          block.executions.some(
-            (execution) =>
-              execution.kind === 'tool' || execution.kind === 'shell',
-          ),
-      ),
+    hasToolOutput,
   })
 
   return (

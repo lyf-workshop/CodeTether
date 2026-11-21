@@ -12,6 +12,7 @@ import { MAX_PENDING_APPROVALS } from '../dist/api/approval-registry.js'
 import { HostEventPublisher } from '../dist/api/host-event-publisher.js'
 import { HostRuntimeDiagnostics } from '../dist/api/host-runtime-diagnostics.js'
 import { HostService, HostServiceError } from '../dist/api/host-service.js'
+import { LOCAL_CODEX_CAPABILITIES } from '../dist/api/provider-registry.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 
 const epoch = '33333333-3333-4333-8333-333333333333'
@@ -32,6 +33,7 @@ class FakeRuntime {
   nextProviderThreadId = undefined
   nextProviderTurnId = undefined
   nextProviderModel = undefined
+  nextModelFallback = undefined
   nextTurnError = undefined
   #conversationSequence = 0
   #turnSequence = 0
@@ -72,9 +74,12 @@ class FakeRuntime {
     this.conversationCalls.push({ options, providerThreadId })
     const model = this.nextProviderModel ?? options.model
     this.nextProviderModel = undefined
+    const modelFallback = this.nextModelFallback
+    this.nextModelFallback = undefined
     return {
       providerThreadId,
       ...(model === undefined ? {} : { model }),
+      ...(modelFallback === undefined ? {} : { modelFallback }),
     }
   }
 
@@ -545,6 +550,7 @@ test('a failed Conversation creation releases its Project reservation', async (t
       error.code === 'provider_start_failed' &&
       error.failure?.reason === 'provider_start_failed',
   )
+  assert.deepEqual(fixture.service.snapshot().conversations, [])
 
   const deleted = await fixture.service.deleteProject(project.projectId, {
     actionId: 'act_project_delete_after_failure',
@@ -826,6 +832,115 @@ test('create, start, and interrupt route only through bound provider identities'
   ])
   assert.match(conversationId, /^conv_/)
   assert.match(turnId, /^turn_/)
+})
+
+test('new Codex fallback is returned once while existing stored model stays unchanged', async (t) => {
+  const fixture = await createFixture(t, {
+    descriptor: {
+      provider: 'codex',
+      displayName: 'Codex',
+      availability: 'available',
+      capabilities: LOCAL_CODEX_CAPABILITIES,
+      models: [
+        { id: 'gpt-existing', label: 'Existing' },
+        { id: 'gpt-default', label: 'Default', isDefault: true },
+      ],
+    },
+  })
+  const existing = await createConversation(fixture, 'act_existing_model', {
+    model: 'gpt-existing',
+  })
+  fixture.runtime.nextProviderModel = 'gpt-default'
+  fixture.runtime.nextModelFallback = {
+    configuredModel: 'gpt-unlisted',
+    selectedModel: 'gpt-default',
+  }
+  const created = await createConversation(fixture, 'act_default_fallback')
+  assert.deepEqual(created.data.modelFallback, {
+    configuredModel: 'gpt-unlisted',
+    selectedModel: 'gpt-default',
+  })
+  assert.equal(created.data.conversation.model, 'gpt-default')
+  assert.equal(created.data.conversation.currentModel, 'gpt-default')
+  await startTurn(
+    fixture,
+    created.data.conversation.conversationId,
+    'act_fallback_first_turn',
+  )
+  assert.equal(fixture.runtime.turnCalls[0].options.model, 'gpt-default')
+  const old = fixture.service
+    .snapshot()
+    .conversations.find(
+      ({ conversationId }) =>
+        conversationId === existing.data.conversation.conversationId,
+    )
+  assert.equal(old?.model, 'gpt-existing')
+  assert.equal(old?.currentModel, 'gpt-existing')
+})
+
+test('Host marks an unlisted model with a structured model-unavailable failure', async (t) => {
+  const fixture = await createFixture(t, {
+    descriptor: {
+      provider: 'codex',
+      displayName: 'Codex',
+      availability: 'available',
+      capabilities: LOCAL_CODEX_CAPABILITIES,
+      models: [{ id: 'gpt-listed', label: 'Listed', isDefault: true }],
+    },
+  })
+  await assert.rejects(
+    createConversation(fixture, 'act_unlisted_model', {
+      model: 'gpt-unlisted',
+    }),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 400 &&
+      error.failure?.reason === 'provider_model_unavailable',
+  )
+  assert.equal(fixture.runtime.conversationCalls.length, 0)
+
+  const created = await createConversation(fixture, 'act_listed_model', {
+    model: 'gpt-listed',
+  })
+  fixture.runtime.descriptor = {
+    ...fixture.runtime.descriptor,
+    models: [{ id: 'gpt-new', label: 'New', isDefault: true }],
+  }
+  await assert.rejects(
+    startTurn(
+      fixture,
+      created.data.conversation.conversationId,
+      'act_old_model_turn',
+    ),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.code === 'invalid_request' &&
+      error.httpStatus === 400 &&
+      error.failure?.reason === 'provider_model_unavailable',
+  )
+  assert.equal(fixture.runtime.turnCalls.length, 0)
+  const old = fixture.service
+    .snapshot()
+    .conversations.find(
+      ({ conversationId }) =>
+        conversationId === created.data.conversation.conversationId,
+    )
+  assert.equal(old?.model, 'gpt-listed')
+
+  fixture.runtime.nextProviderModel = 'gpt-returned-unlisted'
+  fixture.runtime.nextModelFallback = {
+    configuredModel: 'gpt-configured-unlisted',
+    selectedModel: 'gpt-new',
+  }
+  await assert.rejects(
+    createConversation(fixture, 'act_returned_unlisted_model'),
+    (error) =>
+      error instanceof HostServiceError &&
+      error.failure?.reason === 'provider_model_unavailable',
+  )
+  assert.equal(fixture.runtime.disposeCalls.length, 1)
+  assert.equal(fixture.service.snapshot().conversations.length, 1)
 })
 
 test('duplicate actionId replays one result and rejects changed input or operation', async (t) => {

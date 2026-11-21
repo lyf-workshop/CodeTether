@@ -369,6 +369,21 @@ test('structured canonical failures control pre-Turn mutation copy without raw f
   }
 })
 
+test('Host model-unavailable envelope presents a specific safe recovery message', () => {
+  const error = new CodeTetherResponseError(400, {
+    protocolVersion: 1,
+    actionId: 'act_model_unavailable',
+    code: 'invalid_request',
+    message: 'raw Codex JSON-RPC diagnostics must stay private',
+    details: { stderr: 'Authorization: Bearer secret-token' },
+    failure: canonicalFailure('provider_model_unavailable'),
+  })
+  const message = mutationErrorMessage(error, '发送消息')
+  assert.equal(message, '所选模型当前不可用。请选择列表中的可用模型后再发送。')
+  assert.equal(message.includes('JSON-RPC'), false)
+  assert.equal(message.includes('secret-token'), false)
+})
+
 class FakeMutationClient {
   constructor(implementations = {}) {
     this.implementations = implementations

@@ -289,6 +289,7 @@ export function conversationCreationProviderOptions(
   lifecycles: readonly MachineProviderLifecycle[] | undefined,
   discovery?: MachineProviderDiscovery,
   connectionState?: MachineConnectionState,
+  machineKind?: MachineSummary['kind'],
 ) {
   return providers.map((provider) => {
     const lifecycle =
@@ -300,8 +301,10 @@ export function conversationCreationProviderOptions(
       lifecycle,
       discovery,
       connectionState,
+      machineKind,
     )
     const eligibility = newConversationProviderEligibility(provider, summary)
+    if (eligibility.checking) return { provider, eligibility }
     const selectedInstallation = lifecycle?.installations.find(
       (installation) =>
         installation.selected &&

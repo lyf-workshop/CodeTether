@@ -127,6 +127,7 @@ const summaryStatuses = {
   updateTool: { label: '需要更新此 AI 工具', variant: 'warning' },
   updateApp: { label: '需要更新 CodeTether', variant: 'warning' },
   unconfirmed: { label: '已安装，待确认', variant: 'secondary' },
+  checking: { label: '正在检查…', variant: 'secondary' },
   missing: { label: '未安装', variant: 'secondary' },
   unavailable: { label: '暂时不可用', variant: 'danger' },
 } as const
@@ -137,6 +138,7 @@ export interface ProviderSummary {
   readonly freshnessLabel: string
   readonly executionHistoryLabel?: string
   readonly advisory?: string
+  readonly checking?: boolean
 }
 
 /** Read-only projection of the selected installation. This never grants or denies selection. */
@@ -150,6 +152,9 @@ export function providerSummary(
   lifecycle?: MachineProviderLifecycle,
   discovery?: MachineProviderDiscovery,
   connectionState?: MachineConnectionState,
+  machineKind: MachineSummary['kind'] | undefined = connectionState === 'local'
+    ? 'local'
+    : undefined,
 ): ProviderSummary {
   const selected = lifecycle?.installations.find(
     (item) =>
@@ -210,6 +215,26 @@ export function providerSummary(
             : { executionHistoryLabel }),
         }
       : { freshnessLabel: '电脑未连接' }
+  }
+  // A local startup placeholder retains only prior lifecycle observations.
+  // A completed failed probe reports current compatibility or execution
+  // failure, so it must keep its actual unavailable label.
+  const checking =
+    machineKind === 'local' &&
+    provider?.availability === 'unavailable' &&
+    lifecycle !== undefined &&
+    lifecycle.installations.every(
+      (installation) => installation.compatibility?.freshness !== 'current',
+    ) &&
+    (provider.executionHealth?.state === 'unknown' ||
+      provider.executionHealth?.freshness === 'last_known')
+  if (checking) {
+    return {
+      status: summaryStatuses.checking,
+      freshnessLabel,
+      executionHistoryLabel,
+      checking: true,
+    }
   }
   if (
     !provider ||
@@ -491,7 +516,7 @@ export function providerLifecyclePresentation(
 
 export function machineProviderSummary(
   detail: {
-    readonly machine?: Pick<MachineSummary, 'connectionState'>
+    readonly machine?: Pick<MachineSummary, 'connectionState' | 'kind'>
     readonly providers: readonly ProviderDescriptor[]
     readonly providerLifecycles?: readonly MachineProviderLifecycle[]
     readonly providerDiscovery?: MachineProviderDiscovery
@@ -504,6 +529,7 @@ export function machineProviderSummary(
     providerLifecycleForMachine(detail.providerLifecycles ?? [], provider),
     detail.providerDiscovery,
     connectionState,
+    detail.machine?.kind,
   )
 }
 

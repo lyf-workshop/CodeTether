@@ -429,7 +429,11 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   ])
 
   assert.match(dialog, /providerPresentationsForMachine\(/u)
-  assert.match(dialog, /machineDetailQuery\.data\?\.providers/u)
+  assert.match(dialog, /machineDetail === undefined\s*\?\s*\[\]/u)
+  assert.match(
+    dialog,
+    /providerPresentationsForMachine\(machineDetail\.providers\)/u,
+  )
   const fields = await readFile(
     new URL('components/conversations/new-conversation-fields.tsx', root),
     'utf8',
@@ -467,7 +471,7 @@ test('existing UI surfaces consume Provider truth without adding a switch to Det
   )
   assert.match(
     composer,
-    /gate\.canInterrupt && interruptController !== undefined/u,
+    /gate\.kind === 'unavailable' &&\s*gate\.canInterrupt &&\s*interruptController !== undefined/u,
   )
   assert.match(composer, /interruptController\.execute\(\)/u)
   assert.doesNotMatch(chromeActions, /interruptController|supportsInterrupt/u)

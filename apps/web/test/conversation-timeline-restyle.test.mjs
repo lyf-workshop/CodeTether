@@ -101,6 +101,38 @@ test('a projected file edit shows its path and reported changed line count', () 
   assert.match(markup, /src\/demo\.ts/u)
 })
 
+test('the running placeholder is plain muted text without a status border', () => {
+  const markup = renderToStaticMarkup(
+    h(ConversationTimeline, {
+      agent: 'codex',
+      timeline: {
+        dayLabel: '今天',
+        blocks: [
+          {
+            kind: 'agent-run',
+            id: 'waiting-for-events',
+            turnId: 'turn_fixture',
+            time: '08:40',
+            status: 'running',
+            executions: [],
+            outcomeText: '实时活动将在这里显示。',
+          },
+        ],
+        turnHeaders: { turn_fixture: { time: '08:40', status: 'running' } },
+      },
+      changes: { files: [], totals: { additions: 0, deletions: 0 } },
+      pendingApprovals: [],
+    }),
+  )
+  const placeholder =
+    /<p[^>]*data-turn-running="running"[^>]*>[^<]*实时活动将在这里显示。<\/p>/u.exec(
+      markup,
+    )?.[0]
+  assert.ok(placeholder, markup)
+  assert.match(placeholder, /text-text-muted/u)
+  assert.doesNotMatch(placeholder, /border-|bg-timeline-system|正在运行/u)
+})
+
 test('viewed files retain real Read targets and recognized Search results only', () => {
   const tool = (kind, command, output, status = 'completed') => ({
     kind,

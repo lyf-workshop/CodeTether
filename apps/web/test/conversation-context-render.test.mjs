@@ -71,13 +71,14 @@ const conversation = {
 
 test('Claude gets viewed files only when a recorded path exists', () => {
   const blank = panel()
-  assert.match(blank, /工具输出/u)
+  assert.doesNotMatch(blank, />工具输出<\/button>/u)
   assert.doesNotMatch(blank, /已查看文件|因此没有“变更”|>文件<|>变更</u)
   const markup = panel({
     conversation: { ...conversation, viewedFiles: ['docs/README.md'] },
   })
   assert.match(markup, /已查看文件<\/button>/u)
   assert.match(markup, /docs\/README\.md/u)
+  assert.doesNotMatch(markup, />变更<\/button>|>工具输出<\/button>/u)
   assert.match(
     markup,
     /aria-selected="true"[^>]*tab-?[^>]*files|aria-selected="true"[^>]*trigger-files/u,
@@ -87,6 +88,8 @@ test('Claude gets viewed files only when a recorded path exists', () => {
 test('known remote or unknown provenance cannot advertise local-only Diff', () => {
   const supportsDiff = {
     ...conversation,
+    agent: 'codex',
+    provider: 'codex',
     viewedFiles: ['docs/README.md'],
     capabilities: { ...capabilities, supportsDiff: true },
   }
@@ -107,6 +110,8 @@ test('local Diff owns its one changes tab and hides zero count chips', () => {
   const markup = panel({
     conversation: {
       ...conversation,
+      agent: 'codex',
+      provider: 'codex',
       viewedFiles: ['docs/README.md'],
       capabilities: { ...capabilities, supportsDiff: true },
     },
@@ -118,6 +123,35 @@ test('local Diff owns its one changes tab and hides zero count chips', () => {
   assert.match(markup, /src\/write\.ts/u)
   assert.match(markup, />\+3</u)
   assert.doesNotMatch(markup, /已查看文件|>文件<\/button>|>-0<|<h3[^>]*>变更/u)
+})
+
+test('Codex history keeps changes and tool output tabs while its runtime is unavailable', () => {
+  const localCodex = {
+    ...conversation,
+    agent: 'codex',
+    provider: 'codex',
+    capabilities: {
+      ...capabilities,
+      supportsDiff: false,
+      supportsToolOutput: false,
+      supportsShell: false,
+    },
+    terminal: { lines: ['test output'], truncated: false },
+    changes: {
+      files: [
+        { id: 'change1', path: 'src/write.ts', additions: 3, deletions: 0 },
+      ],
+      totals: { additions: 3, deletions: 0 },
+    },
+  }
+  const markup = panel({
+    conversation: localCodex,
+    displayContext: { ...context, machineKind: 'local' },
+    changes: localCodex.changes,
+    terminal: localCodex.terminal,
+  })
+  assert.match(markup, />变更<\/button>/u)
+  assert.match(markup, /工具输出<\/button>/u)
 })
 
 test('Inspector honors explicit deep links and selects first supported tab with content', () => {
@@ -167,6 +201,23 @@ test('unreported Tool output is hidden rather than promoted into a terminal feat
   })
   assert.doesNotMatch(markup, /value="tools"|id="[^"]*trigger-tools"/u)
   assert.doesNotMatch(markup, /<input[^>]*terminal/u)
+})
+
+test('Claude history with unavailable live controls shows only its viewed files', () => {
+  const markup = panel({
+    conversation: {
+      ...conversation,
+      viewedFiles: ['README.md'],
+      capabilities: {
+        ...capabilities,
+        supportsToolOutput: false,
+        supportsDiff: false,
+      },
+    },
+    displayContext: { ...context, machineKind: 'local' },
+  })
+  assert.match(markup, /已查看文件<\/button>/u)
+  assert.doesNotMatch(markup, />变更<\/button>|>工具输出<\/button>/u)
 })
 
 test('title context keeps Provider, model and reasoning without repeating location', async () => {

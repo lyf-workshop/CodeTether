@@ -2,9 +2,11 @@ import type {
   ApprovalDecision,
   AttentionId,
   AttentionItem,
+  AttentionListResponse,
   ConversationId,
   TurnId,
 } from '@codetether/protocol'
+import type { InboxFilter } from './inbox-model.js'
 
 export type ApprovalAttentionItem = Extract<AttentionItem, { type: 'approval' }>
 export type CompletedAttentionItem = Extract<
@@ -59,4 +61,75 @@ export async function acknowledgeInboxAttention(
     throw new Error('Only completed or failed Attention can be acknowledged')
   }
   await client.resolveAttention(item.attentionId)
+}
+
+export interface BulkAcknowledgementProgress {
+  readonly attempted: number
+  readonly total: number
+}
+
+export interface BulkAcknowledgementResult extends BulkAcknowledgementProgress {
+  readonly cleared: number
+  readonly failed: number
+}
+
+export interface BulkAttentionClient extends InboxActionClient {
+  listAttention(options: {
+    readonly status: 'open'
+    readonly type: 'failed' | 'completed_review'
+    readonly limit: 100
+  }): Promise<AttentionListResponse>
+}
+
+/** Uses the existing per-item action path, including its idempotent action IDs. */
+export async function bulkAcknowledgeInboxAttention(
+  client: BulkAttentionClient,
+  filter: InboxFilter,
+  summary: AttentionListResponse['summary'],
+  onProgress: (progress: BulkAcknowledgementProgress) => void,
+): Promise<BulkAcknowledgementResult> {
+  const allTypes = [
+    { type: 'failed' as const, count: summary.failedOpen },
+    { type: 'completed_review' as const, count: summary.completedReviewOpen },
+  ]
+  const types = allTypes.filter(
+    (entry) => filter === 'all' || entry.type === filter,
+  )
+  const total = types.reduce((count, entry) => count + entry.count, 0)
+  let attempted = 0
+  let cleared = 0
+  onProgress({ attempted, total })
+
+  for (const { type, count } of types) {
+    const attemptedIds = new Set<string>()
+    let attemptedForType = 0
+    while (attemptedForType < count) {
+      let page: AttentionListResponse
+      try {
+        page = await client.listAttention({ status: 'open', type, limit: 100 })
+      } catch {
+        break
+      }
+      const candidates = page.items.filter(
+        (item): item is FailedAttentionItem | CompletedAttentionItem =>
+          item.type === type && !attemptedIds.has(item.attentionId),
+      )
+      if (candidates.length === 0) break
+      for (const item of candidates) {
+        if (attemptedForType >= count) break
+        attemptedIds.add(item.attentionId)
+        attemptedForType += 1
+        attempted += 1
+        try {
+          await acknowledgeInboxAttention(client, item)
+          cleared += 1
+        } catch {
+          // Failed items stay open and are included in the final count.
+        }
+        onProgress({ attempted, total })
+      }
+    }
+  }
+
+  return { attempted, total, cleared, failed: total - cleared }
 }

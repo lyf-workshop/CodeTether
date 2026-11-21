@@ -224,6 +224,79 @@ test('current execution failure remains a red summary', () => {
   assert.equal(summary.executionHistoryLabel, undefined)
 })
 
+test('local startup checking is one neutral shared summary across machine surfaces', () => {
+  const pending = {
+    ...descriptor,
+    availability: 'unavailable',
+    executionHealth: { state: 'unknown', freshness: 'current' },
+  }
+  const detail = {
+    machine: { kind: 'local', connectionState: 'local' },
+    providers: [pending],
+    providerLifecycles: [{ provider: 'codex', installations: [] }],
+  }
+  const summary = machineProviderSummary(detail, 'codex')
+  assert.equal(summary.checking, true)
+  assert.deepEqual(summary.status, {
+    label: '正在检查…',
+    variant: 'secondary',
+  })
+  assert.equal(summary.advisory, undefined)
+  assert.deepEqual(
+    machineProviderSummary(
+      {
+        providers: detail.providers,
+        providerLifecycles: detail.providerLifecycles,
+      },
+      'codex',
+      'local',
+    ).status,
+    summary.status,
+  )
+  const badge = renderToStaticMarkup(
+    h(MachineProviderBadge, { read: { data: detail }, provider: 'codex' }),
+  )
+  assert.match(badge, /正在检查…/u)
+  assert.match(badge, /data-variant="secondary"/u)
+  assert.doesNotMatch(badge, /data-variant="danger"/u)
+
+  const remote = machineProviderSummary(
+    { ...detail, machine: { kind: 'remote', connectionState: 'online' } },
+    'codex',
+  )
+  assert.equal(remote.checking, undefined)
+  assert.notEqual(remote.status?.label, '正在检查…')
+})
+
+test('current compatibility or execution failure excludes the local checking state', () => {
+  const pending = {
+    ...descriptor,
+    availability: 'unavailable',
+    executionHealth: { state: 'unknown', freshness: 'last_known' },
+  }
+  assert.equal(
+    providerSummary(pending, lifecycle('verified'), undefined, 'local')
+      .checking,
+    undefined,
+  )
+  const oldCompatibility = lifecycle('verified')
+  oldCompatibility.installations[0].compatibility.freshness = 'last_known'
+  const currentFailure = providerSummary(
+    {
+      ...pending,
+      executionHealth: { state: 'unavailable', freshness: 'current' },
+    },
+    oldCompatibility,
+    undefined,
+    'local',
+  )
+  assert.equal(currentFailure.checking, undefined)
+  assert.deepEqual(currentFailure.status, {
+    label: '暂时不可用',
+    variant: 'danger',
+  })
+})
+
 test('last-known version and login failures cannot override current tool facts', () => {
   for (const failure of [
     { reason: 'provider_unsupported_version', userAction: 'update_provider' },

@@ -320,6 +320,82 @@ test('lists Attention in product priority order and summarizes all open types', 
   })
 })
 
+test('open Attention hides archived conversations and returns on restore without resolving history', () => {
+  withFixture(({ store, workspace }) => {
+    seedConversationGraph(store, workspace, { includeOther: true })
+    const completed = store.createAttentionItem(
+      attention(30, 'completed_review', {
+        payload: { conversationTitle: 'Archived result' },
+      }),
+    )
+    const failed = store.createAttentionItem(
+      attention(31, 'failed', {
+        payload: {
+          conversationTitle: 'Archived failure',
+          error: { code: 'provider_error', message: 'AI tool failed' },
+        },
+      }),
+    )
+    const active = store.createAttentionItem({
+      ...attention(32, 'failed', {
+        payload: {
+          conversationTitle: 'Active failure',
+          error: { code: 'provider_error', message: 'AI tool failed' },
+        },
+      }),
+      projectId: otherProjectId,
+      conversationId: otherConversationId,
+      turnId: otherTurnId,
+    })
+
+    const before = listAttention(store, { status: 'open', limit: 50 })
+    assert.equal(before.summary.totalOpen, 3)
+    assert.equal(before.items.length, 3)
+
+    store.archiveConversation(conversationId, timeAt(40))
+    const archived = listAttention(store, { status: 'open', limit: 50 })
+    assert.deepEqual(
+      archived.items.map((item) => item.attentionId),
+      [active.attentionId],
+    )
+    assert.equal(archived.summary.totalOpen, archived.items.length)
+    assert.equal(archived.summary.failedOpen, 1)
+    assert.equal(archived.summary.completedReviewOpen, 0)
+    assert.equal(store.getAttentionItem(completed.attentionId).status, 'open')
+    assert.equal(store.getAttentionItem(failed.attentionId).status, 'open')
+
+    store.unarchiveConversation(conversationId, timeAt(41))
+    const restored = listAttention(store, { status: 'open', limit: 50 })
+    assert.equal(restored.summary.totalOpen, 3)
+    assert.deepEqual(
+      restored.items.map((item) => item.attentionId),
+      before.items.map((item) => item.attentionId),
+    )
+  })
+})
+
+test('an anomalous open Approval remains visible even if its conversation is archived', () => {
+  withFixture(({ store, workspace }) => {
+    seedConversationGraph(store, workspace)
+    store.archiveConversation(conversationId, timeAt(40))
+    const approval = store.createAttentionItem(
+      attention(42, 'approval', {
+        payload: {
+          approvalId: 'approval_archived01',
+          kind: 'command',
+          actionTitle: 'Review command',
+        },
+      }),
+    )
+    const report = listAttention(store, { status: 'open', limit: 50 })
+    assert.deepEqual(
+      report.items.map((item) => item.attentionId),
+      [approval.attentionId],
+    )
+    assert.equal(report.summary.approvalOpen, 1)
+  })
+})
+
 test('restart expires only open Approval Attention and records host_restart', () => {
   withFixture(({ store, workspace }) => {
     seedConversationGraph(store, workspace)

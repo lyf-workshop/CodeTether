@@ -7,6 +7,9 @@ import { loadWebComponent } from './fixtures/render-ui.mjs'
 import { deriveLiveControlAvailability } from '../.tmp/test-dist/components/conversation/conversation-controls.js'
 
 const { Composer } = loadWebComponent('components/conversation/composer.tsx')
+const { conversationDrafts } = loadWebComponent(
+  'components/conversation/conversation-drafts.ts',
+)
 const capabilities = {
   canCompose: true,
   canInterrupt: false,
@@ -56,20 +59,61 @@ test('submitting keeps the mounted editor visible and readonly with Send disable
   assert.match(markup, /<textarea[^>]*readOnly=""/u)
   assert.match(markup, /aria-disabled="true"/u)
   assert.match(markup, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
-  assert.doesNotMatch(markup, /正在发送消息/u)
+  assert.match(markup, /title="正在发送消息"/u)
+  assert.match(markup, /回车发送，Shift \+ 回车换行/u)
+  assert.doesNotMatch(markup, /草稿会保留，CodeTether 不会自动重发消息/u)
   assert.doesNotMatch(markup, /演示/u)
 })
 
-test('running gate keeps the draft editor mounted, visible and readonly', () => {
+test('ready, sending, running and waiting keep the same Composer rows', () => {
+  const states = [
+    render(),
+    render({ controller: controller('submitting') }),
+    render({
+      capabilities: { ...capabilities, canCompose: false },
+      controller: controller('running'),
+    }),
+    render({
+      capabilities: { ...capabilities, canCompose: false },
+      controller: controller('waiting'),
+    }),
+  ]
+  const rows = states.map((markup) => {
+    const document = new JSDOM(markup).window.document
+    const form = document.querySelector('form[data-composer-state]')
+    assert.ok(form)
+    assert.ok(form.querySelector('[data-composer-editor]'))
+    assert.equal(form.querySelector('[data-composer-editor]').hidden, false)
+    return [...form.children].map((child) =>
+      child.getAttribute('data-composer-editor') === ''
+        ? 'editor'
+        : child.tagName,
+    )
+  })
+  for (const actual of rows.slice(1)) assert.deepEqual(actual, rows[0])
+})
+
+test('running and waiting keep the editor editable, show state in the action bar and block Send', () => {
   const markup = render({
     capabilities: { ...capabilities, canCompose: false },
     controller: controller('running'),
   })
   assert.match(markup, /data-composer-state="running"/u)
   assert.doesNotMatch(markup, /hidden=""[^>]*data-composer-editor/u)
-  assert.match(markup, /<textarea[^>]*readOnly=""/u)
+  assert.doesNotMatch(markup, /<textarea[^>]*readOnly=""/u)
   assert.match(markup, /Codex 正在工作/u)
-  assert.match(markup, /草稿会保留/u)
+  assert.match(markup, /这一轮结束后：回车发送，Shift \+ 回车换行/u)
+  assert.match(markup, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
+  assert.doesNotMatch(markup, /min-h-16/u)
+
+  const waiting = render({
+    capabilities: { ...capabilities, canCompose: false },
+    controller: controller('waiting'),
+  })
+  assert.doesNotMatch(waiting, /<textarea[^>]*readOnly=""/u)
+  assert.match(waiting, /等你批准/u)
+  assert.match(waiting, /批准后：回车发送，Shift \+ 回车换行/u)
+  assert.match(waiting, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
 })
 
 test('stop exists once only for a descriptor-supported known local active Turn', () => {
@@ -84,6 +128,21 @@ test('stop exists once only for a descriptor-supported known local active Turn',
     interruptController: { pending: false, async execute() {} },
   })
   assert.equal((markup.match(/>停止<\/button>/gu) ?? []).length, 1)
+  assert.doesNotMatch(markup, /<button[^>]*aria-label="发送消息"/u)
+  assert.match(markup, /class="[^"]*w-20 justify-center/u)
+})
+
+test('Claude Code keeps disabled Send with a reason while running', () => {
+  const markup = render({
+    agent: 'claude',
+    providerName: 'Claude Code',
+    capabilities: { ...capabilities, canCompose: false },
+    controller: controller('running'),
+  })
+  assert.match(markup, /Claude Code 正在工作/u)
+  assert.match(markup, /<button[^>]*aria-label="发送消息"[^>]*disabled=""/u)
+  assert.match(markup, /title="这一轮完成后可以发送下一条消息/u)
+  assert.doesNotMatch(markup, />停止<\/button>/u)
 })
 
 test('paired session never renders Stop and explicitly explains that boundary', () => {
@@ -105,20 +164,44 @@ test('paired session never renders Stop and explicitly explains that boundary', 
 test('archive swaps visible input for a real restore action without deleting the textarea', () => {
   const markup = render({
     archived: true,
+    capabilities: {
+      ...capabilities,
+      canInterrupt: true,
+      supportsInterrupt: true,
+    },
+    interruptController: { pending: false, async execute() {} },
     recoveryAction: h('button', { type: 'button' }, '恢复会话'),
   })
   assert.match(markup, /data-composer-state="archived"/u)
   assert.match(markup, /<textarea/u)
   assert.match(markup, /恢复会话/u)
   assert.match(markup, /历史记录仍可查看/u)
+  assert.doesNotMatch(markup, />停止<\/button>/u)
 })
 
-test('read and search limitation is shown from context capabilities, not a name check', () => {
+test('unavailable panel without interrupt authority does not offer Stop', () => {
   const markup = render({
+    controller: controller('unavailable'),
+    capabilities: {
+      ...capabilities,
+      canInterrupt: false,
+      supportsInterrupt: true,
+    },
+    interruptController: { pending: false, async execute() {} },
+  })
+  assert.match(markup, /data-composer-state="unavailable"/u)
+  assert.doesNotMatch(markup, />停止<\/button>/u)
+})
+
+test('read and search limitation moves to the placeholder while Claude keeps the keyboard hint', () => {
+  const markup = render({
+    agent: 'claude',
     providerName: '测试 AI 工具',
     context: { ...context, readSearchOnly: true },
   })
-  assert.match(markup, /测试 AI 工具 在这里只读取和搜索文件，不会修改代码/u)
+  assert.match(markup, /placeholder="问 Claude 一个问题（只读取和搜索文件）…"/u)
+  assert.match(markup, /回车发送，Shift \+ 回车换行/u)
+  assert.doesNotMatch(markup, /在这里只读取和搜索文件，不会修改代码/u)
 })
 
 test('canonical errors remain visible and do not replace state or invent retry work', () => {
@@ -156,39 +239,82 @@ function controller(state) {
 }
 
 test('catalog warnings preserve the unavailable model and require a readable catalog', () => {
-  const modelSettings = {
-    currentModel: 'account-unavailable-model',
-    availableModels: [],
-    reasoningOptions: [],
-    canSelectModel: true,
-    canSelectReasoning: false,
-  }
-  const control = {
-    pending: false,
-    loadingModels: false,
-    async refreshModels() {},
-    async update() {},
-  }
-  const renderCatalog = (catalog) =>
-    render({
-      modelSettings,
-      modelSwitchController: { ...control, catalog },
+  conversationDrafts.write('conv_gate01', 'Send this message')
+  try {
+    const modelSettings = {
+      currentModel: 'account-unavailable-model',
+      availableModels: [],
+      reasoningOptions: [],
+      canSelectModel: true,
+      canSelectReasoning: false,
+    }
+    const control = {
+      pending: false,
+      loadingModels: false,
+      async refreshModels() {},
+      async update() {},
+    }
+    const renderCatalog = (catalog) =>
+      render({
+        modelSettings,
+        modelSwitchController: { ...control, catalog },
+      })
+    const markup = renderCatalog({
+      availableModels: [{ id: 'available-model', name: 'Available' }],
     })
-  const markup = renderCatalog({
-    availableModels: [{ id: 'available-model', name: 'Available' }],
-  })
-  assert.match(markup, /account-unavailable-model 不在此账号的可用模型中/u)
-  assert.match(markup, /切换模型，当前 account-unavailable-model/u)
-  assert.match(markup, /附件即将推出/u)
-  assert.match(markup, /语音即将推出/u)
-  assert.match(markup, /剩余上下文/u)
-  assert.doesNotMatch(markup, /模型切换功能开发中/u)
-  for (const catalog of [
-    undefined,
-    {},
-    { availableModels: [{ id: modelSettings.currentModel, name: 'Current' }] },
-  ]) {
-    assert.doesNotMatch(renderCatalog(catalog), /不在此账号的可用模型中/u)
+    assert.match(markup, /account-unavailable-model 不在此账号的可用模型中/u)
+    assert.match(markup, /请先从模型菜单选择可用模型/u)
+    assert.match(markup, /切换模型，当前 account-unavailable-model/u)
+    const blocked = new JSDOM(markup).window.document.querySelector(
+      'button[aria-label="发送消息"]',
+    )
+    assert.equal(blocked?.disabled, true)
+    assert.equal(
+      blocked?.parentElement?.getAttribute('title'),
+      '请先从模型菜单选择可用模型，再发送消息',
+    )
+    const recordFallback = render({
+      model: 'record-unlisted-model',
+      modelSettings: { ...modelSettings, currentModel: undefined },
+      modelSwitchController: {
+        ...control,
+        catalog: {
+          availableModels: [{ id: 'available-model', name: 'Available' }],
+        },
+      },
+    })
+    assert.match(
+      recordFallback,
+      /record-unlisted-model 不在此账号的可用模型中/u,
+    )
+    assert.equal(
+      new JSDOM(recordFallback).window.document.querySelector(
+        'button[aria-label="发送消息"]',
+      )?.disabled,
+      true,
+    )
+    assert.match(markup, /附件即将推出/u)
+    assert.match(markup, /语音即将推出/u)
+    assert.doesNotMatch(markup, /剩余上下文/u)
+    assert.doesNotMatch(markup, /模型切换功能开发中/u)
+    for (const catalog of [
+      undefined,
+      {},
+      {
+        availableModels: [{ id: modelSettings.currentModel, name: 'Current' }],
+      },
+    ]) {
+      const permitted = renderCatalog(catalog)
+      assert.doesNotMatch(permitted, /不在此账号的可用模型中/u)
+      assert.equal(
+        new JSDOM(permitted).window.document.querySelector(
+          'button[aria-label="发送消息"]',
+        )?.disabled,
+        false,
+      )
+    }
+  } finally {
+    conversationDrafts.clear('conv_gate01')
   }
 })
 

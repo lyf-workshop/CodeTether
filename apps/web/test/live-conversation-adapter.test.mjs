@@ -13,6 +13,9 @@ const timestamp = '2026-08-26T12:00:00.000Z'
 const { PendingActionDock } = loadWebComponent(
   'components/conversation/pending-action-dock.tsx',
 )
+const { ToolExecutionRow } = loadWebComponent(
+  'components/conversation/conversation-tool-rows.tsx',
+)
 
 test('maps one Host read model to the frozen read-only Conversation ViewModel', () => {
   const viewModel = createLiveConversationViewModel(
@@ -81,6 +84,46 @@ test('maps every pending Approval and enables only advertised live controls', ()
     ),
     ['approval_live01', 'approval_live02'],
   )
+})
+
+test('only the tool awaiting its own Approval reads waiting instead of running', () => {
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      status: 'waiting',
+      tools: [
+        tool('item_tool01', 'command', 'running', { command: 'node --test' }),
+        tool('item_tool02', 'command', 'running', {
+          command: 'Get-Location',
+          order: 4,
+        }),
+      ],
+      pendingApprovals: [{ ...approval(), itemId: 'item_tool01' }],
+    }),
+  )
+  const executions = viewModel.timeline.blocks.flatMap((block) =>
+    block.kind === 'agent-run'
+      ? block.executions.filter((execution) => execution.kind === 'tool')
+      : [],
+  )
+  assert.deepEqual(
+    executions.map((execution) => execution.tool.status),
+    ['waiting', 'running'],
+  )
+  const markup = renderToStaticMarkup(
+    h(ToolExecutionRow, { execution: executions[0] }),
+  )
+  assert.match(markup, /data-tool-status="waiting"/u)
+  assert.match(markup, /等待批准/u)
+  assert.doesNotMatch(markup, /运行中|animate-spin/u)
+})
+
+test('a Turn without activity has quiet placeholder copy without a running label', () => {
+  const viewModel = createLiveConversationViewModel(conversation())
+  const run = viewModel.timeline.blocks.find(
+    (block) => block.kind === 'agent-run',
+  )
+  assert.equal(run?.outcomeText, '实时活动将在这里显示。')
+  assert.equal(run?.status, 'running')
 })
 
 for (const [kind, title] of [

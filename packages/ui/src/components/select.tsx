@@ -4,8 +4,32 @@ import { Select as SelectPrimitive } from 'radix-ui'
 
 import { cn } from '@codetether/ui/lib/cn'
 
-function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
-  return <SelectPrimitive.Root data-slot="select" {...props} />
+function itemLabel(children: React.ReactNode): string {
+  if (typeof children === 'string' || typeof children === 'number') {
+    return String(children)
+  }
+  if (Array.isArray(children)) {
+    return children.map(itemLabel).join('')
+  }
+  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
+    return itemLabel(children.props.children)
+  }
+  return ''
+}
+
+function Select({
+  onValueChange,
+  ...props
+}: React.ComponentProps<typeof SelectPrimitive.Root>) {
+  return (
+    <SelectPrimitive.Root
+      data-slot="select"
+      {...props}
+      onValueChange={(value) => {
+        if (value !== '') onValueChange?.(value)
+      }}
+    />
+  )
 }
 
 function SelectGroup(
@@ -73,10 +97,9 @@ function SelectContent({
         position={position}
         sideOffset={sideOffset}
         className={cn(
-          'relative z-50 max-h-(--radix-select-content-available-height) min-w-40 overflow-x-hidden overflow-y-auto rounded-sm border border-border-strong bg-surface-elevated p-1 text-text-primary shadow-elevation',
+          'relative z-50 w-max max-w-[var(--radix-select-content-available-width,calc(100vw-1rem))] max-h-(--radix-select-content-available-height) min-w-40 overflow-x-hidden overflow-y-auto rounded-sm border border-border-strong bg-surface-elevated p-1 text-text-primary shadow-elevation',
           'outline-none motion-reduce:transition-none',
-          position === 'popper' &&
-            'w-[var(--radix-select-trigger-width)] min-w-[var(--radix-select-trigger-width)]',
+          position === 'popper' && 'min-w-[var(--radix-select-trigger-width)]',
           className,
         )}
         {...props}
@@ -108,20 +131,52 @@ function SelectLabel({
 function SelectItem({
   children,
   className,
+  textValue,
+  title,
+  onFocus,
+  onPointerEnter,
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Item>) {
+  const label = textValue ?? itemLabel(children)
+  const itemTitle =
+    title === undefined || title === label ? label : `${label} · ${title}`
+  const [labelClipped, setLabelClipped] = React.useState(false)
+  const hasAdditionalDetail = title !== undefined && title !== label
+
+  const measureLabel = (element: HTMLElement): void => {
+    const text = element.querySelector<HTMLElement>(
+      '[data-slot="select-item-text"]',
+    )
+    setLabelClipped(text !== null && text.scrollWidth > text.clientWidth + 1)
+  }
+
   return (
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        'relative flex min-h-8 w-full cursor-default items-center rounded-xs py-1.5 pr-8 pl-2 text-sm text-text-secondary outline-none select-none',
+        'relative flex min-h-8 w-full min-w-0 max-w-full cursor-default items-center overflow-hidden rounded-xs py-1.5 pr-8 pl-2 text-sm text-text-secondary outline-none select-none',
         'data-[highlighted]:bg-surface-muted data-[highlighted]:text-text-primary',
-        'data-[state=checked]:text-text-primary data-[disabled]:pointer-events-none data-[disabled]:opacity-40',
+        'data-[state=checked]:text-text-primary data-[disabled]:cursor-not-allowed data-[disabled]:opacity-40',
+        '[&>span:first-child]:block [&>span:first-child]:min-w-0 [&>span:first-child]:max-w-full [&>span:first-child]:truncate',
         className,
       )}
+      textValue={textValue}
+      title={
+        hasAdditionalDetail || labelClipped ? itemTitle || undefined : undefined
+      }
+      onFocus={(event) => {
+        measureLabel(event.currentTarget)
+        onFocus?.(event)
+      }}
+      onPointerEnter={(event) => {
+        measureLabel(event.currentTarget)
+        onPointerEnter?.(event)
+      }}
       {...props}
     >
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      <SelectPrimitive.ItemText data-slot="select-item-text">
+        {children}
+      </SelectPrimitive.ItemText>
       <span className="absolute right-2 flex size-4 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
           <Check aria-hidden="true" className="size-4 text-primary" />

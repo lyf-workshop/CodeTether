@@ -379,6 +379,11 @@ function projectTurnTimeline(
   const pendingApprovals = model.pendingApprovals.filter(
     (approval) => approval.turnId === turn.id,
   )
+  const awaitingApprovalItemIds = new Set(
+    pendingApprovals.flatMap((approval) =>
+      approval.itemId === undefined ? [] : [approval.itemId],
+    ),
+  )
 
   const flushExecutions = (): void => {
     if (executions.length === 0) return
@@ -413,6 +418,11 @@ function projectTurnTimeline(
       continue
     }
     if (activity.kind === 'tool') {
+      const toolStatus =
+        activity.tool.status === 'running' &&
+        awaitingApprovalItemIds.has(activity.tool.itemId)
+          ? 'waiting'
+          : activity.tool.status
       const presentation = createTimelineToolPresentation({
         command: activity.tool.command ?? activity.tool.name,
         ...(activity.tool.kind === undefined
@@ -454,17 +464,16 @@ function projectTurnTimeline(
           id: activity.tool.id,
           presentationKind: presentation.kind,
           title:
-            activity.tool.status === 'failed'
+            toolStatus === 'failed'
               ? presentation.title
               : presentProjectPaths(
                   presentation.subtitle ?? presentation.title,
                   model.cwd,
                 ),
-          ...(activity.tool.status === 'failed' ||
-          presentation.subtitle === undefined
+          ...(toolStatus === 'failed' || presentation.subtitle === undefined
             ? {}
             : { description: presentation.title }),
-          status: activity.tool.status,
+          status: toolStatus,
           ...(displaySubject === undefined ? {} : { subject: displaySubject }),
           displayCommand: presentation.displayCommand,
           ...(activity.tool.output === undefined
@@ -518,7 +527,7 @@ function projectTurnTimeline(
       outcomeText:
         pendingApprovals.length > 0
           ? `${providerName} 正在等待批准。`
-          : `${providerName} 正在运行，实时活动将在这里显示。`,
+          : '实时活动将在这里显示。',
     })
   }
 

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 
 import {
+  bulkAcknowledgementCount,
   createInboxItemPresentation,
   createInboxModel,
   filterAttentionItems,
@@ -77,6 +78,19 @@ test('local Inbox filters preserve the exact Host ordering', () => {
   ])
   assert.deepEqual(filterAttentionItems(hostOrder, 'failed'), [failed])
   assert.deepEqual(hostOrder, [approval, failed, completed, approval])
+})
+
+test('bulk action count follows the selected tab and excludes Approvals', () => {
+  const summary = {
+    totalOpen: 7,
+    approvalOpen: 3,
+    completedReviewOpen: 2,
+    failedOpen: 2,
+  }
+  assert.equal(bulkAcknowledgementCount(summary, 'all'), 4)
+  assert.equal(bulkAcknowledgementCount(summary, 'failed'), 2)
+  assert.equal(bulkAcknowledgementCount(summary, 'completed_review'), 2)
+  assert.equal(bulkAcknowledgementCount(summary, 'approval'), 0)
 })
 
 test('command Approval presentation removes a PowerShell wrapper from the card', () => {

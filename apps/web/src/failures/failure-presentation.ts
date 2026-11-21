@@ -94,8 +94,8 @@ const failureReasonCopy = {
   },
   provider_model_unavailable: {
     title: '所选模型不可用',
-    cause: 'AI 工具拒绝了此轮请求使用的模型。',
-    guidance: '请在执行电脑上确认账号可以使用哪些模型，选择可用模型后再发送。',
+    cause: '所选模型当前不可用。',
+    guidance: '请选择列表中的可用模型后再发送。',
   },
   provider_service_unavailable: {
     title: 'AI 工具服务暂时不可用',

@@ -88,6 +88,42 @@ test('Workspace status decoration is limited to actionable activity', () => {
   assert.equal(workspaceConversationStatusLabel('completed'), undefined)
 })
 
+test('the current conversation has a distinct sidebar token in both themes', async () => {
+  const css = await readFile(
+    new URL('../../../packages/ui/src/styles/globals.css', import.meta.url),
+    'utf8',
+  )
+  const source = await readWorkspaceSidebarSource()
+  const [light, dark] = css.split("[data-theme='dark'] {")
+  assert.ok(light && dark)
+  const color = (theme, name) => {
+    const value = new RegExp(`--${name}:\\s*(#[a-f\\d]{6})`, 'iu').exec(
+      theme,
+    )?.[1]
+    assert.ok(value, name)
+    return value
+  }
+  const luminance = (hex) => {
+    const [red, green, blue] = hex
+      .slice(1)
+      .match(/../gu)
+      .map((part) => parseInt(part, 16) / 255)
+      .map((value) =>
+        value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4,
+      )
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+  }
+  for (const theme of [light, dark]) {
+    const sidebar = luminance(color(theme, 'ct-side'))
+    const current = luminance(color(theme, 'ct-sidebar-current'))
+    const ratio =
+      (Math.max(sidebar, current) + 0.05) / (Math.min(sidebar, current) + 0.05)
+    assert.ok(ratio >= 1.5, `sidebar current contrast ${ratio}`)
+  }
+  assert.match(source, /selected\s*\? 'bg-sidebar-current/u)
+  assert.match(css, /--color-sidebar-current:\s*var\(--ct-sidebar-current\)/u)
+})
+
 test('Workspace Sidebar owns project navigation, scoped creation, and one lazy Conversation query', async () => {
   const source = await readWorkspaceSidebarSource()
   const detail = await readFile(

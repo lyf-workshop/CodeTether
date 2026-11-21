@@ -8,6 +8,7 @@ export interface NewConversationProviderEligibility {
   readonly eligible: boolean
   readonly label: string
   readonly summary: ProviderSummary
+  readonly checking?: boolean
   readonly executionAdvisory?: string
 }
 
@@ -16,6 +17,14 @@ export function newConversationProviderEligibility(
   provider: ProviderPresentation,
   summary = providerSummary(provider),
 ): NewConversationProviderEligibility {
+  if (summary.checking) {
+    return {
+      eligible: false,
+      checking: true,
+      label: `${provider.displayName} · 正在检查…`,
+      summary,
+    }
+  }
   const supported =
     provider.capabilities.streaming && provider.capabilities.resume
   const eligible = provider.available && supported

@@ -2,12 +2,14 @@ import { queryOptions, type QueryClient } from '@tanstack/react-query'
 import type {
   AttentionListResponse,
   AttentionStatus,
+  AttentionType,
   HostEventEnvelope,
 } from '@codetether/protocol'
 
 export interface AttentionReadClient {
   listAttention(options?: {
     readonly status?: AttentionStatus
+    readonly type?: AttentionType
     readonly limit?: number
     readonly signal?: AbortSignal
   }): Promise<AttentionListResponse>
@@ -32,7 +34,11 @@ export function attentionListQueryOptions(client: AttentionReadClient) {
 export function shouldRefreshAttention(
   eventType: HostEventEnvelope['type'],
 ): boolean {
-  return eventType === 'attention.created' || eventType === 'attention.resolved'
+  return (
+    eventType === 'attention.created' ||
+    eventType === 'attention.resolved' ||
+    eventType === 'conversation.updated'
+  )
 }
 
 /** Attention events are reliable and low-frequency, so durable truth is refetched. */

@@ -71,6 +71,11 @@ export interface BackgroundRuntimeCapability {
   ): Promise<() => void>
 }
 
+export interface DesktopWindowTheme {
+  readonly available: boolean
+  setTheme(theme: 'light' | 'dark' | null): Promise<void>
+}
+
 export interface ProviderGuidanceCapability {
   readonly available: boolean
   open(provider: ProviderId): Promise<void>
@@ -195,6 +200,7 @@ export interface NativeCapabilities {
   readonly directoryPicker: DirectoryPicker
   readonly notifications: DesktopNotifications
   readonly backgroundRuntime: BackgroundRuntimeCapability
+  readonly windowTheme: DesktopWindowTheme
   readonly providerGuidance: ProviderGuidanceCapability
   readonly desktopUpdater: DesktopUpdaterCapability
   readonly hostIdentity: HostIdentityCapability
@@ -230,6 +236,7 @@ interface TauriWindowModule {
     isFocused(): Promise<boolean>
     isMinimized(): Promise<boolean>
     isVisible(): Promise<boolean>
+    setTheme(theme: 'light' | 'dark' | null): Promise<void>
   }
 }
 
@@ -294,6 +301,11 @@ const unavailableBackgroundRuntime: BackgroundRuntimeCapability = {
   subscribeToResume: () => Promise.resolve(() => undefined),
 }
 
+const unavailableWindowTheme: DesktopWindowTheme = {
+  available: false,
+  setTheme: () => Promise.reject(new Error('Window theme is unavailable.')),
+}
+
 const unavailableProviderGuidance: ProviderGuidanceCapability = {
   available: false,
   open: () =>
@@ -356,6 +368,7 @@ export function createNativeCapabilities(
       directoryPicker: unavailableDirectoryPicker,
       notifications: unavailableDesktopNotifications,
       backgroundRuntime: unavailableBackgroundRuntime,
+      windowTheme: unavailableWindowTheme,
       providerGuidance: unavailableProviderGuidance,
       desktopUpdater: unavailableDesktopUpdater,
       hostIdentity: unavailableHostIdentity,
@@ -605,6 +618,14 @@ export function createNativeCapabilities(
     },
   }
 
+  const windowTheme: DesktopWindowTheme = {
+    available: true,
+    async setTheme(theme) {
+      const { getCurrentWindow } = await loadWindow()
+      await getCurrentWindow().setTheme(theme)
+    },
+  }
+
   const providerGuidance: ProviderGuidanceCapability = {
     available: true,
     async open(provider) {
@@ -734,6 +755,7 @@ export function createNativeCapabilities(
     directoryPicker,
     notifications,
     backgroundRuntime,
+    windowTheme,
     providerGuidance,
     desktopUpdater,
     hostIdentity,

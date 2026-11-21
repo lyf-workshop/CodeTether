@@ -60,11 +60,14 @@ export interface ListAttentionItemsOptions {
   readonly type?: DurableAttentionType
   readonly status?: DurableAttentionStatus
   readonly limit?: number
+  /** Hide open review/failure items for archived Conversations on product reads. */
+  readonly hideArchivedOpen?: boolean
 }
 
 export interface SummarizeAttentionItemsOptions {
   readonly projectId?: ProjectId
   readonly conversationId?: ConversationId
+  readonly hideArchivedOpen?: boolean
 }
 
 export interface DurableAttentionSummary {

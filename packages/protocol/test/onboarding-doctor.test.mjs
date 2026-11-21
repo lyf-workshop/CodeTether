@@ -305,6 +305,17 @@ test('Doctor rejects stale or cross-layer false Ready projections', () => {
   )
   assert.equal(
     DoctorReportSchema.safeParse({ ...report, project: undefined }).success,
+    true,
+  )
+  assert.equal(
+    DoctorReportSchema.safeParse({
+      ...report,
+      project: undefined,
+      providers: report.providers.map((provider) => ({
+        ...provider,
+        state: 'unavailable',
+      })),
+    }).success,
     false,
   )
 

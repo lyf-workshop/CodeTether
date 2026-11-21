@@ -9,13 +9,11 @@ import {
   type ReactNode,
 } from 'react'
 import {
-  CirclePause,
   FolderOpen,
   LoaderCircle,
   Mic,
   Paperclip,
   Send,
-  ShieldCheck,
   Square,
   WifiOff,
 } from 'lucide-react'
@@ -51,6 +49,10 @@ import {
   type ConversationDisplayContext,
 } from './conversation-gate-presentation'
 import { conversationDrafts } from './conversation-drafts'
+import {
+  conversationModelFallbackNotices,
+  type ConversationModelFallbackNotice,
+} from './conversation-model-fallback-notices'
 import {
   COMPOSER_SEND_SHORTCUT_EVENT,
   COMPOSER_SEND_SHORTCUT_KEY,
@@ -109,6 +111,11 @@ export function Composer({
   )
   const [acceptedActionId, setAcceptedActionId] = useState<string>()
   const [sendShortcut, setSendShortcut] = useState(readComposerSendShortcut)
+  const [modelFallback, setModelFallback] = useState<{
+    conversationId: string
+    notice: ConversationModelFallbackNotice
+  }>()
+  const fallbackHandledConversationIdRef = useRef<string | undefined>(undefined)
   const editorRef = useRef<HTMLTextAreaElement>(null)
   const restoreFocusRef = useRef(false)
   const compositionActive = useRef(false)
@@ -123,7 +130,9 @@ export function Composer({
     projectBoundary,
     approvalKind,
   })
-  const canEdit = gate === undefined && controlState !== 'submitting'
+  const canEdit =
+    controlState !== 'submitting' &&
+    (gate === undefined || gate.kind === 'running' || gate.kind === 'waiting')
   const optimisticSend = controller.optimisticSend
   // The Composer can reopen while its earlier submit handler is still pending.
   if (
@@ -136,18 +145,13 @@ export function Composer({
   const editorValue =
     controlState === 'submitting' && optimisticSend?.text === value ? '' : value
   const editorHidden = gate?.kind === 'archived' || gate?.kind === 'unavailable'
-  const canSend =
-    canEdit &&
-    modelSwitchController?.pending !== true &&
-    value.trim().length > 0 &&
-    !(optimisticSend?.state === 'uncertain' && optimisticSend.text === value)
   const feedback =
     controller.error ??
     modelSwitchController?.error ??
     interruptController?.error ??
     externalError
   const modelCanChange =
-    canEdit && !archived && modelSwitchController?.pending !== true
+    canEdit && gate === undefined && modelSwitchController?.pending !== true
   const availableModels =
     modelSwitchController?.catalog === undefined
       ? (modelSettings?.availableModels ?? [])
@@ -167,13 +171,31 @@ export function Composer({
     }
   }, [modelControlRequest])
   const catalog = modelSwitchController?.catalog
+  const currentModel = modelSettings?.currentModel ?? model
   const modelMissing =
     catalog?.availableModels !== undefined &&
-    modelSettings?.currentModel !== undefined &&
-    !catalog.availableModels.some(
-      (item) => item.id === modelSettings.currentModel,
+    currentModel !== undefined &&
+    !catalog.availableModels.some((item) => item.id === currentModel)
+  const canSend =
+    canEdit &&
+    gate === undefined &&
+    !modelMissing &&
+    modelSwitchController?.pending !== true &&
+    value.trim().length > 0 &&
+    !(optimisticSend?.state === 'uncertain' && optimisticSend.text === value)
+  useEffect(() => {
+    if (fallbackHandledConversationIdRef.current === conversationId) return
+    fallbackHandledConversationIdRef.current = conversationId
+    const notice = conversationModelFallbackNotices.take(conversationId)
+    setModelFallback(
+      notice === undefined ? undefined : { conversationId, notice },
     )
-  const currentModel = modelSettings?.currentModel ?? model
+  }, [conversationId])
+  const visibleModelFallback =
+    modelFallback?.conversationId === conversationId &&
+    modelFallback.notice.selectedModel === currentModel
+      ? modelFallback.notice
+      : undefined
   const modelName =
     availableModels.find((model) => model.id === currentModel)?.name ??
     currentModel ??
@@ -183,15 +205,30 @@ export function Composer({
     reasoningOptions.find((option) => option.id === currentReasoning)?.label ??
     currentReasoning ??
     '默认'
-  const placeholder =
+  const basePlaceholder =
     agent === 'codex'
       ? '告诉 Codex 要做什么…'
       : agent === 'claude'
         ? '问 Claude 一个问题…'
         : '输入消息…'
+  const placeholder = context?.readSearchOnly
+    ? `${basePlaceholder.slice(0, -1)}（只读取和搜索文件）…`
+    : basePlaceholder
+  const keyboardHint =
+    sendShortcut === 'enter'
+      ? '回车发送，Shift + 回车换行'
+      : 'Ctrl + 回车发送，回车换行'
   const sendUnavailableReason =
     gate?.description ??
-    (value.trim().length === 0 ? '输入消息后即可发送' : undefined)
+    (controlState === 'submitting'
+      ? '正在发送消息'
+      : modelMissing
+        ? '请先从模型菜单选择可用模型，再发送消息'
+        : modelSwitchController?.pending
+          ? '正在更新模型设置'
+          : value.trim().length === 0
+            ? '输入消息后即可发送'
+            : undefined)
 
   useEffect(() => {
     const syncShortcut = () => setSendShortcut(readComposerSendShortcut())
@@ -274,6 +311,7 @@ export function Composer({
         ? !canSend
         : retry === undefined ||
           !canEdit ||
+          modelMissing ||
           modelSwitchController?.pending === true
     )
       return
@@ -341,15 +379,9 @@ export function Composer({
   }
 
   const GateIcon =
-    gate?.kind === 'waiting'
-      ? ShieldCheck
-      : gate?.kind === 'unavailable'
-        ? gate.navigation === 'project'
-          ? FolderOpen
-          : WifiOff
-        : gate?.kind === 'archived'
-          ? FolderOpen
-          : CirclePause
+    gate?.kind === 'archived' || gate?.navigation === 'project'
+      ? FolderOpen
+      : WifiOff
 
   return (
     <div className="min-w-0">
@@ -382,9 +414,11 @@ export function Composer({
                   setModelOpen(open)
                   if (open) void modelSwitchController.refreshModels()
                 }}
-                onValueChange={(model) =>
+                onValueChange={(model) => {
+                  if (model === '' || model === currentModel) return
+                  setModelFallback(undefined)
                   void modelSwitchController.update({ model })
-                }
+                }}
                 disabled={!modelCanChange}
               >
                 <SelectTrigger
@@ -422,9 +456,6 @@ export function Composer({
                 {modelName}
               </span>
             )}
-            <span className="hidden shrink-0 text-text-muted sm:inline">
-              剩余上下文
-            </span>
             {modelSettings.canSelectReasoning &&
             modelSwitchController !== undefined ? (
               <Select
@@ -435,9 +466,10 @@ export function Composer({
                     ? currentReasoning
                     : ''
                 }
-                onValueChange={(reasoning) =>
+                onValueChange={(reasoning) => {
+                  if (reasoning === '' || reasoning === currentReasoning) return
                   void modelSwitchController.update({ reasoning })
-                }
+                }}
                 disabled={!modelCanChange}
               >
                 <SelectTrigger
@@ -460,13 +492,23 @@ export function Composer({
             )}
           </div>
         )}
-        {modelMissing ? (
-          <p role="status" className="px-4 py-2 text-xs text-warning-text">
-            {currentModel} 不在此账号的可用模型中
+        {visibleModelFallback ? (
+          <p
+            role="status"
+            data-model-fallback-notice
+            className="break-words px-4 py-2 text-xs text-text-secondary"
+          >
+            Codex 配置的默认模型 {visibleModelFallback.configuredModel}{' '}
+            当前不在模型列表中，CodeTether 已选择可用模型 {modelName}
+            。可在上方菜单切换模型。
           </p>
         ) : null}
-        {/* Submission and active work keep the same focused, read-only editor.
-            Only archived/unavailable gates replace the visible input. */}
+        {modelMissing ? (
+          <p role="status" className="px-4 py-2 text-xs text-warning-text">
+            {currentModel} 不在此账号的可用模型中。请先从模型菜单选择可用模型。
+          </p>
+        ) : null}
+        {/* Only archived and unavailable gates replace the visible input. */}
         <div hidden={editorHidden} data-composer-editor className="min-w-0">
           <label htmlFor="conversation-composer" className="sr-only">
             输入消息
@@ -476,7 +518,7 @@ export function Composer({
             id="conversation-composer"
             value={editorValue}
             onChange={(event) => {
-              if (!canEdit || submitActive.current) return
+              if (!canEdit) return
               const next = event.currentTarget.value
               conversationDrafts.write(conversationId, next)
               setValue(next)
@@ -527,42 +569,86 @@ export function Composer({
                 </Button>
               </span>
             </span>
-            <span className="min-w-0 flex-1 text-center text-xs text-text-muted">
-              字数 {editorValue.length}
+            <span
+              className="flex min-w-0 flex-1 items-center justify-center gap-1.5 text-center text-xs text-text-muted"
+              role={
+                gate?.kind === 'running' || gate?.kind === 'waiting'
+                  ? 'status'
+                  : undefined
+              }
+            >
+              {gate?.kind === 'running' ? (
+                <>
+                  <LoaderCircle
+                    aria-hidden="true"
+                    className="size-3.5 shrink-0 motion-safe:animate-spin"
+                  />
+                  <span className="block min-w-0 truncate">{gate.title}</span>
+                </>
+              ) : gate?.kind === 'waiting' ? (
+                <span className="block min-w-0 truncate">等你批准</span>
+              ) : (
+                <>字数 {editorValue.length}</>
+              )}
             </span>
-            <span title={sendUnavailableReason} className="shrink-0">
-              <Button
-                type="submit"
-                size="sm"
-                aria-label="发送消息"
-                disabled={!canSend}
-                aria-describedby={statusId}
-              >
-                <Send aria-hidden="true" />
-                发送
-              </Button>
+            <span
+              title={
+                gate?.canInterrupt && interruptController !== undefined
+                  ? undefined
+                  : sendUnavailableReason
+              }
+              className="shrink-0"
+            >
+              {gate?.canInterrupt &&
+              interruptController !== undefined &&
+              (gate.kind === 'running' || gate.kind === 'waiting') ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  className="w-20 justify-center"
+                  aria-label={
+                    interruptController.pending ? '正在停止' : '停止这一轮'
+                  }
+                  disabled={interruptController.pending}
+                  onClick={() => void interruptController.execute()}
+                >
+                  {interruptController.pending ? (
+                    <LoaderCircle
+                      aria-hidden="true"
+                      className="motion-safe:animate-spin"
+                    />
+                  ) : (
+                    <Square aria-hidden="true" />
+                  )}
+                  停止
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="w-20 justify-center"
+                  aria-label="发送消息"
+                  disabled={!canSend}
+                  aria-describedby={statusId}
+                >
+                  <Send aria-hidden="true" />
+                  发送
+                </Button>
+              )}
             </span>
           </div>
         </div>
 
-        {gate === undefined ? null : (
+        {gate?.kind === 'archived' || gate?.kind === 'unavailable' ? (
           <div
             role="status"
             className="flex min-h-16 min-w-0 flex-wrap items-center gap-3 p-3.5"
           >
             <span
               aria-hidden="true"
-              className={cn(
-                'grid size-9 shrink-0 place-items-center rounded-md bg-surface-inset text-text-secondary',
-                gate.kind === 'running' && 'bg-info-muted text-info-text',
-                gate.kind === 'waiting' && 'bg-warning-muted text-warning-text',
-              )}
+              className="grid size-9 shrink-0 place-items-center rounded-md bg-surface-inset text-text-secondary"
             >
-              {gate.kind === 'running' ? (
-                <LoaderCircle className="size-4 motion-safe:animate-spin" />
-              ) : (
-                <GateIcon className="size-4" />
-              )}
+              <GateIcon className="size-4" />
             </span>
             <div className="min-w-0 flex-1 basis-40">
               <p className="text-md font-semibold text-text-primary">
@@ -572,7 +658,9 @@ export function Composer({
                 {gate.description}
               </p>
             </div>
-            {gate.canInterrupt && interruptController !== undefined ? (
+            {gate.kind === 'unavailable' &&
+            gate.canInterrupt &&
+            interruptController !== undefined ? (
               <Button
                 type="button"
                 variant="secondary"
@@ -591,29 +679,28 @@ export function Composer({
                 {interruptController.pending ? '正在停止…' : '停止'}
               </Button>
             ) : null}
-            {gate.kind === 'unavailable' || gate.kind === 'archived'
-              ? recoveryAction
-              : null}
+            {recoveryAction}
           </div>
-        )}
+        ) : null}
       </form>
 
       <p
         id={statusId}
         role={feedback ? 'alert' : 'status'}
         className={cn(
-          'mt-1 text-center text-xs leading-relaxed',
+          'mt-1 truncate text-center text-xs leading-relaxed',
           feedback ? 'text-danger-text' : 'text-text-muted',
         )}
+        title={feedback}
       >
         {feedback ??
-          (context?.readSearchOnly
-            ? `${providerName} 在这里只读取和搜索文件，不会修改代码。`
-            : canEdit
-              ? sendShortcut === 'enter'
-                ? '回车发送，Shift + 回车换行'
-                : 'Ctrl + 回车发送，回车换行'
-              : '草稿会保留，CodeTether 不会自动重发消息。')}
+          (gate?.kind === 'running'
+            ? `这一轮结束后：${keyboardHint}`
+            : gate?.kind === 'waiting'
+              ? `批准后：${keyboardHint}`
+              : canEdit || controlState === 'submitting'
+                ? keyboardHint
+                : '草稿会保留，CodeTether 不会自动重发消息。')}
       </p>
     </div>
   )

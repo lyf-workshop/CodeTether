@@ -206,6 +206,7 @@ test('embedded Doctor uses Chinese product labels without changing typed diagnos
   assert.match(doctor, /onboardingSessionDiscoveryLabel\(/u)
   const provider = await source('provider/provider-presentation.ts')
   assert.match(provider, /unsupported: '暂不支持查找'/u)
+  assert.doesNotMatch(doctor, /此 AI 工具版本不受支持/u)
   assert.doesNotMatch(
     doctor,
     /label="Provider 状态"|label="Relay enrollment"|label="Node presence"/u,

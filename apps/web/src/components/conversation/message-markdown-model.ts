@@ -10,6 +10,11 @@ export type MessageMarkdownInline =
       readonly href: string
       readonly children: readonly MessageMarkdownInline[]
     }
+  | {
+      readonly kind: 'file-reference'
+      readonly path: string
+      readonly children: readonly MessageMarkdownInline[]
+    }
 
 export type MessageMarkdownBlock =
   | {
@@ -181,12 +186,27 @@ export function parseMessageMarkdownInline(
       const hrefEnd =
         labelEnd < 0 ? -1 : findMarkdownLinkDestinationEnd(source, labelEnd + 2)
       if (labelEnd > cursor + 1 && hrefEnd > labelEnd + 2) {
-        const href = safeMessageLink(source.slice(labelEnd + 2, hrefEnd))
+        const destination = source.slice(labelEnd + 2, hrefEnd)
+        const href = safeMessageLink(destination)
         if (href !== undefined) {
           pushText(cursor)
           tokens.push({
             kind: 'link',
             href,
+            children: parseMessageMarkdownInline(
+              source.slice(cursor + 1, labelEnd),
+            ),
+          })
+          cursor = hrefEnd + 1
+          textStart = cursor
+          continue
+        }
+        const path = localFileDestination(destination)
+        if (path !== undefined) {
+          pushText(cursor)
+          tokens.push({
+            kind: 'file-reference',
+            path,
             children: parseMessageMarkdownInline(
               source.slice(cursor + 1, labelEnd),
             ),
@@ -223,6 +243,41 @@ function findMarkdownLinkDestinationEnd(source: string, start: number): number {
 }
 
 export function safeMessageLink(value: string): string | undefined {
+  const candidate = messageDestination(value)
+  if (candidate === undefined) return undefined
+  try {
+    const url = new URL(candidate)
+    return SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.href : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function localFileDestination(value: string): string | undefined {
+  const candidate = messageDestination(value)
+  if (candidate === undefined) return undefined
+  if (/[<>"']/u.test(candidate)) return undefined
+  if (/^[a-z]:[\\/]/iu.test(candidate)) return candidate
+  if (/^file:/iu.test(candidate)) {
+    try {
+      return new URL(candidate).protocol === 'file:' ? candidate : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const relativeLine = /^(.*):\d+$/u.exec(candidate)
+  if (
+    relativeLine !== null &&
+    relativeLine[1]?.includes('.') &&
+    !relativeLine[1].includes(':')
+  ) {
+    return candidate
+  }
+  if (/^[a-z][a-z\d+.-]*:/iu.test(candidate)) return undefined
+  return candidate
+}
+
+function messageDestination(value: string): string | undefined {
   const candidate = value.trim()
   if (
     candidate.length === 0 ||
@@ -233,12 +288,7 @@ export function safeMessageLink(value: string): string | undefined {
   ) {
     return undefined
   }
-  try {
-    const url = new URL(candidate)
-    return SAFE_LINK_PROTOCOLS.has(url.protocol) ? url.href : undefined
-  } catch {
-    return undefined
-  }
+  return candidate
 }
 
 function mergeAdjacentText(

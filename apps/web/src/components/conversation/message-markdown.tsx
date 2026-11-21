@@ -187,6 +187,21 @@ function InlineContent({
         </strong>
       )
     }
+    if (token.kind === 'file-reference') {
+      return (
+        <span
+          key={key}
+          title={token.path}
+          data-slot="file-reference"
+          className="rounded-xs bg-surface-code px-1 py-0.5 font-mono text-[0.9em] text-text-secondary"
+        >
+          <InlineContent
+            tokens={token.children}
+            projectRootPath={projectRootPath}
+          />
+        </span>
+      )
+    }
     return (
       <a
         key={key}

@@ -34,7 +34,7 @@ test('concurrent first native admissions share exact initialization and retain f
   const fixture = createFixture()
   const runtime = CodexHostRuntime.deferred(fixture.options)
   try {
-    const started = runtime.startConversation({ cwd })
+    const started = runtime.startConversation({ cwd, model: 'test-model' })
     const resumed = runtime.resumeConversation({
       cwd,
       providerThreadId: 'test-native-resume',
@@ -84,6 +84,13 @@ test('concurrent first native admissions share exact initialization and retain f
     assert.equal((await resumed).providerThreadId, 'test-native-resume')
     assert.equal(
       fixture.written.some((entry) => entry.method === 'turn/start'),
+      false,
+    )
+    assert.equal(
+      fixture.written.some(
+        (entry) =>
+          entry.method === 'model/list' || entry.method === 'config/read',
+      ),
       false,
     )
     assert.equal(
@@ -178,6 +185,7 @@ test('explicit catalog refresh hydrates Codex without opening a conversation', a
             model: 'gpt-test-model',
             displayName: 'Test Model',
             description: 'A test catalog item',
+            isDefault: true,
             hidden: false,
             supportedReasoningEfforts: [
               { reasoningEffort: 'low', description: 'Fast' },
@@ -196,9 +204,150 @@ test('explicit catalog refresh hydrates Codex without opening a conversation', a
         description: 'A test catalog item',
       },
     ])
+    assert.deepEqual(runtime.descriptor.models, [
+      { id: 'gpt-test-model', label: 'Test Model', isDefault: true },
+    ])
     assert.deepEqual(
       fixture.written.map(({ method }) => method),
       ['initialize', 'initialized', 'model/list'],
+    )
+  } finally {
+    await runtime.close()
+  }
+})
+
+test('new Codex conversation falls back only when configured model is absent from visible catalog', async () => {
+  const fixture = createFixture()
+  const runtime = CodexHostRuntime.deferred({
+    ...fixture.options,
+    ephemeralThreads: true,
+  })
+  try {
+    const first = runtime.startConversation({ cwd })
+    await fixture.waitForMethod('initialize', 1)
+    fixture.initialize()
+    await fixture.waitForMethod('model/list', 1)
+    const catalog = {
+      data: [
+        {
+          model: 'gpt-default',
+          displayName: 'Catalog Default',
+          isDefault: true,
+          hidden: false,
+          supportedReasoningEfforts: [],
+        },
+        {
+          model: 'gpt-listed',
+          displayName: 'Listed Model',
+          isDefault: false,
+          hidden: false,
+          supportedReasoningEfforts: [],
+        },
+      ],
+      nextCursor: null,
+    }
+    fixture.respond(
+      fixture.written.find((entry) => entry.method === 'model/list'),
+      catalog,
+    )
+    await fixture.waitForMethod('config/read', 1)
+    fixture.respond(
+      fixture.written.find((entry) => entry.method === 'config/read'),
+      { config: { model: 'gpt-unlisted' } },
+    )
+    await fixture.waitForMethod('thread/start', 1)
+    const firstStart = fixture.written.find(
+      (entry) => entry.method === 'thread/start',
+    )
+    assert.equal(firstStart.params.model, 'gpt-default')
+    fixture.respond(firstStart, {
+      thread: { id: 'thread-fallback', cwd },
+      cwd,
+      model: 'gpt-default',
+      modelProvider: 'openai',
+    })
+    assert.deepEqual(await first, {
+      providerThreadId: 'thread-fallback',
+      model: 'gpt-default',
+      modelFallback: {
+        configuredModel: 'gpt-unlisted',
+        selectedModel: 'gpt-default',
+      },
+    })
+    assert.deepEqual(runtime.descriptor.models, [
+      { id: 'gpt-default', label: 'Catalog Default', isDefault: true },
+      { id: 'gpt-listed', label: 'Listed Model' },
+    ])
+
+    const second = runtime.startConversation({ cwd })
+    await fixture.waitForMethod('model/list', 2)
+    fixture.respond(
+      fixture.written.filter((entry) => entry.method === 'model/list')[1],
+      catalog,
+    )
+    await fixture.waitForMethod('config/read', 2)
+    fixture.respond(
+      fixture.written.filter((entry) => entry.method === 'config/read')[1],
+      { config: { model: 'gpt-listed' } },
+    )
+    await fixture.waitForMethod('thread/start', 2)
+    const secondStart = fixture.written.filter(
+      (entry) => entry.method === 'thread/start',
+    )[1]
+    assert.equal(secondStart.params.model, undefined)
+    fixture.respond(secondStart, {
+      thread: { id: 'thread-listed', cwd },
+      cwd,
+      model: 'gpt-listed',
+      modelProvider: 'openai',
+    })
+    assert.deepEqual(await second, {
+      providerThreadId: 'thread-listed',
+      model: 'gpt-listed',
+    })
+  } finally {
+    await runtime.close()
+  }
+})
+
+test('unreadable configured model fails creation before opening a Codex thread', async () => {
+  const fixture = createFixture()
+  const runtime = CodexHostRuntime.deferred({
+    ...fixture.options,
+    ephemeralThreads: true,
+  })
+  try {
+    const started = runtime.startConversation({ cwd })
+    await fixture.waitForMethod('initialize', 1)
+    fixture.initialize()
+    await fixture.waitForMethod('model/list', 1)
+    fixture.respond(
+      fixture.written.find((entry) => entry.method === 'model/list'),
+      {
+        data: [
+          {
+            model: 'gpt-default',
+            displayName: 'Default',
+            isDefault: true,
+            hidden: false,
+            supportedReasoningEfforts: [],
+          },
+        ],
+        nextCursor: null,
+      },
+    )
+    await fixture.waitForMethod('config/read', 1)
+    const read = fixture.written.find((entry) => entry.method === 'config/read')
+    fixture.child.stdout.write(
+      `${JSON.stringify({
+        id: read.id,
+        error: { code: -32603, message: 'private Provider diagnostic' },
+      })}\n`,
+    )
+    await assert.rejects(started)
+    assert.equal(
+      fixture.written.some((entry) => entry.method === 'thread/start'),
+      false,
     )
   } finally {
     await runtime.close()

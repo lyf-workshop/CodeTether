@@ -9,7 +9,7 @@ export function OfflineComputersGroup({
   children,
 }: {
   readonly count: number
-  readonly surface: 'devices' | 'sidebar'
+  readonly surface: 'devices' | 'sidebar' | 'doctor'
   readonly initiallyReveal?: boolean
   readonly children: ReactNode
 }) {

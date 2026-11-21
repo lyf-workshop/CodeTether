@@ -18,6 +18,7 @@ import {
   reviewCompletedAttention,
 } from './inbox-actions'
 import { InboxEmptyState } from './inbox-empty-state'
+import { InboxBulkAcknowledge } from './inbox-bulk-acknowledge'
 import {
   InboxItem,
   type InboxItemMutationState,
@@ -251,10 +252,19 @@ export function InboxPage() {
           />
         ) : model === undefined ? null : (
           <>
-            <div ref={filtersRef}>
+            <div
+              ref={filtersRef}
+              className="flex flex-wrap items-center justify-between gap-3"
+            >
               <InboxSummary
                 activeFilter={activeFilter}
                 onFilterChange={setActiveFilter}
+                summary={model.summary}
+              />
+              <InboxBulkAcknowledge
+                client={runtime}
+                enabled={controlsEnabled}
+                filter={activeFilter}
                 summary={model.summary}
               />
             </div>

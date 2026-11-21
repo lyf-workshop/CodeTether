@@ -52,7 +52,10 @@ export function doctorOverallPresentation(doctor: DoctorReport): {
     case 'ready':
       return {
         title: 'CodeTether 可以使用',
-        detail: '当前项目至少有一个 AI 工具执行路径可用。',
+        detail:
+          doctor.project === undefined
+            ? '这台电脑至少有一个 AI 工具可用。选择项目后即可开始工作。'
+            : '当前项目至少有一个 AI 工具执行路径可用。',
       }
     case 'limited':
       return {
@@ -119,6 +122,22 @@ export function remoteComputerRepairText(
       return 'CodeTether 无法验证这台电脑的已信任身份，因此已拒绝连接。请打开电脑详情核对目标电脑和现有信任；CodeTether 不会自动接受变化后的身份。'
     case 'incompatible':
       return '这台电脑上的 CodeTether 远程组件与当前版本不兼容。请更新远程组件后重新检查；项目和对话历史仍然可用。'
+  }
+}
+
+export function partitionDoctorRemoteComputers(
+  computers: readonly DoctorRemoteComputer[],
+): {
+  readonly offline: readonly DoctorRemoteComputer[]
+  readonly other: readonly DoctorRemoteComputer[]
+} {
+  return {
+    offline: computers.filter(
+      (computer) => computer.connectionState === 'offline',
+    ),
+    other: computers.filter(
+      (computer) => computer.connectionState !== 'offline',
+    ),
   }
 }
 

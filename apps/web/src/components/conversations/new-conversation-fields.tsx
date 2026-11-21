@@ -25,6 +25,7 @@ interface NewConversationFieldsProps {
   project?: ConversationProjectChoice
   fixed: boolean
   loading: boolean
+  providerReadFailed?: boolean
   busy: boolean
   providerOptions: readonly ConversationCreationProviderOption[]
   selectedProvider?: ConversationCreationProviderOption
@@ -43,6 +44,7 @@ export function NewConversationFields({
   project,
   fixed,
   loading,
+  providerReadFailed,
   busy,
   providerOptions,
   selectedProvider,
@@ -125,7 +127,7 @@ export function NewConversationFields({
                   : `${project.project.name} · ${project.machine?.displayName ?? '电脑不可用'}`}
               </SelectValue>
             </SelectTrigger>
-            <SelectContent className="max-w-[var(--radix-select-trigger-width)]">
+            <SelectContent>
               {displayGroups.map((group, index) => (
                 <SelectGroup key={group.key}>
                   <SelectLabel
@@ -204,13 +206,13 @@ export function NewConversationFields({
           <legend className="text-sm font-medium text-text-primary">
             AI 工具
           </legend>
-          {providerOptions.length === 0 ? (
+          {providerOptions.length === 0 && (!providerReadFailed || loading) ? (
             <p role="status" className="mt-2 text-sm text-text-muted">
               {loading
                 ? '正在读取 AI 工具…'
                 : '这台设备当前没有可用的 AI 工具。'}
             </p>
-          ) : (
+          ) : providerOptions.length > 0 ? (
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
               {providerOptions.map((option) => {
                 const provider = option.provider
@@ -286,7 +288,7 @@ export function NewConversationFields({
                 )
               })}
             </div>
-          )}
+          ) : null}
           <p
             id={formId + '-tool-context'}
             className="mt-2 text-xs text-text-muted"

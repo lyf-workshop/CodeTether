@@ -8,6 +8,22 @@ import {
 
 export type InboxFilter = 'all' | AttentionItem['type']
 
+export function bulkAcknowledgementCount(
+  summary: AttentionListResponse['summary'],
+  filter: InboxFilter,
+): number {
+  switch (filter) {
+    case 'all':
+      return summary.failedOpen + summary.completedReviewOpen
+    case 'failed':
+      return summary.failedOpen
+    case 'completed_review':
+      return summary.completedReviewOpen
+    case 'approval':
+      return 0
+  }
+}
+
 export interface InboxModel {
   readonly items: readonly AttentionItem[]
   readonly summary: AttentionListResponse['summary']

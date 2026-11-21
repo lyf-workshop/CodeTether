@@ -1,3 +1,5 @@
+import { nativeCapabilities } from '../native/native-capabilities.js'
+
 export type ThemePreference = 'system' | 'light' | 'dark'
 export type Theme = 'light' | 'dark'
 
@@ -18,6 +20,7 @@ interface ThemeControllerOptions {
   root: { dataset: { theme?: string } }
   storage?: ThemePreferenceStorage | null
   mediaQuery?: ThemeMediaQuery
+  setWindowTheme?: (theme: Theme | null) => Promise<void>
 }
 
 export function parseThemePreference(value: unknown): ThemePreference {
@@ -46,11 +49,23 @@ export function createThemeController({
   root,
   storage,
   mediaQuery,
+  setWindowTheme,
 }: ThemeControllerOptions) {
   let preference = readThemePreference(storage)
   let theme = resolveTheme(preference, mediaQuery?.matches)
   const listeners = new Set<() => void>()
   root.dataset.theme = theme
+
+  function applyWindowTheme() {
+    if (setWindowTheme === undefined) return
+    void setWindowTheme(preference === 'system' ? null : preference).catch(
+      () => {
+        console.warn('[CodeTether] Window theme could not be applied.')
+      },
+    )
+  }
+
+  applyWindowTheme()
 
   function notify() {
     for (const listener of listeners) listener()
@@ -79,6 +94,7 @@ export function createThemeController({
         // A blocked storage origin still supports a preference for this window.
       }
       root.dataset.theme = theme
+      applyWindowTheme()
       notify()
     },
     subscribe(listener: () => void) {
@@ -107,6 +123,12 @@ export function getThemeController() {
   browserController = createThemeController({
     root: document.documentElement,
     storage,
+    ...(nativeCapabilities.windowTheme.available
+      ? {
+          setWindowTheme: (theme: Theme | null) =>
+            nativeCapabilities.windowTheme.setTheme(theme),
+        }
+      : {}),
     mediaQuery:
       typeof window.matchMedia === 'function'
         ? window.matchMedia('(prefers-color-scheme: dark)')

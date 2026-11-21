@@ -17,7 +17,10 @@ import {
 import { providerLifecycleSupportsConversationExecution } from '../conversation/conversation-controls.js'
 import { machinePlatformLabel } from '../machines/machine-presentation.js'
 import { selectNewConversationMachine } from './new-conversation-machine-selection.js'
-import { newConversationProviderEligibility } from './new-conversation-provider-selection.js'
+import {
+  newConversationProviderEligibility,
+  type NewConversationProviderEligibility,
+} from './new-conversation-provider-selection.js'
 
 export type NewConversationLaunchContext =
   | {
@@ -285,13 +288,33 @@ export function eligibleConversationProjectSelection(
 export function conversationCreationProviderOptions(
   providers: readonly ProviderPresentation[],
   lifecycles: readonly MachineProviderLifecycle[] | undefined,
+  machineKind?: MachineSummary['kind'],
 ) {
   return providers.map((provider) => {
-    const eligibility = newConversationProviderEligibility(provider)
     const lifecycle =
       lifecycles === undefined
         ? undefined
         : providerLifecycleForMachine(lifecycles, provider.provider)
+    // A local startup placeholder retains only prior lifecycle observations.
+    // A completed failed probe reports current compatibility or execution
+    // failure, so it must keep its actual unavailable label.
+    const checking =
+      machineKind === 'local' &&
+      provider.availability === 'unavailable' &&
+      lifecycle !== undefined &&
+      lifecycle.installations.every(
+        (installation) => installation.compatibility?.freshness !== 'current',
+      ) &&
+      (provider.executionHealth?.state === 'unknown' ||
+        provider.executionHealth?.freshness === 'last_known')
+    const eligibility: NewConversationProviderEligibility = checking
+      ? {
+          eligible: false,
+          checking: true,
+          label: `${provider.displayName} · 正在检查…`,
+        }
+      : newConversationProviderEligibility(provider)
+    if (checking) return { provider, eligibility }
     const selectedInstallation = lifecycle?.installations.find(
       (installation) =>
         installation.selected &&

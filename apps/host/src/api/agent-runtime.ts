@@ -23,6 +23,11 @@ export type ProviderRequestId = string | number
 export interface ProviderConversationResult {
   readonly providerThreadId: string
   readonly model?: string
+  /** Transient explanation for a new conversation's unavailable configured default. */
+  readonly modelFallback?: {
+    readonly configuredModel: string
+    readonly selectedModel: string
+  }
 }
 
 export interface ProviderTurnResult {

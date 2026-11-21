@@ -4053,6 +4053,13 @@ export class ConversationStore {
       filters.push('status = ?')
       parameters.push(parseAttentionStatus(options.status))
     }
+    if (options.hideArchivedOpen) {
+      filters.push(`(status != 'open' OR type = 'approval' OR EXISTS (
+        SELECT 1 FROM conversations
+        WHERE conversations.conversation_id = attention_items.conversation_id
+          AND conversations.archived_at IS NULL
+      ))`)
+    }
     parameters.push(limit)
     const where = filters.length === 0 ? '' : `WHERE ${filters.join(' AND ')}`
     const rows = this.#statement(
@@ -4083,6 +4090,13 @@ export class ConversationStore {
     if (options.conversationId !== undefined) {
       filters.push('conversation_id = ?')
       parameters.push(ConversationIdSchema.parse(options.conversationId))
+    }
+    if (options.hideArchivedOpen) {
+      filters.push(`(status != 'open' OR type = 'approval' OR EXISTS (
+        SELECT 1 FROM conversations
+        WHERE conversations.conversation_id = attention_items.conversation_id
+          AND conversations.archived_at IS NULL
+      ))`)
     }
     const where = filters.length === 0 ? '' : `WHERE ${filters.join(' AND ')}`
     const row = this.#statement(

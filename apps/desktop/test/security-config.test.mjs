@@ -98,9 +98,11 @@ test('production Desktop CSP and capabilities stay loopback-only and non-wildcar
     'core:window:allow-is-focused',
     'core:window:allow-is-minimized',
     'core:window:allow-is-visible',
+    'core:window:allow-set-theme',
     'notification:allow-is-permission-granted',
     'notification:allow-request-permission',
   ])
+  assert.match(capability.description, /match the native window theme/u)
   assert.doesNotMatch(
     JSON.stringify(capability.permissions),
     /notification:default|updater:|process:/u,

@@ -56,9 +56,10 @@ test('canonical open Attention query requests status=open and limit=100 with can
   assert.equal(result.items.length, 1)
 })
 
-test('only semantic Attention events request a durable Attention refresh', () => {
+test('Attention and conversation organization events refresh the shared list and badge', () => {
   assert.equal(shouldRefreshAttention('attention.created'), true)
   assert.equal(shouldRefreshAttention('attention.resolved'), true)
+  assert.equal(shouldRefreshAttention('conversation.updated'), true)
 
   for (const type of [
     'conversation.started',

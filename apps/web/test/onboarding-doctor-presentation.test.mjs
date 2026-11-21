@@ -10,6 +10,7 @@ import {
   isProviderUsable,
   localOnboardingBlockerText,
   onboardingStepIndex,
+  partitionDoctorRemoteComputers,
   providerCompatibilityLabel,
   providerInstallationGuidance,
   providerRepairText,
@@ -251,6 +252,10 @@ test('Doctor overall copy diagnoses the responsible layer without blaming every 
   assert.match(doctorOverallPresentation(base).title, /AI 工具或服务/u)
   assert.doesNotMatch(doctorOverallPresentation(base).title, /项目/u)
   assert.match(
+    doctorOverallPresentation({ ...base, overall: 'ready' }).detail,
+    /这台电脑至少有一个 AI 工具可用/u,
+  )
+  assert.match(
     doctorOverallPresentation({ ...base, overall: 'unknown' }).title,
     /尚未完全检查/u,
   )
@@ -274,6 +279,55 @@ test('Doctor overall copy diagnoses the responsible layer without blaming every 
     }).title,
     /当前项目需要处理/u,
   )
+})
+
+test('Doctor keeps two offline remote computers in its closed group and an online one outside', () => {
+  const groups = partitionDoctorRemoteComputers([
+    {
+      machineId: 'machine_offline_a',
+      displayName: '离线 A',
+      connectionState: 'offline',
+    },
+    {
+      machineId: 'machine_online',
+      displayName: '在线',
+      connectionState: 'online',
+    },
+    {
+      machineId: 'machine_offline_b',
+      displayName: '离线 B',
+      connectionState: 'offline',
+    },
+  ])
+  assert.deepEqual(
+    groups.offline.map((machine) => machine.displayName),
+    ['离线 A', '离线 B'],
+  )
+  assert.deepEqual(
+    groups.other.map((machine) => machine.displayName),
+    ['在线'],
+  )
+  const doctorSource = readFileSync(
+    new URL('../src/components/doctor/doctor-page.tsx', import.meta.url),
+    'utf8',
+  )
+  assert.match(
+    doctorSource,
+    /partitionDoctorRemoteComputers\(doctor\.remoteComputers\)/u,
+  )
+  assert.match(doctorSource, /surface="doctor"/u)
+  const groupSource = readFileSync(
+    new URL(
+      '../src/components/machines/offline-computers-group.tsx',
+      import.meta.url,
+    ),
+    'utf8',
+  )
+  assert.match(
+    groupSource,
+    /return window\.sessionStorage\.getItem\(preferenceKey\) === 'open'/u,
+  )
+  assert.match(groupSource, /open \? children : null/u)
 })
 
 test('authentication guidance follows the effective backend mode', () => {

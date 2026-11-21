@@ -590,21 +590,23 @@ export const DoctorReportSchema = z
         })
       }
       const hasReadyPath =
-        report.project?.locations.some((location) => {
-          if (location.state !== 'ready') return false
-          const providers =
-            location.machineId === report.thisComputer.machineId
-              ? report.providers
-              : (report.remoteComputers.find(
-                  (machine) => machine.machineId === location.machineId,
-                )?.providers ?? [])
-          return providers.some((provider) => provider.state === 'ready')
-        }) === true
+        report.project === undefined
+          ? report.providers.some((provider) => provider.state === 'ready')
+          : report.project.locations.some((location) => {
+              if (location.state !== 'ready') return false
+              const providers =
+                location.machineId === report.thisComputer.machineId
+                  ? report.providers
+                  : (report.remoteComputers.find(
+                      (machine) => machine.machineId === location.machineId,
+                    )?.providers ?? [])
+              return providers.some((provider) => provider.state === 'ready')
+            })
       if (!hasReadyPath) {
         context.addIssue({
           code: 'custom',
           message:
-            'Doctor Ready requires one same-Machine Project and Provider execution path',
+            'Doctor Ready requires a local Provider or one same-Machine Project and Provider execution path',
           path: ['overall'],
         })
       }

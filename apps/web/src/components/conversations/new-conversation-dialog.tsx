@@ -46,6 +46,7 @@ import {
   commandPaletteCacheSubscription,
   readCommandPaletteCache,
 } from '../app-shell/command-palette-cache'
+import { conversationModelFallbackNotices } from '../conversation/conversation-model-fallback-notices'
 import {
   effectiveProviderReasoning,
   providerDefaultReasoningSelection,
@@ -152,10 +153,15 @@ export function NewConversationDialog({
     enabled:
       open && connectionState === 'connected' && project?.machine !== undefined,
   })
-  const providerOptions = conversationCreationProviderOptions(
-    providerPresentationsForMachine(machineDetailQuery.data?.providers ?? []),
-    machineDetailQuery.data?.providerLifecycles,
-  )
+  const machineDetail = machineDetailQuery.data
+  const providerOptions =
+    machineDetail === undefined
+      ? []
+      : conversationCreationProviderOptions(
+          providerPresentationsForMachine(machineDetail.providers),
+          machineDetail.providerLifecycles,
+          machineDetail.machine.kind,
+        )
   const selectedProvider = resolveConversationCreationProvider(
     providerOptions,
     selectedProviderId,
@@ -222,6 +228,12 @@ export function NewConversationDialog({
         await queryClient.invalidateQueries({
           queryKey: conversationListQueryKeys.projectScope(projectId),
         })
+      if (response.data.modelFallback !== undefined) {
+        conversationModelFallbackNotices.queue(
+          response.data.conversation.conversationId,
+          response.data.modelFallback,
+        )
+      }
       skipCloseFocusRestore.current = true
       await navigate({
         to: '/c/$conversationId',
@@ -311,6 +323,7 @@ export function NewConversationDialog({
               project={project}
               fixed={projectSelection.fixed}
               loading={loading}
+              providerReadFailed={machineDetailQuery.isError}
               busy={createMutation.isPending}
               providerOptions={providerOptions}
               selectedProvider={selectedProvider}
@@ -376,8 +389,10 @@ export function NewConversationDialog({
               <InlineNotice>{selectedProvider.eligibility.label}</InlineNotice>
             ) : null}
             {!loading &&
+            machineDetailQuery.isSuccess &&
             project !== undefined &&
             project.unavailableReason === undefined &&
+            !providerOptions.some((option) => option.eligibility.checking) &&
             selectedProvider === undefined ? (
               <InlineNotice>
                 此设备当前没有可通过 CodeTether 启动可恢复流式会话的 AI

@@ -269,6 +269,91 @@ test('provider descriptor must allow streaming and native resume independently o
   }
 })
 
+test('only a local startup Provider placeholder says it is still checking', () => {
+  const pending = provider('codex', {
+    available: false,
+    availability: 'unavailable',
+    availabilityLabel: '暂时不可用',
+    executionHealth: { state: 'unknown', freshness: 'last_known' },
+  })
+  const local = conversationCreationProviderOptions(
+    [pending],
+    [{ provider: 'codex', installations: [] }],
+    'local',
+  )[0]
+  assert.deepEqual(local.eligibility, {
+    eligible: false,
+    checking: true,
+    label: 'Codex · 正在检查…',
+  })
+  const remote = conversationCreationProviderOptions(
+    [pending],
+    undefined,
+    'remote',
+  )[0]
+  assert.equal(remote.eligibility.checking, undefined)
+  assert.equal(remote.eligibility.label, 'Codex · 暂时不可用')
+
+  const warmDbPending = conversationCreationProviderOptions(
+    [
+      {
+        ...pending,
+        executionHealth: {
+          state: 'healthy',
+          freshness: 'last_known',
+          observedAt: '2026-11-19T12:00:00.000Z',
+        },
+      },
+    ],
+    [
+      {
+        provider: 'codex',
+        selectedInstallationId: 'installation_prior01',
+        installations: [
+          installation('installation_prior01', {
+            compatibility: { freshness: 'last_known' },
+          }),
+        ],
+      },
+    ],
+    'local',
+  )[0]
+  assert.equal(warmDbPending.eligibility.checking, true)
+  assert.equal(warmDbPending.eligibility.label, 'Codex · 正在检查…')
+
+  const checkedCompatibility = conversationCreationProviderOptions(
+    [pending],
+    [
+      {
+        provider: 'codex',
+        selectedInstallationId: 'installation_checked01',
+        installations: [
+          installation('installation_checked01', {
+            availability: 'unavailable',
+            compatibility: { freshness: 'current' },
+          }),
+        ],
+      },
+    ],
+    'local',
+  )[0]
+  assert.equal(checkedCompatibility.eligibility.checking, undefined)
+  assert.notEqual(checkedCompatibility.eligibility.label, 'Codex · 正在检查…')
+
+  const checked = conversationCreationProviderOptions(
+    [
+      {
+        ...pending,
+        executionHealth: { state: 'unavailable', freshness: 'current' },
+      },
+    ],
+    undefined,
+    'local',
+  )[0]
+  assert.equal(checked.eligibility.checking, undefined)
+  assert.equal(checked.eligibility.label, 'Codex · 暂时不可用')
+})
+
 test('canonical selected installation gates creation; a healthy alternate is never auto-selected', () => {
   const selected = installation('installation_selected01', {
     availability: 'unavailable',

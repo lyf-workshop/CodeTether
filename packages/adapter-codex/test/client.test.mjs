@@ -110,6 +110,7 @@ test('reads visible Codex model slugs from the native App Server catalog', async
             model: 'gpt-model-one',
             displayName: 'Model One',
             description: 'Available for coding',
+            isDefault: true,
             hidden: false,
             supportedReasoningEfforts: [
               { reasoningEffort: 'low', description: 'Fast' },
@@ -133,8 +134,32 @@ test('reads visible Codex model slugs from the native App Server catalog', async
       name: 'Model One',
       description: 'Available for coding',
       reasoningOptions: ['low', 'high'],
+      isDefault: true,
     },
   ])
+})
+
+test('configured model read exposes only the bounded model slug', async () => {
+  const { child, client, written } = createHarness()
+  const configured = client.readConfiguredModel()
+  await nextTurn()
+  assert.deepEqual(written[0], {
+    id: written[0].id,
+    method: 'config/read',
+    params: { includeLayers: false },
+  })
+  child.stdout.write(
+    `${JSON.stringify({
+      id: written[0].id,
+      result: {
+        config: {
+          model: 'gpt-configured',
+          experimental_bearer_token: 'never-expose-this-secret',
+        },
+      },
+    })}\n`,
+  )
+  assert.equal(await configured, 'gpt-configured')
 })
 
 test('backend config reads return only a secret-safe selected Provider projection', async () => {

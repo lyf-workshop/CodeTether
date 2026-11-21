@@ -38,6 +38,7 @@ export function listAttention(
 ): AttentionListResponse {
   const summary = store.summarizeAttentionItems({
     ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
+    hideArchivedOpen: true,
   })
   return AttentionListResponseSchema.parse({
     protocolVersion,
@@ -49,6 +50,7 @@ export function listAttention(
         ...(query.type === undefined ? {} : { type: query.type }),
         status: query.status,
         limit: query.limit,
+        hideArchivedOpen: true,
       })
       .map(attentionItem),
     summary: {

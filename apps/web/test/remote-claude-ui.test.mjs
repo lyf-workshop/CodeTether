@@ -48,9 +48,15 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
   assert.match(route, /machine\.capabilities\.providerExecution/u)
   assert.match(route, /machineProvider\.capabilities\.streaming/u)
   assert.match(route, /machineProvider\.capabilities\.resume/u)
-  assert.match(inspector, /conversation\.capabilities\.supportsDiff/u)
-  assert.match(inspector, /conversation\.capabilities\.supportsShell/u)
-  assert.match(inspector, /conversation\.capabilities\.supportsToolOutput/u)
+  assert.match(inspector, /conversation\.agent === 'codex'/u)
+  assert.match(
+    inspector,
+    /const supportsToolOutput = localCodex \|\| hasToolOutput/u,
+  )
+  assert.doesNotMatch(
+    inspector,
+    /conversation\.capabilities\.supports(Diff|Shell|ToolOutput)/u,
+  )
   assert.match(inspector, /resolveConversationInspectorTab/u)
   assert.match(inspector, /!supportsDiff && viewedFiles\.length > 0/u)
   assert.doesNotMatch(inspector, /provider === 'claude-code'/u)
@@ -62,7 +68,7 @@ test('Remote Claude Detail keeps execution and Inspector controls capability-dri
   assert.match(gate, /这里不能停止/u)
   assert.match(
     composer,
-    /gate\.canInterrupt && interruptController !== undefined/u,
+    /gate\.kind === 'unavailable' &&\s*gate\.canInterrupt &&\s*interruptController !== undefined/u,
   )
   assert.doesNotMatch(chromeActions, /interruptController|supportsInterrupt/u)
   assert.match(inspector, /displayContext\?\.machineKind === 'local'/u)

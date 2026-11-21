@@ -25,7 +25,10 @@ import {
 } from '../dist/api/local-provider-readiness.js'
 import { MachineProviderRuntimeResolver } from '../dist/api/machine-provider-runtime-resolver.js'
 import { composeLocalHostLifecycleClose } from '../dist/api/local-codex-host.js'
-import { ProviderRegistry } from '../dist/api/provider-registry.js'
+import {
+  ProviderRegistry,
+  UNAVAILABLE_PROVIDER_CAPABILITIES,
+} from '../dist/api/provider-registry.js'
 import { WorkspacePolicy } from '../dist/api/workspace-policy.js'
 import { ConversationStore } from '../dist/persistence/index.js'
 import { normalizeTrustedProjectRoot } from '../dist/project-path.js'
@@ -403,7 +406,7 @@ test('Host selection ignores candidate ordering and keeps runtime compatibility 
 test('Doctor composes exact selected lifecycle truth without paths or backend secrets', async (t) => {
   const fixture = await createFixture(t)
   const global = await fixture.service.getDoctor()
-  assert.equal(global.doctor.overall, 'needs_attention')
+  assert.equal(global.doctor.overall, 'ready')
   assert.equal(global.doctor.project, undefined)
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
@@ -430,6 +433,8 @@ test('Doctor composes exact selected lifecycle truth without paths or backend se
 
 test('Doctor keeps runtime compatibility separate from unavailable backend readiness', async (t) => {
   const fixture = await createFixture(t, { backendReadiness: 'unavailable' })
+  const global = await fixture.service.getDoctor()
+  assert.equal(global.doctor.overall, 'needs_attention')
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
     ({ provider }) => provider === 'codex',
@@ -499,6 +504,8 @@ test('Doctor reports a current nonfatal Provider health degradation without chan
       failure,
     },
   })
+  const global = await fixture.service.getDoctor()
+  assert.equal(global.doctor.overall, 'limited')
   const response = await fixture.service.getDoctor(fixture.projectId)
   const codex = response.doctor.providers.find(
     ({ provider }) => provider === 'codex',
@@ -1524,6 +1531,71 @@ test('a rejected Codex model leaves the installation ready to run another model'
   assert.equal(
     fixture.persistence.getTurn(next.data.turn.turnId).status,
     'completed',
+  )
+})
+
+test('startup Provider discovery publishes Machine truth after its committed refresh', async (t) => {
+  const discoveryGate = deferred()
+  t.after(() => discoveryGate.resolve())
+  const replacement = new TrackingRuntime(installationAId, revisionA1)
+  let fixture
+  fixture = await createFixture(t, {
+    selectedUnavailable: true,
+    pendingStartupLifecycle: true,
+    refreshLocalProviderLifecycle: async (provider) => {
+      assert.equal(provider, 'codex')
+      await discoveryGate.promise
+      return {
+        runtime: replacement,
+        lifecycle: recordLifecycle(fixture, { timestamp: changedAt }),
+      }
+    },
+  })
+  fixture.runtime.available = false
+  fixture.runtime.descriptor = {
+    ...fixture.runtime.descriptor,
+    availability: 'unavailable',
+    capabilities: UNAVAILABLE_PROVIDER_CAPABILITIES,
+    executionHealth: { state: 'unknown', freshness: 'last_known' },
+  }
+  const events = []
+  const unsubscribe = fixture.service.publisher.subscribe((event) => {
+    events.push(event)
+  })
+  t.after(unsubscribe)
+
+  const discovery = fixture.service.discoverLocalProvidersOnStartup()
+  const before = await fixture.service.getMachine(fixture.machineId)
+  const eventCountBefore = events.length
+  discoveryGate.resolve()
+  await discovery
+  assert.deepEqual(before.providers[0].executionHealth, {
+    state: 'unknown',
+    freshness: 'current',
+  })
+  assert.equal(
+    selectedInstallation(before.providerLifecycles[0]).compatibility.freshness,
+    'last_known',
+  )
+  assert.equal(
+    selectedInstallation(before.providerLifecycles[0]).availability,
+    'unavailable',
+  )
+  assert.equal(eventCountBefore, 0)
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['machine.updated'],
+  )
+  assert.equal(events[0].payload.machine.machineId, fixture.machineId)
+  const after = await fixture.service.getMachine(fixture.machineId)
+  assert.equal(
+    selectedInstallation(after.providerLifecycles[0]).availability,
+    'available',
+  )
+  assert.equal(
+    after.providers.find((provider) => provider.provider === 'codex')
+      .availability,
+    'available',
   )
 })
 
@@ -3185,12 +3257,27 @@ async function createFixture(t, options = {}) {
   }
 
   const publicInitialLifecycle =
-    options.reversePublicInstallationOrder === true
+    options.pendingStartupLifecycle === true
       ? {
           ...storedLifecycle,
-          installations: [...storedLifecycle.installations].reverse(),
+          installations: storedLifecycle.installations.map((installation) => ({
+            ...installation,
+            compatibility: {
+              ...installation.compatibility,
+              freshness: 'last_known',
+            },
+            backend: {
+              ...installation.backend,
+              freshness: 'last_known',
+            },
+          })),
         }
-      : storedLifecycle
+      : options.reversePublicInstallationOrder === true
+        ? {
+            ...storedLifecycle,
+            installations: [...storedLifecycle.installations].reverse(),
+          }
+        : storedLifecycle
   const service = new HostService({
     runtime,
     persistence,

@@ -6,6 +6,7 @@ import {
 export interface NewConversationProviderEligibility {
   readonly eligible: boolean
   readonly label: string
+  readonly checking?: boolean
   readonly executionLabel?: string
   readonly executionAdvisory?: string
 }

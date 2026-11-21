@@ -10,6 +10,7 @@ import {
   resolveTheme,
   themePreferenceStorageKey,
 } from '../.tmp/test-dist/runtime/theme/theme-preference.js'
+import { createNativeCapabilities } from '../.tmp/test-dist/runtime/native/native-capabilities.js'
 
 test('theme preference defaults to light and accepts only the three supported choices', () => {
   assert.equal(themePreferenceStorageKey, 'ct-theme')
@@ -86,6 +87,47 @@ test('unavailable storage still permits a temporary theme choice', () => {
   })
   assert.equal(root.dataset.theme, 'light')
   assert.doesNotThrow(() => controller.setPreference('dark'))
+  assert.equal(root.dataset.theme, 'dark')
+  controller.dispose()
+})
+
+test('desktop applies the saved window preference at startup and on each change', async () => {
+  const applied = []
+  const controller = createThemeController({
+    root: { dataset: {} },
+    storage: { getItem: () => 'system', setItem: () => undefined },
+    setWindowTheme: async (theme) => {
+      applied.push(theme)
+    },
+  })
+  controller.setPreference('dark')
+  controller.setPreference('light')
+  controller.setPreference('system')
+  assert.deepEqual(applied, [null, 'dark', 'light', null])
+  controller.dispose()
+
+  const nativeCalls = []
+  const desktop = createNativeCapabilities({
+    tauriAvailable: true,
+    loadTauriWindow: async () => ({
+      getCurrentWindow: () => ({
+        setTheme: async (theme) => nativeCalls.push(theme),
+      }),
+    }),
+  })
+  assert.equal(desktop.windowTheme.available, true)
+  await desktop.windowTheme.setTheme('dark')
+  await desktop.windowTheme.setTheme('light')
+  await desktop.windowTheme.setTheme(null)
+  assert.deepEqual(nativeCalls, ['dark', 'light', null])
+})
+
+test('browser mode exposes no native window theme action', () => {
+  const browser = createNativeCapabilities({ tauriAvailable: false })
+  assert.equal(browser.windowTheme.available, false)
+  const root = { dataset: {} }
+  const controller = createThemeController({ root })
+  controller.setPreference('dark')
   assert.equal(root.dataset.theme, 'dark')
   controller.dispose()
 })

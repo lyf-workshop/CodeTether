@@ -132,7 +132,7 @@ function renderDialog({
               ? projects
               : queryKey[2] === 'list'
                 ? machines
-                : { providers },
+                : { machine: machines[0] ?? machine, providers },
         }),
         useMutation: () => ({
           isPending: false,

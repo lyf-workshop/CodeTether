@@ -5,6 +5,11 @@ import * as query from '@tanstack/react-query'
 import { CodeTetherResponseError } from '@codetether/client'
 import { createDom, h } from './fixtures/dom.mjs'
 import { loadUiComponent, loadWebComponent } from './fixtures/render-ui.mjs'
+import { invalidateMachineQueries } from '../.tmp/test-dist/runtime/host/machine-query.js'
+
+const { conversationModelFallbackNotices } = loadWebComponent(
+  'components/conversation/conversation-model-fallback-notices.ts',
+)
 
 const machineId = 'machine_dom01',
   projectId = 'proj_dom01'
@@ -35,6 +40,7 @@ const descriptor = {
 async function dialogFixture({
   projects = [project],
   providers = [descriptor],
+  getMachine,
   create,
 } = {}) {
   const dom = await createDom()
@@ -54,13 +60,17 @@ async function dialogFixture({
   const runtime = {
     listProjects: async () => ({ projects }),
     listMachines: async () => ({ machines: [machine] }),
-    getMachine: async () => ({ machine, providers }),
+    getMachine: getMachine ?? (async () => ({ machine, providers })),
     createConversation: async (...args) => {
       calls.push(args)
       return await create?.(...args)
     },
   }
   const dependencies = new Map([
+    [
+      '../conversation/conversation-model-fallback-notices',
+      { conversationModelFallbackNotices },
+    ],
     ['@tanstack/react-query', query],
     [
       '../../runtime/host/host-runtime-hooks',
@@ -112,6 +122,7 @@ async function dialogFixture({
     ...dom,
     calls,
     navigations,
+    queryClient,
     submit,
     async close() {
       await dom.close()
@@ -119,6 +130,95 @@ async function dialogFixture({
     },
   }
 }
+
+test('open dialog shows checking Codex until a Machine discovery event makes it ready', async () => {
+  let ready = false
+  let machineReads = 0
+  let releaseFirstRead
+  const firstRead = new Promise((resolve) => {
+    releaseFirstRead = resolve
+  })
+  const fixture = await dialogFixture({
+    getMachine: async () => {
+      machineReads += 1
+      if (machineReads === 1) await firstRead
+      return {
+        machine,
+        ...(ready
+          ? {}
+          : { providerLifecycles: [{ provider: 'codex', installations: [] }] }),
+        providers: [
+          ready
+            ? descriptor
+            : {
+                ...descriptor,
+                availability: 'unavailable',
+                executionHealth: { state: 'unknown', freshness: 'current' },
+              },
+        ],
+      }
+    },
+  })
+  try {
+    const codexRadio = () =>
+      fixture.container.querySelector('input[value="codex"]')
+    const codexLabel = () => codexRadio()?.closest('label')
+    const dialog = fixture.container.querySelector('[role="dialog"]')
+    await fixture.until(
+      () =>
+        machineReads === 1 &&
+        fixture.container.textContent.includes('正在读取 AI 工具…'),
+    )
+    assert.equal(codexRadio(), null)
+    assert.doesNotMatch(fixture.container.textContent, /暂时不可用/u)
+    assert.equal(fixture.submit().disabled, true)
+
+    await fixture.perform(() => releaseFirstRead())
+    await fixture.until(() => codexLabel()?.textContent.includes('正在检查…'))
+    assert.equal(fixture.container.querySelector('[role="dialog"]'), dialog)
+    assert.equal(codexRadio().disabled, true)
+    assert.equal(fixture.submit().disabled, true)
+    assert.equal(machineReads, 1)
+    assert.doesNotMatch(
+      fixture.container.textContent,
+      /此设备当前没有可通过 CodeTether 启动/u,
+    )
+
+    ready = true
+    await fixture.perform(() => invalidateMachineQueries(fixture.queryClient))
+    await fixture.until(() => fixture.submit().disabled === false)
+    assert.equal(fixture.container.querySelector('[role="dialog"]'), dialog)
+    assert.equal(codexRadio().disabled, false)
+    assert.equal(machineReads, 2)
+    assert.doesNotMatch(codexLabel().textContent, /正在检查|暂时不可用/u)
+  } finally {
+    releaseFirstRead()
+    await fixture.close()
+  }
+})
+
+test('Machine detail read error shows no false AI tool empty state', async () => {
+  const fixture = await dialogFixture({
+    getMachine: async () => {
+      throw new Error('test-owned Machine detail failure')
+    },
+  })
+  try {
+    await fixture.until(() =>
+      fixture.container.textContent.includes(
+        'CodeTether 暂时无法读取设备，请重试。',
+      ),
+    )
+    assert.equal(fixture.submit().disabled, true)
+    assert.doesNotMatch(
+      fixture.container.textContent,
+      /这台设备当前没有可用的 AI 工具|此设备当前没有可通过 CodeTether 启动/u,
+    )
+    assert.equal(fixture.container.querySelector('input[value="codex"]'), null)
+  } finally {
+    await fixture.close()
+  }
+})
 
 test('real dialog double-submit dispatches one exact empty conversation without model or initial message', async () => {
   let complete
@@ -150,6 +250,45 @@ test('real dialog double-submit dispatches one exact empty conversation without 
     )
     await fixture.until(() => fixture.navigations.length === 1)
     assert.deepEqual(fixture.navigations[0].search, { focus: 'composer' })
+  } finally {
+    await fixture.close()
+  }
+})
+
+test('creation hands a fallback explanation to the new conversation once', async () => {
+  const fixture = await dialogFixture({
+    create: async () => ({
+      data: {
+        conversation: { conversationId: 'conv_fallback01', projectId },
+        modelFallback: {
+          configuredModel: 'gpt-6.2-astra',
+          selectedModel: 'gpt-6.1-terra',
+        },
+      },
+    }),
+  })
+  try {
+    await fixture.until(() => fixture.submit()?.disabled === false)
+    await fixture.perform(() =>
+      fixture
+        .submit()
+        .closest('form')
+        .dispatchEvent(
+          new fixture.window.Event('submit', {
+            bubbles: true,
+            cancelable: true,
+          }),
+        ),
+    )
+    await fixture.until(() => fixture.navigations.length === 1)
+    assert.deepEqual(conversationModelFallbackNotices.take('conv_fallback01'), {
+      configuredModel: 'gpt-6.2-astra',
+      selectedModel: 'gpt-6.1-terra',
+    })
+    assert.equal(
+      conversationModelFallbackNotices.take('conv_fallback01'),
+      undefined,
+    )
   } finally {
     await fixture.close()
   }
@@ -270,12 +409,16 @@ for (const activeState of ['running', 'waiting']) {
           editor.closest('[hidden]') === null,
           `${state}: editor must stay visible`,
         )
-        assert.equal(editor.readOnly, true)
+        assert.equal(editor.readOnly, state === 'submitting')
         assert.equal(dom.window.document.activeElement, editor)
         assert.equal(
           dom.container.querySelector('button[type="submit"]').disabled,
           true,
         )
+        if (state === activeState) {
+          await dom.input(editor, 'draft for the next turn')
+          assert.equal(editor.value, 'draft for the next turn')
+        }
         await dom.perform(submitForm)
         await dom.perform(() =>
           editor.dispatchEvent(
@@ -293,7 +436,7 @@ for (const activeState of ['running', 'waiting']) {
       await dom.render(view())
       assert.equal(dom.window.document.activeElement, editor)
       assert.equal(editor.readOnly, false)
-      assert.equal(editor.value, '')
+      assert.equal(editor.value, 'draft for the next turn')
       assert.equal(calls, 1)
     } finally {
       await dom.close()

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { Link, useParams } from '@tanstack/react-router'
-import { MapPin, Monitor, Plus, RefreshCw, Server, Unplug } from 'lucide-react'
+import { MapPin, Monitor, RefreshCw, Server, Unplug } from 'lucide-react'
 
 import {
   Disclosure,
@@ -28,8 +28,6 @@ import {
 } from '../../runtime/host/host-runtime-hooks'
 import { machineErrorMessage } from '../../runtime/host/machine-actions'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
-import { AddProjectDialog } from '../projects/add-project-dialog'
-import { machineCanAddProject } from './device-project-model'
 import { MachineConversationsSection } from './machine-conversations-section'
 import { MachinesErrorState, MachinesLoadingState } from './machine-page-states'
 import {
@@ -137,7 +135,6 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
       </MachinePageFrame>
     )
   const MachineIcon = machine.kind === 'local' ? Monitor : Server
-  const canAdd = hostReady && machineCanAddProject(machine)
   const online =
     machine.connectionState === 'local' || machine.connectionState === 'online'
   const lastSeen = formatMachineLastSeen(machine.lastSeenAt)
@@ -151,6 +148,13 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           machine.kind === 'local'
             ? machineSubtitleLabel(machine)
             : `${machineSubtitleLabel(machine)} · ${machineExecutionTransportLabel(connection?.executionTransport)}`
+        }
+        actions={
+          machine.kind === 'local' ? (
+            <Button asChild variant="secondary">
+              <Link to="/add">配对新设备</Link>
+            </Button>
+          ) : null
         }
       />
       {!online ? (
@@ -200,6 +204,7 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
           projects={projects}
           appearance="cards"
           showAddCard={false}
+          showAddInHeader
           showLocationRemoval
           onLocationRemoved={() => void machineQuery.refetch()}
         />
@@ -252,24 +257,6 @@ function MachineDetailPage({ machineId }: { machineId: MachineId }) {
             </Disclosure>
           ) : null}
         </div>
-      </div>
-      <div className="mt-8 flex flex-wrap gap-3 border-t border-border pt-5">
-        {canAdd ? (
-          <AddProjectDialog
-            fixedMachineId={machine.machineId}
-            trigger={
-              <Button variant="secondary">
-                <Plus aria-hidden="true" />
-                添加项目
-              </Button>
-            }
-          />
-        ) : null}
-        {machine.kind === 'local' ? (
-          <Button asChild variant="secondary">
-            <Link to="/add">配对新设备</Link>
-          </Button>
-        ) : null}
       </div>
       <UnpairMachineDialog
         machine={machine}

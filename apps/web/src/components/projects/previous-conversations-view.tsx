@@ -1,7 +1,8 @@
+import { useId, useState } from 'react'
 import {
+  ArrowRight,
   Bot,
   Check,
-  ExternalLink,
   History,
   LoaderCircle,
   RefreshCw,
@@ -20,6 +21,8 @@ import {
   providerProblemText,
   scanStatusText,
 } from './previous-conversations-presentation'
+import { displayConversationTitle } from '../conversations/conversation-title'
+import { PreviousConversationsCompactHeader } from './previous-conversations-compact-header'
 import type { usePreviousConversations } from './use-previous-conversations'
 
 export function PreviousConversationsView({
@@ -46,6 +49,20 @@ export function PreviousConversationsView({
   importSelected,
   onFinished,
 }: ReturnType<typeof usePreviousConversations>) {
+  const [expanded, setExpanded] = useState(false)
+  const detailsId = useId()
+  const hasCandidateError = [...activity.values()].some(
+    ({ state }) => state === 'expired' || state === 'failed',
+  )
+  const collapsed =
+    presentation === 'embedded' &&
+    scanState === 'ready' &&
+    selectable.length === 0 &&
+    !importing &&
+    !scanNotice &&
+    !hasCandidateError
+  const problemSummary = providerProblems.map(providerProblemText).join(' ')
+
   return (
     <div
       ref={stepRef}
@@ -55,7 +72,15 @@ export function PreviousConversationsView({
         scanState === 'scanning' || scanState === 'loading-more' || importing
       }
     >
-      {presentation === 'dialog' ? (
+      {collapsed ? (
+        <PreviousConversationsCompactHeader
+          count={candidates.length}
+          problemSummary={problemSummary}
+          expanded={expanded}
+          contentId={detailsId}
+          onToggle={() => setExpanded((current) => !current)}
+        />
+      ) : presentation === 'dialog' ? (
         <DialogHeader>
           <span
             aria-hidden="true"
@@ -70,24 +95,18 @@ export function PreviousConversationsView({
           </p>
         </DialogHeader>
       ) : (
-        <div>
-          <span
-            aria-hidden="true"
-            className="grid size-10 place-items-center rounded-md border border-primary/30 bg-primary-muted text-primary"
-          >
-            <History className="size-5" />
-          </span>
-          <div className="mt-4">
-            <PageHeader
-              level={presentation === 'embedded' ? 2 : 1}
-              title="以前的会话"
-              description="可选择此项目中已有的 Codex 或 Claude Code 会话添加到 CodeTether。导入不会启动 AI 工具，也不会发送任何提示词。"
-            />
-          </div>
-        </div>
+        <PageHeader
+          level={presentation === 'embedded' ? 2 : 1}
+          title="以前的会话"
+          description="可选择此项目中已有的 Codex 或 Claude Code 会话添加到 CodeTether。导入不会启动 AI 工具，也不会发送任何提示词。"
+        />
       )}
 
-      <div className="mt-5 min-w-0 space-y-4">
+      <div
+        id={detailsId}
+        hidden={collapsed && !expanded}
+        className="mt-5 min-w-0 space-y-4"
+      >
         <p className="sr-only" role="status" aria-live="polite">
           {scanStatusText(
             scanState,
@@ -135,12 +154,12 @@ export function PreviousConversationsView({
         ) : null}
 
         {scanState !== 'scanning' && providerProblems.length > 0 ? (
-          <div className="space-y-2" aria-label="部分 AI 工具不可用">
+          <div className="space-y-1" aria-label="以前的会话查找状态">
             {providerProblems.map((provider) => (
               <p
                 key={provider.provider}
                 role="status"
-                className="rounded-sm border border-warning/30 bg-warning-muted/35 px-3 py-2 text-sm text-text-secondary"
+                className="text-sm text-text-secondary"
               >
                 {providerProblemText(provider)}
               </p>
@@ -204,6 +223,10 @@ export function PreviousConversationsView({
                   </h3>
                   <div className="overflow-hidden rounded-md border border-border">
                     {group.candidates.map((candidate, index) => {
+                      const displayTitle = displayConversationTitle(
+                        candidate.title,
+                        candidate.createdAt,
+                      )
                       const candidateActivity = activity.get(
                         candidate.discoveryCandidateId,
                       )?.state
@@ -230,7 +253,7 @@ export function PreviousConversationsView({
                                 (selected.size >= maximumImportSelection &&
                                   !selected.has(candidate.discoveryCandidateId))
                               }
-                              aria-label={`选择 ${candidate.title}`}
+                              aria-label={`选择 ${displayTitle}`}
                               onCheckedChange={() =>
                                 toggleCandidate(candidate.discoveryCandidateId)
                               }
@@ -254,7 +277,7 @@ export function PreviousConversationsView({
                               }
                               className="block truncate text-sm font-medium text-text-primary"
                             >
-                              {candidate.title}
+                              {displayTitle}
                             </label>
                             <span
                               className="mt-0.5 block text-xs text-text-muted"
@@ -293,7 +316,7 @@ export function PreviousConversationsView({
                               }
                             >
                               打开
-                              <ExternalLink aria-hidden="true" />
+                              <ArrowRight aria-hidden="true" />
                             </Button>
                           ) : null}
                         </div>
@@ -339,35 +362,36 @@ export function PreviousConversationsView({
             ) : null}
           </div>
         ) : null}
-      </div>
-
-      <div
-        className={
-          presentation === 'dialog'
-            ? 'mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end'
-            : 'mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4'
-        }
-      >
-        {presentation !== 'embedded' ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={importing}
-            onClick={() =>
-              void onFinished(importedCount > 0 ? 'reviewed' : 'skipped')
+        {presentation !== 'embedded' || selected.size > 0 ? (
+          <div
+            className={
+              presentation === 'dialog'
+                ? 'mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end'
+                : 'mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border pt-4'
             }
           >
-            {importedCount > 0 ? '完成' : '跳过'}
-          </Button>
-        ) : null}
-        {selected.size > 0 ? (
-          <Button
-            size="sm"
-            disabled={importing || scanState !== 'ready'}
-            onClick={() => void importSelected()}
-          >
-            {importing ? '正在导入…' : `导入所选（${selected.size}）`}
-          </Button>
+            {presentation !== 'embedded' ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={importing}
+                onClick={() =>
+                  void onFinished(importedCount > 0 ? 'reviewed' : 'skipped')
+                }
+              >
+                {importedCount > 0 ? '完成' : '跳过'}
+              </Button>
+            ) : null}
+            {selected.size > 0 ? (
+              <Button
+                size="sm"
+                disabled={importing || scanState !== 'ready'}
+                onClick={() => void importSelected()}
+              >
+                {importing ? '正在导入…' : `导入所选（${selected.size}）`}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
     </div>

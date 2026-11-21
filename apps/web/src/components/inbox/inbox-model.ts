@@ -5,6 +5,7 @@ import {
   createToolCommandSubtitle,
   createToolPresentation,
 } from '../conversation/tool-presentation.js'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 export type InboxFilter = 'all' | AttentionItem['type']
 
@@ -74,19 +75,23 @@ export function createInboxItemPresentation(
   item: AttentionItem,
   conversationTitle?: string,
 ): InboxItemPresentation {
+  const title =
+    conversationTitle === undefined
+      ? undefined
+      : displayConversationTitle(conversationTitle, item.createdAt)
   if (item.type === 'approval') {
     if (item.payload.kind === 'command' && item.payload.actionSubtitle) {
       const command = item.payload.actionSubtitle
       const tool = createToolPresentation({ command, status: 'running' })
       return {
-        conversation: conversationTitle ?? 'AI 工具会话',
+        conversation: title ?? 'AI 工具会话',
         description: createToolCommandSubtitle(command),
         title: tool.title,
       }
     }
 
     return {
-      conversation: conversationTitle ?? 'AI 工具会话',
+      conversation: title ?? 'AI 工具会话',
       description:
         item.payload.actionSubtitle ?? 'AI 工具请求执行一项需要你确认的操作。',
       title: item.payload.actionTitle,
@@ -94,16 +99,23 @@ export function createInboxItemPresentation(
   }
 
   if (item.type === 'completed_review') {
+    const completedTitle = displayConversationTitle(
+      item.payload.conversationTitle,
+      item.createdAt,
+    )
     return {
-      conversation: item.payload.conversationTitle,
+      conversation: completedTitle,
       description: 'AI 工具已完成本轮工作，等待你查看结果。',
-      title: item.payload.conversationTitle,
+      title: completedTitle,
     }
   }
 
   const failure = executionFailurePresentation(item.payload.error)
   return {
-    conversation: item.payload.conversationTitle,
+    conversation: displayConversationTitle(
+      item.payload.conversationTitle,
+      item.createdAt,
+    ),
     description: `${failure.cause}${failure.historyNote}`,
     title: failure.title,
   }

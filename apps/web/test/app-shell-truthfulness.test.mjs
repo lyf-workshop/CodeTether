@@ -117,9 +117,10 @@ test('Conversation shell hides unsupported controls and keeps long identities bo
   )
   assert.match(gate, /capabilities\.supportsInterrupt/u)
   assert.doesNotMatch(chromeActions, /interruptController/u)
-  assert.match(header, /title=\{conversation\.title\}/u)
+  assert.match(header, /title=\{title\}/u)
+  assert.match(header, /displayConversationTitle\(/u)
   assert.match(header, /connectionIndicator\.state !== 'connected'/u)
-  assert.match(sidebar, /title=\{\s*`\$\{conversation\.title\}/u)
+  assert.match(sidebar, /displayConversationTitle\(/u)
   assert.match(sidebar, /data-provider=\{conversation\.provider\}/u)
   assert.doesNotMatch(detail, /<ConversationRail/u)
   assert.doesNotMatch(sidebar, /删除|分享|导出|复制会话|移动会话/u)
@@ -146,7 +147,7 @@ test('Project detail keeps implementation identity out of its primary surface', 
   assert.match(source, /resolveProjectWorkspaceContext\(/u)
   assert.match(source, /project\.locations\.map/u)
   assert.match(source, /machineId: location\.machineId/u)
-  assert.match(source, /title=\{location\.rootPath\}/u)
+  assert.match(source, /<ProjectPath path=\{location\.rootPath\} \/>/u)
   assert.doesNotMatch(
     source,
     /AddProjectLocationDialog|RemoveProjectLocationDialog/u,

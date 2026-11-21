@@ -7,7 +7,9 @@ import {
   filterProjectLocationConversations,
   filterProjectLocationSearchResults,
   parseProjectWorkspaceSearch,
+  projectFilterControlsVisible,
   projectRemovalPreflight,
+  projectViewIncludesStatus,
   resolveProjectWorkspaceContext,
 } from '../.tmp/test-dist/components/projects/project-workspace-model.js'
 
@@ -36,6 +38,18 @@ test('archived project links keep eligible filters and discard active-only statu
       status: 'failed',
     },
   )
+  for (const status of ['running', 'waiting'])
+    assert.equal(projectViewIncludesStatus('archived', status), false)
+  for (const status of ['all', 'completed', 'failed'])
+    assert.equal(projectViewIncludesStatus('archived', status), true)
+})
+
+test('project filters appear above five conversations and remain clearable after narrowing', () => {
+  assert.equal(projectFilterControlsVisible(0, false), false)
+  assert.equal(projectFilterControlsVisible(1, false), false)
+  assert.equal(projectFilterControlsVisible(5, false), false)
+  assert.equal(projectFilterControlsVisible(6, false), true)
+  assert.equal(projectFilterControlsVisible(1, true), true)
 })
 
 const project = {

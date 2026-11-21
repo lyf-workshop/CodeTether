@@ -6,6 +6,7 @@ import {
   type ProjectId,
 } from '@codetether/protocol'
 import {
+  Badge,
   IconButton,
   StatusBadge,
   Tooltip,
@@ -39,7 +40,13 @@ export function ConversationChromeActions({
 
   return (
     <>
-      <StatusBadge status={conversation.status} className="shrink-0" />
+      {conversation.archivedAt === undefined ? (
+        <StatusBadge status={conversation.status} className="shrink-0" />
+      ) : (
+        <Badge variant="secondary" className="shrink-0">
+          已归档
+        </Badge>
+      )}
       <Tooltip>
         <TooltipTrigger asChild>
           <IconButton
@@ -68,6 +75,9 @@ export function ConversationChromeActions({
             conversationId: conversationId.data,
             projectId,
             title: conversation.title,
+            ...(conversation.createdAt === undefined
+              ? {}
+              : { createdAt: conversation.createdAt }),
             titleSource: conversation.titleSource,
             status: organizationConversationStatus(conversation.status),
             ...(conversation.pinnedAt === undefined

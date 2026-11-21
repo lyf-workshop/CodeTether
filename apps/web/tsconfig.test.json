@@ -45,6 +45,7 @@
     "src/components/conversation/pending-action-dock-model.ts",
     "src/components/conversation/tool-grouping.ts",
     "src/components/conversation/tool-presentation.ts",
+    "src/components/conversation/inspector-tool-output.ts",
     "src/components/app-shell/workspace-sidebar-model.ts",
     "src/components/app-shell/workspace-sidebar-layout.ts",
     "src/components/conversations/conversation-list-model.ts",
@@ -99,6 +100,8 @@
     "src/runtime/account/account-auth-actions.ts",
     "src/components/settings/settings-model.ts",
     "src/components/machines/device-project-model.ts",
+    "src/components/machines/devices-attention.ts",
+    "src/components/machines/offline-computer-membership.ts",
     "src/components/projects/project-workspace-model.ts"
   ]
 }

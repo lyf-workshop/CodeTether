@@ -49,7 +49,7 @@ test('real CommandList SSR binds the labelled combobox to grouped options and on
   assert.ok(html.includes('id="' + selectedId + '" aria-selected="true"'))
   assert.equal((html.match(/aria-selected="true"/gu) ?? []).length, 1)
   assert.match(html, /role="group"/u)
-  assert.match(html, /这里只匹配已加载的标题/u)
+  assert.doesNotMatch(html, /这里只匹配已加载的标题/u)
   assert.doesNotMatch(html, /textarea|dangerouslySetInnerHTML/u)
 })
 
@@ -63,7 +63,7 @@ test('empty CommandList has no fabricated result or active descendant', () => {
       onSelect: noop,
     }),
   )
-  assert.match(html, /没有找到匹配的已加载标题或操作/u)
+  assert.match(html, /当前列表中没有匹配项/u)
   assert.doesNotMatch(html, /role="option"|aria-activedescendant=/u)
 })
 

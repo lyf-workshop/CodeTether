@@ -30,6 +30,7 @@ import {
   onboardingProviderRuntimeLabel,
   onboardingProviderServiceLabel,
   onboardingSessionDiscoveryLabel,
+  providerLifecycleForMachine,
 } from '../../provider/provider-presentation'
 
 export function OnboardingProviderCheck(props: SetupStepProps) {
@@ -107,6 +108,10 @@ export function OnboardingProviderCard({
   readonly detail?: MachineProviderRead
   readonly provider: DoctorProviderStatus
 }) {
+  const lifecycle = providerLifecycleForMachine(
+    detail?.data?.providerLifecycles ?? [],
+    provider.provider,
+  )
   const guidance = providerInstallationGuidance[provider.provider]
   const currentlyConfirmedMissing =
     provider.freshness === 'current' && !provider.installed
@@ -121,7 +126,7 @@ export function OnboardingProviderCard({
           <div>
             <CardTitle>{guidance.label}</CardTitle>
             <p className="mt-1 text-xs text-text-muted">
-              {providerVersionLabel(provider)} ·{' '}
+              {providerVersionLabel(provider, lifecycle)} ·{' '}
               {lifecycleObservationLabel(
                 provider.freshness,
                 provider.observedAt,
@@ -136,13 +141,13 @@ export function OnboardingProviderCard({
           <div data-provider-fact="installation">
             <dt className="text-xs text-text-muted">安装</dt>
             <dd className="mt-0.5 text-text-primary">
-              {onboardingProviderInstallationLabel(provider)}
+              {onboardingProviderInstallationLabel(provider, lifecycle)}
             </dd>
           </div>
           <div data-provider-fact="runtime">
             <dt className="text-xs text-text-muted">运行环境</dt>
             <dd className="mt-0.5 text-text-primary">
-              {onboardingProviderRuntimeLabel(provider)}
+              {onboardingProviderRuntimeLabel(provider, lifecycle)}
             </dd>
           </div>
           <div data-provider-fact="service">

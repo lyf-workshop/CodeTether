@@ -4,6 +4,7 @@ import { AgentBadge, Button, SectionState, StatusBadge } from '@codetether/ui'
 import type { GetMachineResponse } from '@codetether/protocol'
 
 import { formatConversationActivity } from '../conversations/conversation-list-model'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 const conversationPageSize = 10
 
@@ -56,10 +57,16 @@ export function MachineConversationsSection({
               >
                 <div className="min-w-0 flex-1 basis-40">
                   <h3
-                    title={conversation.title}
+                    title={displayConversationTitle(
+                      conversation.title,
+                      conversation.createdAt,
+                    )}
                     className="truncate text-base font-medium"
                   >
-                    {conversation.title}
+                    {displayConversationTitle(
+                      conversation.title,
+                      conversation.createdAt,
+                    )}
                   </h3>
                   <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-muted">
                     <span className="truncate">

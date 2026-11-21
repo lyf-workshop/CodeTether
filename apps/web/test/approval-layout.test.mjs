@@ -21,11 +21,11 @@ test('Conversation Workspace owns stable Header, Timeline, Dock, Composer rows',
   assert.doesNotMatch(source, /pendingApprovals\.length\s*>\s*0\s*\?/u)
 })
 
-test('Timeline Approval is compact history and has no mutation controls', async () => {
+test('the pending Approval lives in the Dock without a duplicate Timeline card', async () => {
   const source = await sourceOf('conversation-timeline.tsx')
 
-  assert.match(source, /data-approval-history="requested"/u)
-  assert.match(source, /请在下方待处理操作中确认/u)
+  assert.doesNotMatch(source, /data-approval-history="requested"/u)
+  assert.doesNotMatch(source, /请在下方待处理操作中确认/u)
   assert.doesNotMatch(source, /approvalController|\.resolve\(/u)
 })
 

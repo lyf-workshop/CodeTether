@@ -3,7 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearch } from '@tanstack/react-router'
 import { Folder, Plus, Trash2 } from 'lucide-react'
 
-import { Button, Notice, PageHeader, SectionState } from '@codetether/ui'
+import {
+  Button,
+  Notice,
+  PageHeader,
+  ProjectPath,
+  SectionState,
+} from '@codetether/ui'
 import { ProjectIdSchema, type ProjectId } from '@codetether/protocol'
 
 import {
@@ -36,6 +42,7 @@ export function ProjectDetailRoute({
     <ProjectDetailPage
       projectId={projectId.data}
       search={search}
+      searchRoute={searchPage}
       searchPage={searchPage || Boolean(search.q)}
     />
   ) : (
@@ -50,10 +57,12 @@ export function ProjectSearchRoute() {
 function ProjectDetailPage({
   projectId,
   search,
+  searchRoute,
   searchPage,
 }: {
   projectId: ProjectId
   search: ProjectWorkspaceSearch
+  searchRoute: boolean
   searchPage: boolean
 }) {
   const runtime = useHostRuntime()
@@ -153,11 +162,8 @@ function ProjectDetailPage({
                     (machine) => machine.machineId === location.machineId,
                   )?.displayName ?? '设备名称暂时未知'}
                 </p>
-                <p
-                  title={location.rootPath}
-                  className="mt-1 truncate font-mono text-sm text-text-muted"
-                >
-                  {location.rootPath}
+                <p className="mt-1 min-w-0 font-mono text-sm text-text-muted">
+                  <ProjectPath path={location.rootPath} />
                 </p>
               </Link>
             </li>
@@ -201,12 +207,10 @@ function ProjectDetailPage({
               {machine?.displayName ?? '设备名称暂时未知'}
             </Link>
             <span aria-hidden="true">·</span>
-            <span
-              title={location.rootPath}
-              className="min-w-0 truncate font-mono"
-            >
-              {location.rootPath}
-            </span>
+            <ProjectPath
+              path={location.rootPath}
+              className="flex-1 font-mono"
+            />
           </div>
         }
         actions={
@@ -253,6 +257,7 @@ function ProjectDetailPage({
         projectName={project.name}
         search={{ ...search, machineId: location.machineId }}
         searchPage={searchPage}
+        searchRoute={searchRoute}
       />
       {!searchPage && !archived ? (
         <>

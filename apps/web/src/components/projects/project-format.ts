@@ -1,11 +1,7 @@
-export function formatProjectTime(timestamp: string): string {
-  const value = new Date(timestamp)
-  if (Number.isNaN(value.getTime())) return '时间未知'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(value)
+export function formatProjectTime(timestamp: string): string {
+  return formatLocalDateTime(timestamp) ?? '时间未知'
 }
 
 const POSIX_ROOT_PATTERN = /^\/+$/u

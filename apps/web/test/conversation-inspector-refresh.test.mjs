@@ -20,10 +20,10 @@ const componentRoot = new URL(
 )
 
 test('Inspector exposes only truthful Files, Changes, and Tool Output surfaces', async () => {
-  const source = await readFile(
-    new URL('inspector-panel.tsx', componentRoot),
-    'utf8',
-  )
+  const [source, entries] = await Promise.all([
+    readFile(new URL('inspector-panel.tsx', componentRoot), 'utf8'),
+    readFile(new URL('inspector-tool-output.ts', componentRoot), 'utf8'),
+  ])
 
   assert.match(source, /value="files"/u)
   assert.match(source, /value="changes"/u)
@@ -38,7 +38,9 @@ test('Inspector exposes only truthful Files, Changes, and Tool Output surfaces',
   assert.match(source, /displayContext\?\.machineKind === 'local'/u)
   assert.match(source, /hasToolOutput/u)
   assert.doesNotMatch(source, /conversation\.capabilities\.supportsDiff/u)
-  assert.match(source, /execution\.tool\.outputSummary/u)
+  assert.match(source, /inspectorToolEntries\(/u)
+  assert.match(entries, /createToolCommandSubtitle/u)
+  assert.doesNotMatch(entries, /execution\.tool\.outputSummary/u)
 })
 
 test('Inspector toggle owns one fixed chrome slot and restores a wider workspace', async () => {

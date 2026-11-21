@@ -149,7 +149,7 @@ test('Workspace Sidebar owns project navigation, scoped creation, and one lazy C
   assert.match(source, /expandedProjectKeys/u)
   assert.doesNotMatch(source, /useQueries|provider\.availability/u)
   assert.match(source, /data-selected=\{selected \|\| undefined\}/u)
-  assert.match(source, /查看已归档会话/u)
+  assert.doesNotMatch(source, /查看已归档会话/u)
   assert.match(source, /显示全部/u)
   assert.doesNotMatch(detail, /ConversationRail|layout-conversation-rail/u)
 })

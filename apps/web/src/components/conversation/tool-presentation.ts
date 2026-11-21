@@ -90,7 +90,7 @@ function inspectToolCommand({
   kind,
 }: Pick<ToolPresentationInput, 'command' | 'kind'>) {
   const rawCommand = command.trim() || '执行命令'
-  const displayCommand = unwrapPowerShellCommand(rawCommand)
+  const displayCommand = displayToolCommand(rawCommand)
   const tokens = tokenizeCommandPrefix(displayCommand, 6)
   const executable = normalizeExecutable(tokens[0]?.value)
   const classification =
@@ -161,7 +161,12 @@ function canonicalToolSubject(
 /** Compact, wrapper-free command text suitable for a secondary UI label. */
 export function createToolCommandSubtitle(command: string): string {
   const normalized = command.trim() || '执行命令'
-  return compactSubtitle(unwrapPowerShellCommand(normalized))
+  return compactSubtitle(displayToolCommand(normalized))
+}
+
+/** Display-only shell text; never used to execute or authorize a command. */
+export function displayToolCommand(command: string): string {
+  return unwrapPowerShellCommand(unwrapWholeQuotedValue(command.trim()))
 }
 
 interface CommandClassification {
@@ -512,6 +517,10 @@ function unwrapWholeQuotedValue(value: string): string {
         index += 1
         continue
       }
+      if (quote === '"' && value[index + 1] === '"') {
+        index += 1
+        continue
+      }
       return value
     }
     escaped = false
@@ -520,7 +529,7 @@ function unwrapWholeQuotedValue(value: string): string {
   const inner = value.slice(1, -1)
   return quote === "'"
     ? inner.replace(/''/gu, "'")
-    : inner.replace(/`([`"$])/gu, '$1')
+    : inner.replace(/""/gu, '"').replace(/`([`"$])/gu, '$1')
 }
 
 interface CommandToken {

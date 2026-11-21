@@ -7,6 +7,7 @@ import type {
   ProjectRecord,
 } from '@codetether/protocol'
 import { machineSubtitleLabel } from '../machines/machine-presentation.js'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 export type PaletteActionId =
   | 'new-conversation'
@@ -87,11 +88,18 @@ export function commandPaletteGroups(
       )
     })
   const conversationEntries: PaletteEntry[] = recent
-    .filter((conversation) => matches(conversation.title))
+    .filter((conversation) =>
+      matches(
+        displayConversationTitle(conversation.title, conversation.createdAt),
+      ),
+    )
     .slice(0, needle === '' ? 4 : 6)
     .map((conversation) => ({
       id: 'conversation:' + conversation.conversationId,
-      label: conversation.title,
+      label: displayConversationTitle(
+        conversation.title,
+        conversation.createdAt,
+      ),
       description: [
         machines.get(conversation.machineId)?.displayName ?? '设备未知',
         conversation.projectId === undefined

@@ -29,7 +29,7 @@ import {
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import { formatInboxAttentionBadge } from '../inbox/inbox-model'
-import { isOfflineRemoteComputer } from '../machines/machine-presentation'
+import { offlineComputerMembership } from '../machines/offline-computer-membership'
 import { OfflineComputersGroup } from '../machines/offline-computers-group'
 import { useWorkspaceTreeExpansion } from './use-workspace-tree-expansion'
 import {
@@ -105,7 +105,10 @@ export function WorkspaceSidebar({
     projectsQuery.data ?? [],
   )
   const offlineGroups = groups.filter(({ machine }) =>
-    isOfflineRemoteComputer(machine),
+    offlineComputerMembership.isGrouped(machine),
+  )
+  const offlineIds = new Set(
+    offlineGroups.map(({ machine }) => machine.machineId),
   )
   const offlineConversationId = offlineGroups.some(
     ({ machine }) => machine.machineId === currentConversation?.machineId,
@@ -267,7 +270,7 @@ export function WorkspaceSidebar({
               ) : null}
               <div className="space-y-1">
                 {groups
-                  .filter(({ machine }) => !isOfflineRemoteComputer(machine))
+                  .filter(({ machine }) => !offlineIds.has(machine.machineId))
                   .map(renderDevice)}
                 <OfflineComputersGroup
                   key={offlineConversationId ?? 'browsing'}

@@ -24,11 +24,19 @@ test('device cards hide unknown counts and bind every conversation to its immuta
   assert.deepEqual(projectConversationMetrics(conversations, localId), {
     countLabel: '1 个会话',
     runningCount: 0,
+    waitingCount: 0,
     lastActivityAt: timestamp,
     capped: false,
   })
   assert.equal(
     projectConversationMetrics(conversations, remoteId).runningCount,
+    1,
+  )
+  assert.equal(
+    projectConversationMetrics(
+      [conversation('waiting', remoteId, 'waiting')],
+      remoteId,
+    ).waitingCount,
     1,
   )
 })

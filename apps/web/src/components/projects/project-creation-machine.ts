@@ -66,3 +66,11 @@ export function fixedProjectCreationMachineExplanation(
       return '这台设备当前没有开放项目访问。'
   }
 }
+
+export function projectCreationMachineHint(
+  machine: Pick<MachineSummary, 'kind'> | undefined,
+): string {
+  return machine?.kind === 'remote'
+    ? '离线的配对电脑恢复在线后才能添加项目；电脑需要允许访问项目文件夹。'
+    : '电脑需要允许访问项目文件夹。'
+}

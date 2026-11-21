@@ -120,25 +120,31 @@ test('changing a list filter uses an isolated cache rather than filtering the pr
   queryClient.clear()
 })
 
-test('actual v4 collection wires validated filters to both Host archive indexes', () => {
+test('collection keeps unfiltered counts while querying the chosen server filter', () => {
   const { reads } = renderProjectCollection({
     search: { provider: 'claude-code', status: 'failed' },
   })
-  assert.equal(reads.length, 2)
+  assert.equal(reads.length, 3)
   assert.deepEqual(reads[0].queryKey, [
     'host',
     'project-conversations',
     projectId,
     'active',
-    { provider: 'claude-code', status: 'failed' },
   ])
   assert.deepEqual(reads[1].queryKey, [
     'host',
     'project-conversations',
     projectId,
     'archived',
+  ])
+  assert.deepEqual(reads[2].queryKey, [
+    'host',
+    'project-conversations',
+    projectId,
+    'active',
     { provider: 'claude-code', status: 'failed' },
   ])
+  assert.equal(reads[2].enabled, true)
 })
 
 test('actual successful create callback invalidates every project filter before focusing the new canonical route', async () => {

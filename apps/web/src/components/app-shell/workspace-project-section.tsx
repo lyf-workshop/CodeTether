@@ -11,6 +11,7 @@ import {
 import { conversationListQueryOptions } from '../../runtime/host/conversation-list-query'
 import { machineConnectionStateLabel } from '../machines/machine-presentation'
 import { machineCanAddProject } from '../machines/device-project-model'
+import { displayConversationTitle } from '../conversations/conversation-title'
 import type { WorkspaceSidebarProps } from './workspace-sidebar'
 import {
   workspaceConversationStatusLabel,
@@ -149,11 +150,7 @@ export function WorkspaceProjectSection({
                 ? '正在加载会话…'
                 : '暂时无法读取会话'}
             </p>
-          ) : conversations.visible.length === 0 ? (
-            <p className="flex h-[var(--tree-secondary-h)] items-center px-2 text-xs text-text-muted">
-              还没有会话
-            </p>
-          ) : (
+          ) : conversations.visible.length === 0 ? null : (
             <ul aria-label={`${machine.displayName} · ${project.name} 会话`}>
               {conversations.visible.map((conversation) => (
                 <WorkspaceConversationRow
@@ -184,15 +181,6 @@ export function WorkspaceProjectSection({
               只读取项目最近 100 个会话；更早的会话请使用项目内搜索。
             </p>
           ) : null}
-          <Link
-            to="/projects/$projectId/conversations"
-            params={{ projectId: project.projectId }}
-            search={{ view: 'archived', machineId: machine.machineId }}
-            className="flex h-[var(--tree-secondary-h)] items-center gap-2 rounded-sm px-2 text-xs text-text-muted outline-none hover:bg-surface-muted/55 focus-visible:ring-2 focus-visible:ring-ring/60"
-          >
-            <Archive aria-hidden="true" className="size-3.5" />
-            <span className="truncate">查看已归档会话</span>
-          </Link>
         </div>
       ) : null}
     </div>
@@ -209,6 +197,10 @@ function WorkspaceConversationRow({
   const provider = workspaceProviderPresentation(conversation.provider)
   const status = workspaceConversationStatusLabel(conversation.status)
   const archived = conversation.archivedAt !== undefined
+  const title = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+  )
   return (
     <li className="min-w-0">
       <Link
@@ -217,7 +209,7 @@ function WorkspaceConversationRow({
         aria-current={selected ? 'page' : undefined}
         data-selected={selected || undefined}
         data-provider={conversation.provider}
-        title={`${conversation.title} · ${provider.label}${status === undefined ? '' : ` · ${status}`}${archived ? ' · 已归档' : ''}`}
+        title={`${title} · ${provider.label}${status === undefined ? '' : ` · ${status}`}${archived ? ' · 已归档' : ''}`}
         className={cn(
           'flex h-[var(--tree-conversation-h)] min-w-0 items-center gap-3 rounded-sm px-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60',
           selected
@@ -240,7 +232,7 @@ function WorkspaceConversationRow({
                   : 'bg-transparent',
           )}
         />
-        <span className="min-w-0 flex-1 truncate">{conversation.title}</span>
+        <span className="min-w-0 flex-1 truncate">{title}</span>
         {archived ? (
           <Archive
             aria-label="当前已归档"

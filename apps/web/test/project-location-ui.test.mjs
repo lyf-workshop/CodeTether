@@ -18,7 +18,7 @@ test('Project Detail requires an explicit device for legacy multi-location Proje
   assert.match(detail, /key=\{location\.machineId\}/u)
   assert.match(detail, /machineId: location\.machineId/u)
   assert.match(detail, /currentMachineId=\{location\.machineId\}/u)
-  assert.match(detail, /title=\{location\.rootPath\}/u)
+  assert.match(detail, /<ProjectPath path=\{location\.rootPath\} \/>/u)
   assert.match(detail, /选择要查看的设备/u)
   assert.match(model, /project\.locations\.length !== 1/u)
   assert.match(model, /kind: 'choose-device'/u)

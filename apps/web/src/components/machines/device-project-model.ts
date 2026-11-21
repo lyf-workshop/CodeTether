@@ -86,8 +86,10 @@ export function projectConversationMetrics(
   return {
     countLabel,
     runningCount: own.filter(
-      (conversation) =>
-        conversation.status === 'running' || conversation.status === 'waiting',
+      (conversation) => conversation.status === 'running',
+    ).length,
+    waitingCount: own.filter(
+      (conversation) => conversation.status === 'waiting',
     ).length,
     lastActivityAt,
     capped,

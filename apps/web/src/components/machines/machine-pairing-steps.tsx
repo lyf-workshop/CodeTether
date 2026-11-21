@@ -5,6 +5,7 @@ import type {
   MachineSummary,
   RemoteMachinePairingCandidate,
 } from '@codetether/protocol'
+import { formatLocalTime } from '../../presentation/date-time.js'
 import {
   machineArchitectureLabel,
   machinePlatformLabel,
@@ -227,12 +228,5 @@ export function MachinePairingComplete({
   )
 }
 function formatPairingExpiry(value: string): string {
-  const expires = new Date(value)
-  return Number.isNaN(expires.getTime())
-    ? '本次配对结束'
-    : new Intl.DateTimeFormat('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-      }).format(expires)
+  return formatLocalTime(value, true) ?? '本次配对结束'
 }

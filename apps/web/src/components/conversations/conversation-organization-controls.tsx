@@ -31,6 +31,7 @@ import {
 } from '../../runtime/host/conversation-organization-actions'
 import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
 import { ConversationSettingsDialog } from './conversation-settings-dialog'
+import { displayConversationTitle } from './conversation-title.js'
 import { ArchiveConversationDialog } from './archive-conversation-dialog'
 import {
   conversationArchiveBlockedReason,
@@ -182,7 +183,7 @@ export function ConversationOrganizationMenu({
         <DropdownMenuTrigger ref={triggerRef} asChild>
           {trigger ?? (
             <IconButton
-              label={`更多会话操作：${conversation.title}`}
+              label={`更多会话操作：${displayConversationTitle(conversation.title, conversation.createdAt)}`}
               size="sm"
               variant="ghost"
             >

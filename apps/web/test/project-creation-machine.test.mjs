@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   selectFixedProjectCreationMachine,
   fixedProjectCreationMachineExplanation,
+  projectCreationMachineHint,
 } from '../.tmp/test-dist/components/projects/project-creation-machine.js'
 
 const local = {
@@ -19,6 +20,12 @@ const remote = {
   connectionState: 'online',
   capabilities: { projectAccess: true, providerExecution: true },
 }
+
+test('offline guidance belongs only to a selected paired remote computer', () => {
+  assert.match(projectCreationMachineHint(remote), /离线的配对电脑/u)
+  assert.doesNotMatch(projectCreationMachineHint(local), /离线/u)
+  assert.doesNotMatch(projectCreationMachineHint(undefined), /离线/u)
+})
 
 test('Project registration preserves the requested local or remote Device despite list order', () => {
   assert.equal(

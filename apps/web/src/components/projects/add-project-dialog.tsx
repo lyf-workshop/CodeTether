@@ -134,7 +134,7 @@ export function AddProjectDialog(props: AddProjectDialogProps) {
                   ) : null}
                   {machinesQuery.data?.length === 0 ? (
                     <Notice title="还没有可用的设备">
-                      在设备页添加设备，或等这台电脑恢复后再添加项目。
+                      请先在设备页添加一台电脑，再添加项目。
                     </Notice>
                   ) : null}
                 </>

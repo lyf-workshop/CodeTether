@@ -18,6 +18,10 @@ import type {
 } from '../../runtime/host/conversation-projection.js'
 import type { HostConnectionState } from '../../runtime/host/host-runtime.js'
 import { executionFailurePresentation } from '../../failures/failure-presentation.js'
+import {
+  formatLocalDate,
+  formatLocalTime,
+} from '../../presentation/date-time.js'
 import type {
   ConversationConnectionIndicatorViewModel,
   ConversationDetailSourceViewModel,
@@ -29,6 +33,7 @@ import type {
 } from './conversation-view-model.js'
 import { presentProjectPaths } from './message-presentation.js'
 import { projectViewedFiles } from './conversation-viewed-files.js'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 import { createTimelineToolPresentation } from './tool-presentation.js'
 import {
   deriveLiveControlAvailability,
@@ -142,7 +147,7 @@ export function createLiveConversationRailViewModel(
       ? undefined
       : {
           id: current.id,
-          title: current.title,
+          title: displayConversationTitle(current.title, current.createdAt),
           titleSource: current.titleSource,
           archivedAt: current.archivedAt,
           status: current.status,
@@ -164,7 +169,9 @@ export function createLiveConversationRailViewModel(
           const selected = summary.conversationId === current.id
           return {
             id: summary.conversationId,
-            title: selected ? current.title : summary.title,
+            title: selected
+              ? displayConversationTitle(current.title, current.createdAt)
+              : displayConversationTitle(summary.title, summary.createdAt),
             titleSource: selected ? current.titleSource : summary.titleSource,
             ...(summary.pinnedAt === undefined
               ? {}
@@ -200,8 +207,11 @@ export function createLiveConversationViewModel(
   nativeHistory?: LiveConversationMachineContext['nativeHistory'],
 ): ConversationViewModel {
   const presentationRoot = model.cwd ?? projectRootPath
+  const turnNumbers = new Map(
+    model.turns.map((turn, index) => [turn.id, index + 1]),
+  )
   const files = model.changes.map((change) =>
-    projectFileChange(change, presentationRoot),
+    projectFileChange(change, presentationRoot, turnNumbers.get(change.turnId)),
   )
   const totals = files.reduce(
     (summary, file) => ({
@@ -229,6 +239,7 @@ export function createLiveConversationViewModel(
   return {
     id: model.id,
     title: model.title,
+    createdAt: model.createdAt,
     titleSource: model.titleSource,
     ...(model.pinnedAt === undefined ? {} : { pinnedAt: model.pinnedAt }),
     ...(model.archivedAt === undefined ? {} : { archivedAt: model.archivedAt }),
@@ -555,10 +566,12 @@ function projectTurnTimeline(
 function projectFileChange(
   change: FileChangeReadModel,
   cwd: string | undefined,
+  turnNumber: number | undefined,
 ): ConversationFileChangeViewModel {
   const path = workspaceRelativePath(change.path, cwd)
   return {
     id: change.id,
+    ...(turnNumber === undefined ? {} : { turnNumber }),
     path,
     name: fileName(path),
     kind: change.kind,
@@ -676,13 +689,7 @@ function compactSummary(value: string): string {
 }
 
 function formatActivityTime(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.valueOf())) return '—'
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
+  return formatLocalTime(value) ?? '—'
 }
 
 function formatDayLabel(value: string): string {
@@ -693,12 +700,7 @@ function formatDayLabel(value: string): string {
     date.getFullYear() === today.getFullYear() &&
     date.getMonth() === today.getMonth() &&
     date.getDate() === today.getDate()
-  const day = sameDay
-    ? '今天'
-    : new Intl.DateTimeFormat('zh-CN', {
-        month: 'short',
-        day: 'numeric',
-      }).format(date)
+  const day = sameDay ? '今天' : formatLocalDate(date)
   return `${day} ${formatActivityTime(value)}`
 }
 

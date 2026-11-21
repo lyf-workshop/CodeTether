@@ -2,6 +2,7 @@ import { ProviderSummaryBadge } from '../../provider/provider-summary-badge'
 import { FolderOpen, LockKeyhole, Monitor } from 'lucide-react'
 import {
   AgentIdentityMark,
+  ProjectPath,
   Select,
   SelectContent,
   SelectGroup,
@@ -158,14 +159,11 @@ export function NewConversationFields({
                     >
                       <span className="grid w-full min-w-0 max-w-full gap-0.5">
                         <span className="truncate">{choice.project.name}</span>
-                        <span
-                          className="truncate font-mono text-xs text-text-muted"
-                          title={choice.location.rootPath}
-                        >
+                        <span className="min-w-0 font-mono text-xs text-text-muted">
                           {choice.unavailableReason === undefined
                             ? ''
                             : choice.unavailableReason + ' · '}
-                          {choice.location.rootPath}
+                          <ProjectPath path={choice.location.rootPath} />
                         </span>
                       </span>
                     </SelectItem>
@@ -181,7 +179,7 @@ export function NewConversationFields({
         >
           <Monitor aria-hidden="true" className="size-3.5 shrink-0" />
           <span
-            className="min-w-0 max-w-1/2 truncate"
+            className="max-w-1/2 shrink-0 truncate"
             title={project?.machine?.displayName}
           >
             {project?.machine?.displayName ??
@@ -190,12 +188,10 @@ export function NewConversationFields({
           {project === undefined ? null : (
             <>
               <span aria-hidden="true">·</span>
-              <span
-                className="min-w-0 truncate font-mono"
-                title={project.location.rootPath}
-              >
-                {project.location.rootPath}
-              </span>
+              <ProjectPath
+                path={project.location.rootPath}
+                className="flex-1 font-mono"
+              />
             </>
           )}
         </p>

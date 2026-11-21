@@ -6,6 +6,7 @@ import type {
   ConversationViewModel,
 } from './conversation-view-model'
 import type { ConversationDisplayContext } from './conversation-gate-presentation'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 const connectionBadgeVariants = {
   connecting: 'info',
@@ -29,13 +30,17 @@ export function ConversationHeader({
   connectionIndicator,
   context,
 }: ConversationHeaderProps) {
+  const title = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+  )
   return (
     <header className="w-full min-w-0 border-b border-border pt-3 pb-4">
       <h1
-        title={conversation.title}
+        title={title}
         className="min-w-0 truncate text-2xl leading-snug font-semibold text-text-primary"
       >
-        {conversation.title}
+        {title}
       </h1>
       <div
         aria-label="会话模型设置"

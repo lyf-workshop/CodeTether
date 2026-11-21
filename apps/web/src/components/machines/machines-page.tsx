@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { Link, useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 
 import { Button, Notice, PageHeader } from '@codetether/ui'
@@ -10,16 +10,15 @@ import {
   useHostRuntime,
 } from '../../runtime/host/host-runtime-hooks'
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
+import { attentionListQueryOptions } from '../../runtime/host/attention-query'
 import { projectListQueryOptions } from '../../runtime/host/project-query'
 import {
   MachinesEmptyState,
   MachinesErrorState,
   MachinesLoadingState,
 } from './machine-page-states'
-import {
-  isOfflineRemoteComputer,
-  sortMachinesForDisplay,
-} from './machine-presentation'
+import { sortMachinesForDisplay } from './machine-presentation'
+import { offlineComputerMembership } from './offline-computer-membership'
 import { MachineSummaryCard } from './machine-summary-card'
 import { OfflineComputersGroup } from './offline-computers-group'
 import {
@@ -27,6 +26,7 @@ import {
   AuthorizedMobileDevicesList,
 } from './authorized-mobile-devices'
 import { useAccountSession } from '../../runtime/account/use-account-session'
+import { devicesAttentionBanner } from './devices-attention'
 
 export function MachinesPage() {
   const runtime = useHostRuntime()
@@ -38,11 +38,23 @@ export function MachinesPage() {
     enabled: connectionState === 'connected',
   })
   const machines = sortMachinesForDisplay(machinesQuery.data ?? [])
-  const offlineComputers = machines.filter(isOfflineRemoteComputer)
+  const offlineComputers = machines.filter((machine) =>
+    offlineComputerMembership.isGrouped(machine),
+  )
+  const offlineIds = new Set(
+    offlineComputers.map((machine) => machine.machineId),
+  )
   const projectsQuery = useQuery({
     ...projectListQueryOptions(runtime),
     enabled: connectionState === 'connected',
   })
+  // The root layout already observes this same infinite-stale query for the
+  // sidebar badge; this adds no per-device or per-project request.
+  const attentionQuery = useQuery({
+    ...attentionListQueryOptions(runtime),
+    enabled: connectionState === 'connected',
+  })
+  const attentionBanner = devicesAttentionBanner(attentionQuery.data?.summary)
   const unavailable =
     connectionState === 'unavailable' || connectionState === 'incompatible'
   const loading =
@@ -90,6 +102,20 @@ export function MachinesPage() {
           </Button>
         }
       />
+      {attentionBanner ? (
+        <Notice
+          tone="warn"
+          title={attentionBanner.title}
+          className="mb-6"
+          action={
+            <Button asChild size="sm" variant="secondary">
+              <Link to="/inbox">查看待处理</Link>
+            </Button>
+          }
+        >
+          {attentionBanner.detail}
+        </Notice>
+      ) : null}
       {unavailable ? (
         <MachinesErrorState
           incompatible={connectionState === 'incompatible'}
@@ -149,7 +175,7 @@ export function MachinesPage() {
           ) : null}
           <div className="space-y-4">
             {renderCards(
-              machines.filter((machine) => !isOfflineRemoteComputer(machine)),
+              machines.filter((machine) => !offlineIds.has(machine.machineId)),
             )}
             <OfflineComputersGroup
               count={offlineComputers.length}

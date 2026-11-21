@@ -11,6 +11,8 @@ import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
 import type { InboxItemMetadata } from './use-inbox-metadata'
 import { createInboxItemPresentation } from './inbox-model'
 import { providerDisplayName } from '../../provider/provider-presentation'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 export type InboxMutationAction = ApprovalDecision | 'acknowledge' | 'review'
 export interface InboxItemMutationState {
@@ -34,13 +36,6 @@ interface InboxItemProps {
   onReview: (item: Extract<AttentionItem, { type: 'completed_review' }>) => void
 }
 
-const timeFormatter = new Intl.DateTimeFormat('zh-CN', {
-  month: 'short',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-})
-
 export function InboxItem({
   approvalEnabled,
   controlsEnabled,
@@ -59,11 +54,13 @@ export function InboxItem({
     metadata?.provider === undefined
       ? 'AI 工具'
       : providerDisplayName(metadata.provider)
-  const conversationTitle =
+  const conversationTitle = displayConversationTitle(
     metadata?.conversationTitle ??
-    (item.type === 'approval'
-      ? presentation.conversation
-      : item.payload.conversationTitle)
+      (item.type === 'approval'
+        ? presentation.conversation
+        : item.payload.conversationTitle),
+    item.createdAt,
+  )
   const Icon =
     item.type === 'approval'
       ? ShieldCheck
@@ -269,6 +266,5 @@ function AttentionActions({
 }
 
 function formatAttentionTime(timestamp: string): string {
-  const value = new Date(timestamp)
-  return Number.isNaN(value.getTime()) ? timestamp : timeFormatter.format(value)
+  return formatLocalDateTime(timestamp) ?? '时间未知'
 }

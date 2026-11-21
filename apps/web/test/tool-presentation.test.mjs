@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   createTimelineToolPresentation,
   createToolPresentation,
+  displayToolCommand,
 } from '../.tmp/test-dist/components/conversation/tool-presentation.js'
 
 test('classifies direct and safely unwrapped PowerShell commands', () => {
@@ -253,6 +254,39 @@ test('timeline previews plain, wrapped, and compound commands lexically', () => 
     subject("& 'C:\\Program Files\\node.exe' --test && git status").subject,
     "& 'C:\\Program Files\\node.exe' --test 等 2 条",
   )
+})
+
+test('PowerShell command display removes transport quoting without changing raw input', () => {
+  const escapedLauncher =
+    '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command \'node --test\''
+  assert.equal(displayToolCommand(escapedLauncher), 'node --test')
+
+  const doubledQuotes =
+    'powershell -Command "Get-Location; rg --files -g ""!node_modules"" -g ""!vendor"""'
+  const presentation = createTimelineToolPresentation({
+    command: doubledQuotes,
+    kind: 'shell',
+    status: 'completed',
+  })
+  assert.equal(
+    presentation.displayCommand,
+    'Get-Location; rg --files -g "!node_modules" -g "!vendor"',
+  )
+  assert.equal(presentation.subject, 'Get-Location 等 2 条')
+  assert.equal(presentation.rawCommand, doubledQuotes)
+
+  const quotedCodexCommand = '"rg --files -g ""!node_modules"" -g ""!vendor"""'
+  const codexPresentation = createTimelineToolPresentation({
+    command: quotedCodexCommand,
+    kind: 'shell',
+    status: 'completed',
+  })
+  assert.equal(
+    codexPresentation.displayCommand,
+    'rg --files -g "!node_modules" -g "!vendor"',
+  )
+  assert.equal(codexPresentation.subject, codexPresentation.displayCommand)
+  assert.equal(codexPresentation.rawCommand, quotedCodexCommand)
 })
 
 test('timeline keeps canonical tool subjects and renders only verified metadata', () => {

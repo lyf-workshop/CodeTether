@@ -22,6 +22,7 @@ import {
   formatConversationArchivedAt,
   providerDisplayName,
 } from './conversation-list-model'
+import { displayConversationTitle } from './conversation-title'
 import { providerAgentId } from '../../provider/provider-presentation'
 
 interface ConversationGroupProps {
@@ -116,6 +117,10 @@ function ConversationRow({
   const rowRef = useRef<HTMLLIElement>(null)
   const [restoreError, setRestoreError] = useState<string>()
   const archived = archiveView === 'archived'
+  const displayTitle = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+  )
 
   function focusAdjacentRow() {
     const row = rowRef.current
@@ -153,7 +158,13 @@ function ConversationRow({
       {menu}
     </div>
   ) : (
-    <div className="flex w-max items-center gap-1 min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100">
+    <div
+      className={cn(
+        'flex w-max items-center gap-1',
+        !showProvider &&
+          'min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100',
+      )}
+    >
       {conversation.pinnedAt === undefined ? null : (
         <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
       )}
@@ -180,7 +191,7 @@ function ConversationRow({
       >
         {showProvider ? (
           <SessionItem
-            title={conversation.title}
+            title={displayTitle}
             leading={
               <AgentIdentityMark
                 agent={providerAgentId(conversation.provider)}
@@ -207,8 +218,8 @@ function ConversationRow({
                 to="/c/$conversationId"
                 params={{ conversationId: conversation.conversationId }}
                 data-conversation-primary-action
-                aria-label={`打开会话：${conversation.title}`}
-                title={conversation.title}
+                aria-label={`打开会话：${displayTitle}`}
+                title={displayTitle}
                 className="absolute inset-0 z-0 rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               />
             }
@@ -217,7 +228,7 @@ function ConversationRow({
         ) : (
           <ConversationItem
             appearance="row"
-            title={conversation.title}
+            title={displayTitle}
             description={
               archived && conversation.archivedAt !== undefined
                 ? `归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
@@ -244,8 +255,8 @@ function ConversationRow({
                   conversationId: conversation.conversationId,
                 }}
                 data-conversation-primary-action
-                aria-label={`打开会话：${conversation.title}`}
-                title={conversation.title}
+                aria-label={`打开会话：${displayTitle}`}
+                title={displayTitle}
                 className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               />
             }

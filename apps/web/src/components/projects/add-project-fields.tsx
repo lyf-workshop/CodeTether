@@ -15,6 +15,7 @@ import type { MachineId, MachineSummary } from '@codetether/protocol'
 import { machinePlatformFamily } from '../machines/machine-presentation'
 import {
   fixedProjectCreationMachineExplanation,
+  projectCreationMachineHint,
   selectFixedProjectCreationMachine,
 } from './project-creation-machine'
 
@@ -135,7 +136,7 @@ export function AddProjectFields({
           id="add-project-machine-description"
           className="text-xs text-text-muted"
         >
-          离线的电脑恢复在线后才能添加项目；电脑需要允许访问项目文件夹。
+          {projectCreationMachineHint(machine)}
         </p>
       </div>
 

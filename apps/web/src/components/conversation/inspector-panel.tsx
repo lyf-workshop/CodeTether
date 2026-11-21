@@ -27,6 +27,8 @@ import {
   resolveConversationInspectorTab,
   type InspectorTab,
 } from './conversation-inspector-state'
+import { displayToolCommand } from './tool-presentation'
+import { inspectorToolEntries } from './inspector-tool-output'
 
 function LiveDuration({
   conversation,
@@ -184,6 +186,11 @@ function ChangesSummary({
                   >
                     {change.path}
                   </span>
+                  {change.turnNumber === undefined ? null : (
+                    <span className="shrink-0 text-xs text-text-muted">
+                      第 {change.turnNumber} 轮
+                    </span>
+                  )}
                   {change.additions > 0 ? (
                     <span className="shrink-0 font-medium tabular-nums text-success-text">
                       +{change.additions}
@@ -215,39 +222,9 @@ function ToolOutputSummary({
   conversation: ConversationViewModel
   terminal: ConversationTerminalViewModel
 }) {
-  const toolEntries = conversation.timeline.blocks.flatMap((block) =>
-    block.kind === 'agent-run'
-      ? block.executions.flatMap((execution) => {
-          if (execution.kind === 'tool') {
-            return [
-              {
-                id: execution.id,
-                title:
-                  execution.tool.displayCommand ??
-                  execution.tool.subject ??
-                  execution.tool.title,
-                summary:
-                  execution.tool.outputSummary ?? execution.tool.description,
-                status: execution.tool.status,
-              },
-            ]
-          }
-          if (execution.kind === 'shell') {
-            return [
-              {
-                id: execution.id,
-                title: execution.shell.command,
-                summary: execution.shell.summary,
-                status: execution.shell.status,
-              },
-            ]
-          }
-          return []
-        })
-      : [],
-  )
+  const toolEntries = inspectorToolEntries(conversation.timeline)
   const output = [
-    ...(terminal.command ? [terminal.command] : []),
+    ...(terminal.command ? [displayToolCommand(terminal.command)] : []),
     ...terminal.lines,
   ].join('\n')
 

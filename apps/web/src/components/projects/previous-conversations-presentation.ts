@@ -5,6 +5,7 @@ import {
   type ProviderSessionDiscoveryCandidate,
   type ProviderSessionDiscoveryProviderResult,
 } from '@codetether/protocol'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 export type CandidateActivity =
   | { readonly state: 'idle' }
@@ -15,10 +16,6 @@ export type CandidateActivity =
 export const providerOrder: readonly ProviderId[] = ['codex', 'claude-code']
 export const maximumImportSelection =
   providerSessionDiscoveryLimits.maximumPageSize
-const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-})
 
 export function mergeCandidates(
   current: readonly ProviderSessionDiscoveryCandidate[],
@@ -61,9 +58,8 @@ export function formatCandidateTime(
 ): string {
   const timestamp = candidate.lastActiveAt ?? candidate.createdAt
   if (timestamp === undefined) return '可继续'
-  const date = new Date(timestamp)
-  if (Number.isNaN(date.getTime())) return '可继续'
-  return `${dateFormatter.format(date)} · 可继续`
+  const date = formatLocalDateTime(timestamp)
+  return date === undefined ? '可继续' : `${date} · 可继续`
 }
 
 export function scanStatusText(

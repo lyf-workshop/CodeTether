@@ -283,6 +283,10 @@ impl DesktopUpdate {
         };
         self.emit(app);
 
+        // The Windows installer exits this process itself, without delivering
+        // Tauri's Exit event. Keep the current rectangle before it starts.
+        crate::window_geometry::save(app);
+
         let shutdown_app = app.clone();
         let stopped = tauri::async_runtime::spawn_blocking(move || {
             crate::host_supervisor::shutdown_host_for_update(&shutdown_app)

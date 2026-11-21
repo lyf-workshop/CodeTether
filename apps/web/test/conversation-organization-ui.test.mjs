@@ -16,14 +16,18 @@ test('Conversation list exposes URL-backed Active and Archived views', async () 
   assert.match(page, /search\.view === 'archived' \? 'archived' : 'active'/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+  )
+  assert.match(
+    page,
+    /conversationListQueryOptions\(runtime, projectId, archiveView, filters\)/u,
   )
   assert.match(page, /SegmentedControlItem value="active"/u)
-  assert.match(page, /SegmentedControlItem value="archived"/u)
+  assert.match(page, /SegmentedControlItem\s+value="archived"/u)
   assert.match(page, /value === 'archived' \? 'archived' : undefined/u)
   assert.match(model, /search\.view === 'archived'/u)
   assert.match(router, /path: '\/projects\/\$projectId\/conversations'/u)
@@ -54,7 +58,8 @@ test('rows expose only durable organization actions with bounded titles', async 
   assert.match(group, /ConversationRestoreButton/u)
   assert.match(group, /showInlineError=\{false\}/u)
   assert.match(group, /role="alert"/u)
-  assert.match(group, /title=\{conversation\.title\}/u)
+  assert.match(group, /title=\{displayTitle\}/u)
+  assert.match(group, /displayConversationTitle\(/u)
   assert.match(controls, /'置顶'/u)
   assert.match(controls, /'取消置顶'/u)
   assert.match(controls, /重命名/u)

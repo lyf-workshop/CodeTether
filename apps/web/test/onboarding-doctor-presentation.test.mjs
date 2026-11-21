@@ -18,6 +18,9 @@ import {
 
 import {
   backendReadinessLabel,
+  onboardingProviderInstallationLabel,
+  onboardingProviderRuntimeLabel,
+  providerSummary,
   providerVersionLabel,
   providerCompatibilityLabel,
   lifecycleObservationLabel,
@@ -237,6 +240,53 @@ test('offline unobserved Provider facts never fabricate a missing installation',
   assert.match(providerRepairText(lastKnownMissing), /上次检查.*不代表当前/u)
 })
 
+test('a retained unusable installation is still installed, though no runtime is selected', () => {
+  const observedAt = '2026-11-04T12:00:00.000Z'
+  const lifecycle = {
+    provider: 'codex',
+    installations: [
+      {
+        installationId: 'install_old',
+        provider: 'codex',
+        selected: false,
+        availability: 'unavailable',
+        version: '0.161.0',
+        firstObservedAt: observedAt,
+        lastObservedAt: observedAt,
+      },
+    ],
+  }
+  const doctor = provider({
+    provider: 'codex',
+    state: 'offline',
+    installed: false,
+    selected: false,
+    alternateInstallations: 1,
+    version: undefined,
+    compatibility: undefined,
+    runtimeReadiness: undefined,
+    freshness: 'last_known',
+    observedAt,
+    backend: undefined,
+  })
+  const summary = providerSummary(
+    { availability: 'unavailable', displayName: 'Codex' },
+    lifecycle,
+    undefined,
+    'offline',
+    'remote',
+  )
+
+  assert.equal(summary.status.label, '已安装，待确认')
+  assert.equal(providerVersionLabel(doctor, lifecycle), '0.161.0 · 未选择')
+  assert.equal(providerCompatibilityLabel(doctor, lifecycle), '尚未选择')
+  assert.equal(
+    onboardingProviderInstallationLabel(doctor, lifecycle),
+    '已安装 · 未选择',
+  )
+  assert.equal(onboardingProviderRuntimeLabel(doctor, lifecycle), '尚未选择')
+})
+
 test('Doctor overall copy diagnoses the responsible layer without blaming every failure on a Project', () => {
   const base = {
     generatedAt: '2026-09-07T00:00:00.000Z',
@@ -449,7 +499,7 @@ test('setup and Doctor compose existing bounded operations without inference or 
   )
   assert.match(setup, /providerRefreshFailed/u)
   assert.match(setup, /currentlyConfirmedMissing/u)
-  assert.match(setup, /providerVersionLabel\(provider\)/u)
+  assert.match(setup, /providerVersionLabel\(provider, lifecycle\)/u)
   assert.doesNotMatch(
     setup,
     /\{!provider\.installed \? \([\s\S]*?<ProviderGuidanceLink/u,
@@ -548,8 +598,8 @@ test('remote Doctor cards show connection-specific recovery and bounded Provider
     /machineConnectionStateLabel\(machine\.connectionState\)/u,
   )
   assert.match(doctor, /remoteComputerRepairText\(machine\.connectionState\)/u)
-  assert.match(doctor, /providerCompatibilityLabel\(provider\)/u)
-  assert.match(doctor, /providerVersionLabel\(provider\)/u)
+  assert.match(doctor, /providerCompatibilityLabel\(provider, lifecycle\)/u)
+  assert.match(doctor, /providerVersionLabel\(provider, lifecycle\)/u)
   assert.match(doctor, /currentlyConfirmedMissing/u)
   assert.match(doctor, /backendModeLabel\(provider\.backend\)/u)
   assert.match(doctor, /backendReadinessLabel\(provider\.backend\)/u)

@@ -25,7 +25,7 @@ use crate::{
         DesktopLifecycle, LifecycleSnapshot, MainWindowCloseAction, ResumeDecision, SystemState,
     },
     startup_error::{self, StartupFailureKind},
-    system_tray, windows_lifecycle,
+    system_tray, window_geometry, windows_lifecycle,
 };
 
 const HOST_PORT: &str = env!("CODETETHER_DESKTOP_HOST_PORT");
@@ -1193,6 +1193,7 @@ fn finish_unpreventable_shutdown(state: &DesktopState, started_at: Instant) {
 pub(crate) fn request_app_quit(app: &AppHandle, code: i32) {
     let quit_app = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
+        window_geometry::save(&quit_app);
         let Some(state) = quit_app.try_state::<DesktopState>() else {
             quit_app.exit(code);
             return;
@@ -1528,6 +1529,9 @@ pub fn run_desktop() {
         .setup(|app| {
             #[cfg(target_os = "macos")]
             crate::macos_lifecycle::protect_background_runtime();
+            if let Err(error) = window_geometry::initialize(app.handle()) {
+                eprintln!("[codetether:desktop] window geometry unavailable: {error}");
+            }
             crate::desktop_update::initialize(app.handle());
             let host = match HostSupervisor::start(app.handle()) {
                 Ok(host) => host,
@@ -1630,6 +1634,7 @@ pub fn run_desktop() {
                     MainWindowCloseAction::Hide => {
                         api.prevent_close();
                         if let Some(window) = app_handle.get_webview_window("main") {
+                            window_geometry::save(app_handle);
                             let started_at = Instant::now();
                             match window.hide() {
                                 Ok(()) => {
@@ -1663,6 +1668,7 @@ pub fn run_desktop() {
             event: WindowEvent::Resized(_),
             ..
         } if label == "main" => {
+            window_geometry::observe(app_handle);
             if let (Some(state), Some(window)) = (
                 app_handle.try_state::<DesktopState>(),
                 app_handle.get_webview_window("main"),
@@ -1706,6 +1712,11 @@ pub fn run_desktop() {
         }
         RunEvent::WindowEvent {
             label,
+            event: WindowEvent::Moved(_),
+            ..
+        } if label == "main" => window_geometry::observe(app_handle),
+        RunEvent::WindowEvent {
+            label,
             event: WindowEvent::Focused(focused),
             ..
         } if label == "main" => {
@@ -1733,6 +1744,7 @@ pub fn run_desktop() {
             }
         }
         RunEvent::Exit => {
+            window_geometry::save(app_handle);
             if let Some(state) = app_handle.try_state::<DesktopState>() {
                 finish_unpreventable_shutdown(&state, Instant::now());
             }

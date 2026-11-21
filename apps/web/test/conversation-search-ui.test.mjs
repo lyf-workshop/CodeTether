@@ -87,13 +87,18 @@ test('Conversation page uses durable infinite Search only for nonblank q and kee
   assert.match(page, /useInfiniteQuery\(/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+  )
+  assert.match(
+    page,
+    /conversationListQueryOptions\(runtime, projectId, archiveView, filters\)/u,
   )
   assert.match(page, /enabled: ready && !searchPage/u)
+  assert.match(page, /enabled: ready && !searchPage && hasFilters/u)
   assert.match(page, /filterProjectLocationSearchResults\(/u)
   assert.match(page, /aria-label="搜索这个项目的会话"/u)
   assert.match(page, /不搜索 AI[\s\S]*?回复、工具输出或其他项目/u)

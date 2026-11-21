@@ -80,6 +80,25 @@ test('local Inbox filters preserve the exact Host ordering', () => {
   assert.deepEqual(hostOrder, [approval, failed, completed, approval])
 })
 
+test('Inbox renders an adopted ISO fallback title as local time without changing its payload', () => {
+  const nativeCreatedAt = new Date(
+    new Date().getFullYear(),
+    7,
+    27,
+    12,
+    0,
+  ).toISOString()
+  const storedTitle = `Codex 会话 · ${nativeCreatedAt}`
+  const item = {
+    ...completed,
+    payload: { conversationTitle: storedTitle },
+  }
+  const presentation = createInboxItemPresentation(item)
+  assert.equal(presentation.title, 'Codex 会话 · 8月27日 12:00')
+  assert.equal(presentation.conversation, presentation.title)
+  assert.equal(item.payload.conversationTitle, storedTitle)
+})
+
 test('bulk action count follows the selected tab and excludes Approvals', () => {
   const summary = {
     totalOpen: 7,

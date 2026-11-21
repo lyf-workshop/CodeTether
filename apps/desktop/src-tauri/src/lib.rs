@@ -15,6 +15,7 @@ mod project_directory_picker;
 mod provider_guidance;
 mod startup_error;
 mod system_tray;
+mod window_geometry;
 mod windows_lifecycle;
 
 pub fn run() {

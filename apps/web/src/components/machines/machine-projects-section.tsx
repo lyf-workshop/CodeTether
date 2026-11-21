@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { Plus } from 'lucide-react'
 
 import {
   AddProjectCard,
   Badge,
+  Button,
   Notice,
   ProjectCard,
   StatusTag,
@@ -33,6 +35,7 @@ interface MachineProjectsSectionProps {
   heading?: boolean
   appearance?: 'cards' | 'list'
   showAddCard?: boolean
+  showAddInHeader?: boolean
   showLocationRemoval?: boolean
   onLocationRemoved?: () => void
 }
@@ -43,6 +46,7 @@ export function MachineProjectsSection({
   heading = true,
   appearance = 'cards',
   showAddCard = true,
+  showAddInHeader = false,
   showLocationRemoval = false,
   onLocationRemoved,
 }: MachineProjectsSectionProps) {
@@ -62,12 +66,25 @@ export function MachineProjectsSection({
       aria-label={`${machine.displayName}上的项目`}
     >
       {heading ? (
-        <h2 className="mb-3 text-lg font-semibold">
-          项目{' '}
-          <span className="ml-2 text-md font-normal text-text-muted">
-            {ownProjects.length}
-          </span>
-        </h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold">
+            项目{' '}
+            <span className="ml-2 text-md font-normal text-text-muted">
+              {ownProjects.length}
+            </span>
+          </h2>
+          {canAdd && showAddInHeader ? (
+            <AddProjectDialog
+              fixedMachineId={machine.machineId}
+              trigger={
+                <Button size="sm" variant="secondary">
+                  <Plus aria-hidden="true" />
+                  添加项目
+                </Button>
+              }
+            />
+          ) : null}
+        </div>
       ) : null}
       <div
         className={
@@ -179,6 +196,11 @@ function MachineProjectCard({
             >
               {state.label}
             </Badge>
+          ) : metrics !== undefined && metrics.waitingCount > 0 ? (
+            <StatusTag tone="warn">
+              {metrics.capped ? '已加载 ' : ''}
+              {metrics.waitingCount} 个等待批准
+            </StatusTag>
           ) : metrics !== undefined && metrics.runningCount > 0 ? (
             <StatusTag tone="run">
               {metrics.capped ? '已加载 ' : ''}
@@ -186,7 +208,25 @@ function MachineProjectCard({
             </StatusTag>
           ) : undefined
         }
-        metrics={metrics === undefined ? undefined : metrics.countLabel}
+        metrics={
+          metrics === undefined ? undefined : (
+            <span className="flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+              <span>{metrics.countLabel}</span>
+              {metrics.runningCount > 0 ? (
+                <span className="text-primary">
+                  {metrics.capped ? '已加载 ' : ''}
+                  {metrics.runningCount} 个运行中
+                </span>
+              ) : null}
+              {metrics.waitingCount > 0 ? (
+                <span className="text-warning-text">
+                  {metrics.capped ? '已加载 ' : ''}
+                  {metrics.waitingCount} 个等待批准
+                </span>
+              ) : null}
+            </span>
+          )
+        }
         activity={
           metrics?.lastActivityAt ? (
             <time dateTime={metrics.lastActivityAt}>

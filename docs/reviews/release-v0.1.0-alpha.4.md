@@ -67,7 +67,7 @@
   - So the "不在此账号的可用模型中" warning does not appear, and the old "该会话已归档" error stays.
   - Opening the model picker refreshes it.
   - The cause, from the source: the automatic catalog request is keyed only by conversation ID and is marked as started before it runs. The Host rejects it while the conversation is archived, and nothing retries it after the restore.
-  - The fix scope is in `release-v0.1.0-alpha.4/acceptance-findings.md`. The Owner approved it as a separate fix with no release. It came back the same day on `codex/fix-restored-conversation-model-catalog` (`7f24e03`) and was accepted (`restored-conversation-model-catalog.md`). It ships in alpha.5, whose acceptance repeats this check on the installed app.
+  - The fix scope is in `release-v0.1.0-alpha.4/acceptance-findings.md`. The Owner approved it as a separate fix with no release. It came back the same day on `codex/fix-restored-conversation-model-catalog` (`7f24e03`) and was accepted (`restored-conversation-model-catalog.md`). It was released in alpha.5, and the installed app passed this check there (`release-v0.1.0-alpha.5.md`).
 
 **Not covered:**
 

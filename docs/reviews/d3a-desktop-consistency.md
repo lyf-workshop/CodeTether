@@ -23,7 +23,7 @@
 
 On the Owner's real data, however, the new status vocabulary turns stale and unreachable facts into red "暂时不可用" badges (must-fix 1 and 2). D3a merges after W0e, so it ships after alpha.5 unless both finish together.
 
-**Status.** Accepted on 2026-11-21 at `6f3dc65`, after two follow-up rounds and the merge with W0e. D3a and W0e finished together, so D3a ships in alpha.5: the alpha.5 release prompt merges it first (`release-alpha5-prompt.md`). See the follow-up sections at the end.
+**Status.** Accepted on 2026-11-21 at `6f3dc65`, after two follow-up rounds and the merge with W0e. D3a and W0e finished together, so the alpha.5 release merged D3a first, as `eb5d44f` with `6f3dc65`'s tree. It was released in alpha.5 on 2026-11-21 (`release-v0.1.0-alpha.5.md`). See the follow-up sections at the end.
 
 ## Checked hands-on
 

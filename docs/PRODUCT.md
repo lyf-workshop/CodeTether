@@ -137,7 +137,7 @@ Conversations organize Agent sessions, history, supported model/reasoning/permis
 
 What an Approval shows before the decision is unchanged; the W17 design note decides that.
 
-**The conversation timeline (D2.5, accepted and merged 2026-11-19; ships in alpha.5).**
+**The conversation timeline (D2.5, accepted and merged 2026-11-19; released in alpha.5 on 2026-11-21).**
 
 - Each Turn shows the AI tool's avatar, name, status and time once.
 - Each tool row names its kind and what it acted on:

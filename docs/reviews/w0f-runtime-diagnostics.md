@@ -17,7 +17,7 @@
 
 **Verdict.** Accepted, no must-fix.
 
-- It merges into `main` now and ships in alpha.5.
+- It merged into `main` on 2026-11-20 (`745c701`) and was released in alpha.5 on 2026-11-21 (`release-v0.1.0-alpha.5.md`).
 - The 2026-11-19 failure did not reproduce in 15 runs. The next occurrence will leave a record.
 
 ## Checked in this review

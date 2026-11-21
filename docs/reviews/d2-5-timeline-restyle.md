@@ -13,7 +13,7 @@
 - Prettier and `git diff --check` passed on the changed files
 - The first attempts had three type errors, two lint errors and two tests that asserted the old layout. The report quotes them, and all are fixed.
 
-**Verdict.** Accepted, no must-fix. As planned, it merged into `main` after the alpha.4 tag: `9932e70` on 2026-11-19. It ships in alpha.5.
+**Verdict.** Accepted, no must-fix. As planned, it merged into `main` after the alpha.4 tag: `9932e70` on 2026-11-19. It was released in alpha.5 on 2026-11-21 (`release-v0.1.0-alpha.5.md`).
 
 ## Checked in this review
 

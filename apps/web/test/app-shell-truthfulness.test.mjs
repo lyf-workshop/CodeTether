@@ -55,7 +55,8 @@ test('Desktop shell gives ordinary routes one page-level scroll owner', async ()
       ),
     ])
 
-  assert.match(styles, /html,\s*body,\s*#root\s*\{[^}]*overflow: hidden;/su)
+  assert.match(styles, /html,\s*body,\s*#root\s*\{[^}]*overflow: clip;/su)
+  assert.match(styles, /#root\s*\{[^}]*position: fixed;[^}]*inset: 0;/su)
   assert.match(shell, /min-h-0 min-w-0[\s\S]*overflow-hidden/u)
   assert.match(mainContent, /h-full min-h-0 min-w-0 overflow-y-auto/u)
   assert.match(rootLayout, /h-dvh overflow-y-auto/u)

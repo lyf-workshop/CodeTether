@@ -102,7 +102,11 @@ Nothing was rewritten to pass a check, and the tag stands.
    - The observer opened 设备 0.35 s after the new window appeared.
    - It then stopped with "The exact installed target window is no longer visible", so the transition was not sampled continuously.
    - Its frames show both local tools reading "正在检查…" at 2.4 s and "可用" later, with no red badge in either.
-   - The Start-menu cold start above covered the same transition in New Conversation. Claude Code repeats the 设备 check in its hands-on check of alpha.5.
+   - The Start-menu cold start above covered the same transition in New Conversation.
+   - **Closed by Claude Code's hands-on check** (`2026-11-21-alpha5-hands-on-ui-review.md`). After a quit from the tray and a start from the Start menu, 设备 was sampled continuously:
+     - Both local tools read "正在检查…" from 1.3 s.
+     - Claude Code read "可用" at 9.3 s and Codex at 11.1 s.
+     - No badge turned red.
 2. **Who can read the logs.**
    - **The criterion was wrong.** This prompt asked that only the Owner's account can read the logs, but W0f never required it. W0f required logs that hold nothing private, and they don't.
    - **Where the access comes from.** The logs take their access list from `AppData`, like every other file under it. Claude Code read the access lists:

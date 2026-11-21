@@ -20,6 +20,7 @@
 - `docs/reviews/2026-11-19-main-detail-pass.md`: Claude Code's measured pass over `main` at `13fa6b8`, with evidence in `D:/Projects/Software/agenthub-archive/detail-pass-2026-11-19/`, findings 5, 9, 10 and 13–17
 
 - `docs/reviews/2026-11-13-desktop-ui-review.md`, findings 9, 10, 11, 14, 17 and 18
+- `docs/reviews/2026-11-21-alpha5-hands-on-ui-review.md`: Claude Code's hands-on check of the installed alpha.5, findings 1–4 (goals 2, 9, 11 and 12), with evidence in `D:/Projects/Software/agenthub-archive/ui-review-2026-11-21/`
 - the prototype pages in `docs/ux-redesign/png/`: `02-01-devices` (attention banner, per-project activity), `02-02-device-local`, `02-04-project-detail`, `02-05-project-previous`, `02-06-project-archived`, `02-07-project-search`, `02-08-add-project`, `02-14-new-session-project`
 - `docs/ux-redesign/02-dev-handoff.md`, row D1 (which reads the sidebar and devices pages may use, and the limit of 100 conversations)
 - `docs/ux-redesign/03-project-plan.md` §6 (invariants)
@@ -43,6 +44,7 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - The user sees the date formatted in the web layer, in local time, for example "Codex 会话 · 11月1日 18:10".
    - Decide where the fallback title is composed, with one constraint: the adapter stops putting an ISO string into a title. Already adopted conversations whose durable title holds the ISO form are displayed formatted, without rewriting their stored titles.
    - No other user-visible surface shows an ISO timestamp. Check every place that renders a date, and report each one.
+   - Dates use one format family. Today there are three: "2026/11/21 05:24" on 关于与检查, "2026年11月10日 07:28" on 设备, and "11月4日" in the dated note (`2026-11-21-alpha5-hands-on-ui-review.md`, finding 4).
 3. **A calmer project page** (finding 10).
    - **Filters:**
      - The search box submits as you type. The 250 ms debounce already exists, so the separate "搜索" button goes.
@@ -90,11 +92,21 @@ Before starting, confirm this file has 4 second-level headings and that the last
    - Failure copy: the repeated "AI 工具未能完成本轮工作。 本轮工作可能不完整。已保存的会话历史仍可查看。" (with its stray double space) says what failed and what to do next, and "请查看电脑详情中的执行状态" links to that page (hands-on review finding 9).
 
    - **"工具输出"** shows a command as the user would type it, not as escaped JSON (`"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'node --test'`). This extends D2.5's carried item 3 (`2026-11-19-main-detail-pass.md`, finding 16). The timeline row has the same problem with quotes: Codex's `rg` command reads `"rg --files -g ""!node_modules"" -g ""!vendor"""` (`w0e-windows-fixes.md`, carried item 4).
+   - **"工具输出"'s list** previews each command the way D2.5's timeline now does, not with its last line of output ("})", "duration_ms 90.7674", "-a---- 132 README.md", a full project path). No title keeps a stray leading quote (`"Get-Location; rg --files --hidden -…`) (`2026-11-21-alpha5-hands-on-ui-review.md`, finding 2).
 10. **A tool's badge agrees with the rows under it** (`d3a-desktop-consistency.md`, follow-up round 2, carried item 1).
     - On 关于与检查, the Raspberry Pi's Codex reads "已安装，待确认", while its 版本 and 运行环境 rows read "未安装".
     - The Host's last-known facts hold one installation (0.161.0) that is unusable and not selected, and no version on the tool.
     - Decide in `provider-presentation.ts` whether such an installation counts as installed. The badge and the rows then say the same thing on every surface.
     - Add a test with these facts.
+11. **A computer that is retrying stays in the offline group** (`2026-11-21-alpha5-hands-on-ui-review.md`, finding 1).
+    - **Today:** the Owner's Linux computer, offline since 11/7, reads "连接中" for about 5 s every 35 s or so. Each time, its card appears in 设备's grid beside 本地电脑, the group's count drops from 2 to 1, and everything below moves by 18 CSS px.
+    - **Change:** a computer that was offline stays in the group while it reconnects, and leaves only when it connects. The sidebar's group follows the same rule. A computer that has not been offline since CodeTether started is unaffected.
+    - Decide where the rule lives so that 设备 and the sidebar share it, and add a test that cycles `offline` → `connecting` → `offline`.
+    - Verify on the Owner's data: sample 设备 for at least 75 s and report every change.
+12. **Settings and 关于与检查 details** (`2026-11-21-alpha5-hands-on-ui-review.md`, findings 3 and 4).
+    - Settings' section list (外观 … 关于与检查) stays in view while the page scrolls. Today it scrolls away and leaves the left column empty.
+    - "检查时间 · 检查于 2026/11/21 05:24" says "检查" once.
+    - The "以前的会话" card's two label–value pairs are spaced or stacked so that a value never runs into the next label ("支持查找 Claude Code").
 
 ## Known facts
 

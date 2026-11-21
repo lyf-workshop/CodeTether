@@ -357,7 +357,7 @@ export function deriveComposerEligibility(
       )
       return disabled(
         currentExecutionFailure.reason,
-        `${presentation.cause} ${presentation.guidance}`,
+        `${presentation.cause}${presentation.guidance}`,
         presentation.navigation,
       )
     }
@@ -508,7 +508,7 @@ function disabledFromCanonicalFailure(
   })
   return disabled(
     failure.reason,
-    `${presentation.cause} ${presentation.guidance}`,
+    `${presentation.cause}${presentation.guidance}`,
     presentation.navigation,
   )
 }

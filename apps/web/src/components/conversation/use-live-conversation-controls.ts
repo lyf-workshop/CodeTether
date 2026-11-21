@@ -462,7 +462,7 @@ export function useLiveConversationControls(
           ...current,
           [approvalId]: {
             state: 'pending',
-            error: mutationErrorMessage(error, '处理审批'),
+            error: mutationErrorMessage(error, '处理批准请求'),
           },
         }))
       }

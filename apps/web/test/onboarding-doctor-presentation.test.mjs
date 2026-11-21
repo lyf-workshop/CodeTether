@@ -4,20 +4,24 @@ import test from 'node:test'
 import { onboardingPresentationSource } from './fixtures/onboarding-source.mjs'
 
 import {
-  backendReadinessLabel,
   doctorOverallPresentation,
   isDoctorExecutionContextReady,
   isProviderUsable,
   localOnboardingBlockerText,
   onboardingStepIndex,
   partitionDoctorRemoteComputers,
-  providerCompatibilityLabel,
   providerInstallationGuidance,
   providerRepairText,
-  providerVersionLabel,
   remoteComputerRepairText,
   remoteOnboardingBlockerText,
 } from '../.tmp/test-dist/components/onboarding/onboarding-model.js'
+
+import {
+  backendReadinessLabel,
+  providerVersionLabel,
+  providerCompatibilityLabel,
+  lifecycleObservationLabel,
+} from '../.tmp/test-dist/provider/provider-presentation.js'
 
 test('onboarding uses one ordered durable flow vocabulary', () => {
   assert.equal(onboardingStepIndex('welcome'), 0)
@@ -194,7 +198,7 @@ test('new compatible versions use calm compatibility copy', () => {
     providerCompatibilityLabel(
       provider({ compatibility: 'compatible_unverified' }),
     ),
-    '兼容 — 检测到新版本',
+    '兼容的新版本，尚未完整验证',
   )
 })
 
@@ -221,8 +225,15 @@ test('offline unobserved Provider facts never fabricate a missing installation',
     freshness: 'last_known',
     observedAt: '2026-09-07T00:00:00.000Z',
   }
-  assert.equal(providerVersionLabel(lastKnownMissing), '上次检查：未安装')
-  assert.equal(providerCompatibilityLabel(lastKnownMissing), '上次检查：未安装')
+  assert.equal(providerVersionLabel(lastKnownMissing), '未安装')
+  assert.equal(providerCompatibilityLabel(lastKnownMissing), '未安装')
+  assert.match(
+    lifecycleObservationLabel(
+      lastKnownMissing.freshness,
+      lastKnownMissing.observedAt,
+    ),
+    /上次检查/u,
+  )
   assert.match(providerRepairText(lastKnownMissing), /上次检查.*不代表当前/u)
 })
 
@@ -251,6 +262,10 @@ test('Doctor overall copy diagnoses the responsible layer without blaming every 
 
   assert.match(doctorOverallPresentation(base).title, /AI 工具或服务/u)
   assert.doesNotMatch(doctorOverallPresentation(base).title, /项目/u)
+  assert.equal(
+    doctorOverallPresentation({ ...base, overall: 'ready' }).title,
+    'CodeTether 可以使用',
+  )
   assert.match(
     doctorOverallPresentation({ ...base, overall: 'ready' }).detail,
     /这台电脑至少有一个 AI 工具可用/u,
@@ -346,7 +361,7 @@ test('authentication guidance follows the effective backend mode', () => {
     }),
   })
 
-  assert.equal(backendReadinessLabel(firstParty.backend), '需要登录')
+  assert.equal(backendReadinessLabel(firstParty.backend), '未登录')
   assert.equal(backendReadinessLabel(gateway.backend), '需要检查配置')
   assert.match(providerRepairText(firstParty), /官方登录流程/u)
   assert.match(providerRepairText(gateway), /无需登录第一方服务/u)
@@ -443,7 +458,7 @@ test('setup and Doctor compose existing bounded operations without inference or 
   assert.match(doctor, /check: true/u)
   assert.match(doctor, /部分电脑暂时无法完成检查/u)
   assert.match(combined, /aria-live="polite"/u)
-  assert.match(combined, /<details/u)
+  assert.match(combined, /<Disclosure/u)
   assert.doesNotMatch(combined, /startTurn|startNewTurn/u)
   assert.doesNotMatch(
     combined,
@@ -538,7 +553,10 @@ test('remote Doctor cards show connection-specific recovery and bounded Provider
   assert.match(doctor, /currentlyConfirmedMissing/u)
   assert.match(doctor, /backendModeLabel\(provider\.backend\)/u)
   assert.match(doctor, /backendReadinessLabel\(provider\.backend\)/u)
-  assert.match(doctor, /sessionDiscoveryLabel\(provider\.sessionDiscovery\)/u)
+  assert.match(
+    doctor,
+    /onboardingSessionDiscoveryLabel\(\s*provider\.sessionDiscovery,?\s*\)/u,
+  )
   assert.match(doctor, /doctorOverallPresentation\(doctor\)/u)
   assert.match(doctor, /restoreCheckFocusRef\.current = true/u)
   assert.match(

@@ -20,9 +20,9 @@ const roadmapItems = [
     dependency: '远程执行尚未提供中断能力；现有会话不会显示停止按钮。',
   },
   {
-    title: '远程审批',
-    description: '将远程会话中的审批同步到“待处理”。',
-    dependency: '当前远程执行采用不审批的固定能力范围，没有远程审批操作。',
+    title: '远程批准',
+    description: '将远程会话中的批准同步到“待处理”。',
+    dependency: '当前远程执行采用无需批准的固定能力范围，没有远程批准操作。',
   },
   {
     title: '删除会话',

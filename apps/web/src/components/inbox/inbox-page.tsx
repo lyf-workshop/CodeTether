@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 
+import { PageHeader } from '@codetether/ui'
 import type { ApprovalDecision, AttentionItem } from '@codetether/protocol'
 
 import { attentionListQueryOptions } from '../../runtime/host/attention-query'
@@ -158,7 +159,7 @@ export function InboxPage() {
       setMutation(attentionId, {
         pending: false,
         action: decision,
-        error: mutationErrorMessage(error, '处理审批'),
+        error: mutationErrorMessage(error, '处理批准请求'),
       })
     }
   }
@@ -220,25 +221,23 @@ export function InboxPage() {
       connectionState === 'reconnecting')
 
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-[var(--page-w)] min-w-0 flex-col px-[var(--layout-content-inline-padding)] py-[var(--layout-inbox-page-block-padding)]">
-      <header className="flex min-h-[var(--layout-inbox-header-height)] min-w-0 items-start justify-between gap-6">
-        <div className="min-w-0">
-          <h1 className="text-page font-semibold text-text-primary">待处理</h1>
-          <p className="mt-0.5 text-sm font-regular text-text-secondary">
-            需要你批准、查看或处理失败的事情。
-          </p>
-        </div>
-        {connectionState === 'reconnecting' && response !== undefined ? (
-          <p
-            role="status"
-            className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning-text"
-          >
-            正在重新连接
-          </p>
-        ) : null}
-      </header>
+    <div className="ct-page-content flex min-h-full flex-col">
+      <PageHeader
+        title="待处理"
+        description="需要你批准、查看或处理失败的事情。"
+        actions={
+          connectionState === 'reconnecting' && response !== undefined ? (
+            <p
+              role="status"
+              className="shrink-0 rounded-full border border-warning/30 bg-warning-muted px-3 py-1 text-xs text-warning-text"
+            >
+              正在重新连接
+            </p>
+          ) : null
+        }
+      />
 
-      <div className="mt-[var(--layout-inbox-header-summary-gap)]">
+      <div>
         {connectionUnavailable ? (
           <InboxErrorState
             incompatible={connectionState === 'incompatible'}

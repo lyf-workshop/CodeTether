@@ -189,7 +189,7 @@ test('Provider installation and execution health remain separate presentation tr
     freshness: 'current',
     observedAt: timestamp,
   })
-  assert.equal(healthy.stateLabel, '执行正常')
+  assert.equal(healthy.stateLabel, '运行正常')
   assert.equal(healthy.freshnessLabel, '当前状态')
 
   const unavailable = providerExecutionHealthPresentation({
@@ -206,8 +206,8 @@ test('Provider installation and execution health remain separate presentation tr
       technicalCode: 'login_required',
     },
   })
-  assert.equal(unavailable.stateLabel, '执行不可用')
-  assert.equal(unavailable.freshnessLabel, '上次已知')
+  assert.equal(unavailable.stateLabel, '暂时不可用')
+  assert.equal(unavailable.freshnessLabel, '上次检查')
   assert.match(unavailable.description, /登录/u)
 
   const namedUnavailable = providerExecutionHealthPresentation(
@@ -232,12 +232,12 @@ test('Provider installation and execution health remain separate presentation tr
     { state: 'healthy', freshness: 'current', observedAt: timestamp },
     'Claude Code',
   )
-  assert.equal(recovered.stateLabel, '执行正常')
+  assert.equal(recovered.stateLabel, '运行正常')
   assert.doesNotMatch(recovered.description, /登录/u)
 
   const notObserved = providerExecutionHealthPresentation(undefined)
   assert.equal(notObserved.state, 'not_observed')
-  assert.match(notObserved.description, /安装状态不代表当前可以执行/u)
+  assert.match(notObserved.description, /尚未检查这个工具能否完成会话/u)
 })
 
 test('local Machine Provider presentation preserves installed truth beside unavailable execution health', () => {
@@ -271,7 +271,7 @@ test('local Machine Provider presentation preserves installed truth beside unava
   assert.equal(presented.available, true)
   assert.equal(presented.version, '2.1.251')
   assert.equal(presented.executionHealth?.failure?.reason, 'login_required')
-  assert.equal(health.stateLabel, '执行不可用')
+  assert.equal(health.stateLabel, '暂时不可用')
   assert.equal(health.freshnessLabel, '当前状态')
   assert.match(health.description, /Claude Code/u)
   assert.match(health.description, /登录/u)
@@ -295,20 +295,20 @@ test('Provider lifecycle presentation separates selected installation, runtime, 
   assert.match(presentation.installation.detailLabel, /npm/u)
   assert.match(presentation.installation.detailLabel, /符号链接/u)
   assert.equal(presentation.installation.alternateCount, 2)
-  assert.equal(presentation.runtime.stateLabel, '兼容 — 新版本')
+  assert.equal(presentation.runtime.stateLabel, '兼容的新版本，尚未完整验证')
   assert.equal(presentation.runtime.freshnessLabel, '当前状态')
-  assert.equal(presentation.backend.modeLabel, '自定义网关')
-  assert.equal(presentation.backend.readinessLabel, '就绪')
+  assert.equal(presentation.backend.modeLabel, '自定义 AI 服务')
+  assert.equal(presentation.backend.readinessLabel, '可用')
   assert.equal(presentation.backend.freshnessLabel, '当前状态')
 })
 
 test('Provider lifecycle presentation exhaustively distinguishes degraded and last-known states', () => {
   const expectedRuntimeLabels = {
     verified: '兼容',
-    compatible_unverified: '兼容 — 新版本',
-    limited: '受限',
+    compatible_unverified: '兼容的新版本，尚未完整验证',
+    limited: '部分功能受限',
     incompatible: '需要更新 CodeTether',
-    unavailable: '不可用',
+    unavailable: '暂时不可用',
   }
   for (const [state, label] of Object.entries(expectedRuntimeLabels)) {
     const presentation = providerLifecyclePresentation(
@@ -317,15 +317,15 @@ test('Provider lifecycle presentation exhaustively distinguishes degraded and la
       }),
     )
     assert.equal(presentation.runtime.stateLabel, label)
-    assert.equal(presentation.runtime.freshnessLabel, '上次已知')
+    assert.equal(presentation.runtime.freshnessLabel, '上次检查')
   }
 
   const backendLabels = {
-    unknown: '尚未验证',
-    ready: '就绪',
-    unavailable: '不可用',
-    authentication_required: '需要登录',
-    misconfigured: '配置不可用',
+    unknown: '尚未检查',
+    ready: '可用',
+    unavailable: '暂时不可用',
+    authentication_required: '需要检查配置',
+    misconfigured: '需要检查配置',
   }
   for (const [readiness, label] of Object.entries(backendLabels)) {
     const presentation = providerLifecyclePresentation(
@@ -334,10 +334,10 @@ test('Provider lifecycle presentation exhaustively distinguishes degraded and la
       }),
     )
     assert.equal(presentation.backend.readinessLabel, label)
-    assert.equal(presentation.backend.freshnessLabel, '上次已知')
+    assert.equal(presentation.backend.freshnessLabel, '上次检查')
   }
 
-  assert.equal(providerLifecycleFreshnessLabel('not_observed'), '尚未观察')
+  assert.equal(providerLifecycleFreshnessLabel('not_observed'), '尚未检查')
   assert.equal(
     providerLifecyclePresentation(undefined).runtime.state,
     'not_observed',
@@ -374,11 +374,11 @@ test('Provider lifecycle presentation covers installation absence and every back
   }
 
   const backendModes = {
-    first_party: 'AI 工具官方服务',
-    custom_gateway: '自定义网关',
+    first_party: '官方 AI 服务',
+    custom_gateway: '自定义 AI 服务',
     bedrock: 'Amazon Bedrock',
     vertex: 'Google Vertex AI',
-    unknown: 'AI 服务类型未知',
+    unknown: 'AI 服务',
   }
   for (const [mode, label] of Object.entries(backendModes)) {
     const lifecycle = providerLifecycle('claude-code', {

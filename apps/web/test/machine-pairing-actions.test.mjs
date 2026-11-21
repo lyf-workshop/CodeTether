@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { CodeTetherResponseError } from '@codetether/client'
-import { QueryClient } from '@tanstack/react-query'
+import { QueryClient, QueryObserver } from '@tanstack/react-query'
 
 import {
   MachineActions,
@@ -221,6 +221,56 @@ test('Provider refresh is deduplicated independently from connection retry', asy
   retry.resolve(connectionResponse('act_machine02'))
   await Promise.all([first, connection])
 })
+
+for (const warm of [false, true]) {
+  test(
+    'a Provider refresh wins against an earlier ' +
+      (warm ? 'warm' : 'cold') +
+      ' machine read',
+    async (t) => {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false } },
+      })
+      const queryKey = machineQueryKeys.detail('machine_remote01')
+      const previous = {
+        machine: remoteMachine(),
+        providers: [],
+        providerDiscovery: { state: 'not_observed' },
+      }
+      const updated = { ...previous, ...refreshResponse('act_machine01').data }
+      const first = Promise.withResolvers()
+      let reads = 0
+      if (warm) client.setQueryData(queryKey, previous)
+      const observer = new QueryObserver(client, {
+        queryKey,
+        queryFn: () =>
+          ++reads === 1 ? first.promise : Promise.resolve(updated),
+      })
+      const unsubscribe = observer.subscribe(() => {})
+      t.after(() => {
+        unsubscribe()
+        client.clear()
+      })
+      assert.equal(reads, 1)
+      const actions = new MachineActions(
+        mutationClient([]),
+        client,
+        actionIdFactory(),
+      )
+      await actions.refreshMachineProviders('machine_remote01')
+      first.resolve(previous)
+      await new Promise((resolve) => setImmediate(resolve))
+      assert.equal(
+        client.getQueryData(queryKey)?.providerDiscovery.state,
+        'current',
+      )
+      assert.deepEqual(
+        client.getQueryData(queryKey)?.providers,
+        updated.providers,
+      )
+    },
+  )
+}
 
 test('connection retry dedupes per Machine and excludes a concurrent address mutation', async () => {
   const pending = Promise.withResolvers()

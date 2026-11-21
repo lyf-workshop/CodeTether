@@ -1,3 +1,4 @@
+import { useMachineProviderDetails } from '../../provider/use-machine-provider-details'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate } from '@tanstack/react-router'
@@ -48,7 +49,7 @@ export function OnboardingPage() {
   const queryClient = useQueryClient()
   const connectionState = useHostConnectionState()
   const navigate = useNavigate()
-  const stepHeadingRef = useRef<HTMLHeadingElement>(null)
+  const stepContentRef = useRef<HTMLElement>(null)
   const providerRefreshCoordinatorRef = useRef(new DoctorRefreshCoordinator())
   const remoteRefreshCoordinatorRef = useRef(new DoctorRefreshCoordinator())
   const contextCheckCoordinatorRef = useRef(new DoctorRefreshCoordinator())
@@ -71,6 +72,19 @@ export function OnboardingPage() {
     ...doctorQueryOptions(runtime, onboarding?.projectId),
     enabled: connected && onboarding !== undefined,
   })
+  const report = doctorQuery.data
+  const providerDetails = useMachineProviderDetails(
+    !connected || !report
+      ? []
+      : onboarding?.step === 'remote_setup'
+        ? report.remoteComputers.map((machine) => machine.machineId)
+        : onboarding?.step === 'ready' && onboarding.machineId
+          ? [onboarding.machineId]
+          : onboarding?.step === 'computer_check' ||
+              onboarding?.step === 'provider_check'
+            ? [report.thisComputer.machineId]
+            : [],
+  )
   const refetchDoctor = doctorQuery.refetch
   const projectListQuery = useQuery({
     ...projectListQueryOptions(runtime),
@@ -115,7 +129,7 @@ export function OnboardingPage() {
 
   useEffect(() => {
     if (!onboardingContentReady) return
-    const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus())
+    const frame = requestAnimationFrame(() => stepContentRef.current?.focus())
     return () => cancelAnimationFrame(frame)
   }, [onboardingContentReady, onboardingVisualStep])
 
@@ -310,14 +324,13 @@ export function OnboardingPage() {
           </div>
         ) : null}
         <OnboardingProgressIndicator current={currentStep} />
-        <main className="ct-onboarding-content min-w-0" id="setup-main">
-          <h1
-            ref={stepHeadingRef}
-            tabIndex={-1}
-            className="sr-only outline-none"
-          >
-            {stepLabels[onboarding.step]}
-          </h1>
+        <main
+          className="min-w-0 outline-none"
+          id="setup-main"
+          aria-label={stepLabels[onboarding.step]}
+          ref={stepContentRef}
+          tabIndex={-1}
+        >
           {onboarding.completedAt === undefined ? (
             <div className="mb-4 flex justify-end">
               <Button asChild variant="secondary" size="sm">
@@ -329,6 +342,7 @@ export function OnboardingPage() {
           ) : null}
           <OnboardingStepView
             doctor={doctor}
+            providerDetails={providerDetails}
             machines={machines}
             onboarding={onboarding}
             projects={projects}

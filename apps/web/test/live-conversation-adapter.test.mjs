@@ -25,7 +25,7 @@ test('maps one Host read model to the frozen read-only Conversation ViewModel', 
   assert.equal(viewModel.id, 'conv_live01')
   assert.equal(viewModel.status, 'waiting')
   assert.equal(viewModel.agent, 'codex')
-  assert.equal(viewModel.permission, '等待审批')
+  assert.equal(viewModel.permission, '等待批准')
   assert.deepEqual(viewModel.capabilities, {
     canCompose: false,
     canInterrupt: false,
@@ -128,8 +128,8 @@ test('a Turn without activity has quiet placeholder copy without a running label
 
 for (const [kind, title] of [
   ['command', '执行命令'],
-  ['file-change', '文件变更等待审批'],
-  ['unknown', '操作等待审批'],
+  ['file-change', '文件变更等待批准'],
+  ['unknown', '操作等待批准'],
 ]) {
   test(`the Approval Dock renders the item title for ${kind}`, () => {
     const viewModel = createLiveConversationViewModel(

@@ -1,7 +1,9 @@
 import type {
   ConversationId,
+  MachineConnectionState,
   MachineId,
   MachineProviderLifecycle,
+  MachineProviderDiscovery,
   MachineSummary,
   ProjectId,
   ProjectLocation,
@@ -11,16 +13,13 @@ import type {
 } from '@codetether/protocol'
 import {
   providerLifecycleForMachine,
-  providerLifecyclePresentation,
+  providerSummary,
   type ProviderPresentation,
 } from '../../provider/provider-presentation.js'
 import { providerLifecycleSupportsConversationExecution } from '../conversation/conversation-controls.js'
 import { machinePlatformLabel } from '../machines/machine-presentation.js'
 import { selectNewConversationMachine } from './new-conversation-machine-selection.js'
-import {
-  newConversationProviderEligibility,
-  type NewConversationProviderEligibility,
-} from './new-conversation-provider-selection.js'
+import { newConversationProviderEligibility } from './new-conversation-provider-selection.js'
 
 export type NewConversationLaunchContext =
   | {
@@ -84,7 +83,7 @@ export function conversationComputerGroupLabel(
   const platform = machine.platform
     ? machinePlatformLabel(machine.platform)
     : '系统未知'
-  return `${machine.kind === 'local' ? '这台电脑' : machine.displayName} (${platform})`
+  return `${machine.kind === 'local' ? '本地电脑' : machine.displayName} (${platform})`
 }
 
 /** Derive choices from Query records, keeping unavailable locations visible. */
@@ -288,6 +287,8 @@ export function eligibleConversationProjectSelection(
 export function conversationCreationProviderOptions(
   providers: readonly ProviderPresentation[],
   lifecycles: readonly MachineProviderLifecycle[] | undefined,
+  discovery?: MachineProviderDiscovery,
+  connectionState?: MachineConnectionState,
   machineKind?: MachineSummary['kind'],
 ) {
   return providers.map((provider) => {
@@ -295,26 +296,15 @@ export function conversationCreationProviderOptions(
       lifecycles === undefined
         ? undefined
         : providerLifecycleForMachine(lifecycles, provider.provider)
-    // A local startup placeholder retains only prior lifecycle observations.
-    // A completed failed probe reports current compatibility or execution
-    // failure, so it must keep its actual unavailable label.
-    const checking =
-      machineKind === 'local' &&
-      provider.availability === 'unavailable' &&
-      lifecycle !== undefined &&
-      lifecycle.installations.every(
-        (installation) => installation.compatibility?.freshness !== 'current',
-      ) &&
-      (provider.executionHealth?.state === 'unknown' ||
-        provider.executionHealth?.freshness === 'last_known')
-    const eligibility: NewConversationProviderEligibility = checking
-      ? {
-          eligible: false,
-          checking: true,
-          label: `${provider.displayName} · 正在检查…`,
-        }
-      : newConversationProviderEligibility(provider)
-    if (checking) return { provider, eligibility }
+    const summary = providerSummary(
+      provider,
+      lifecycle,
+      discovery,
+      connectionState,
+      machineKind,
+    )
+    const eligibility = newConversationProviderEligibility(provider, summary)
+    if (eligibility.checking) return { provider, eligibility }
     const selectedInstallation = lifecycle?.installations.find(
       (installation) =>
         installation.selected &&
@@ -333,6 +323,7 @@ export function conversationCreationProviderOptions(
             label: conversationCreationLifecycleBlock(
               lifecycle,
               selectedInstallation,
+              summary.advisory,
             ),
           }
         : eligibility,
@@ -343,62 +334,26 @@ export function conversationCreationProviderOptions(
 function conversationCreationLifecycleBlock(
   lifecycle: MachineProviderLifecycle,
   selected: ProviderInstallationSummary | undefined,
+  advisory: string | undefined,
 ): string {
-  const recheck = '请在设备详情重新检查。'
-  if (selected === undefined) {
-    return lifecycle.installations.length === 0
-      ? '未检测到安装。请在运行 AI 工具的电脑上确认安装状态后重新检查。'
-      : `尚未选择可用安装。${recheck}`
+  if (!selected && lifecycle.installations.length > 0) {
+    return '尚未选择可用安装，请在电脑详情选择后重新检查。'
   }
-
-  const { installation, runtime, backend } =
-    providerLifecyclePresentation(lifecycle)
-  if (selected.availability !== 'available') {
-    return `${installation.stateLabel}。${recheck}`
+  if (selected?.compatibility?.freshness === 'not_observed') {
+    return '尚未确认这个工具能否运行，请在电脑详情重新检查。'
   }
-
-  const compatibility = selected.compatibility
-  if (compatibility?.freshness === 'not_observed') {
-    return `尚未确认所选安装能否运行。${recheck}`
-  }
-  if (runtime.state === 'incompatible' || runtime.state === 'unavailable') {
-    if (
-      runtime.state === 'unavailable' &&
-      compatibility?.freshness === 'current' &&
-      compatibility.failure
-    ) {
-      return runtime.description
-    }
-    const reason =
-      runtime.state === 'incompatible'
-        ? '所选安装的运行时与当前 CodeTether 不兼容。'
-        : '所选安装无法运行。'
-    return `${compatibility?.freshness === 'last_known' ? '上次检查时，' : ''}${reason}${recheck}`
-  }
+  const capabilities = selected?.compatibility?.capabilities
   if (
-    compatibility !== undefined &&
-    (!compatibility.capabilities.execution.effective ||
-      !compatibility.capabilities.streaming.effective ||
-      !compatibility.capabilities.nativeResume.effective)
+    capabilities &&
+    (!capabilities.execution.effective ||
+      !capabilities.streaming.effective ||
+      !capabilities.nativeResume.effective) &&
+    selected?.compatibility?.state !== 'incompatible' &&
+    selected?.compatibility?.state !== 'unavailable'
   ) {
-    return `${compatibility.freshness === 'last_known' ? '上次检查时，' : ''}所选安装不支持新会话所需的运行或恢复能力。${recheck}`
+    return '此工具不支持新会话所需的功能，请在电脑详情重新检查。'
   }
-
-  if (selected.backend?.freshness === 'current') {
-    switch (backend.readiness) {
-      case 'authentication_required':
-        if (backend.mode === 'first_party') {
-          return '需要登录。请在运行 AI 工具的电脑上登录后重新检查。'
-        }
-        return 'AI 服务需要身份验证。请在运行 AI 工具的电脑上检查服务配置。'
-      case 'misconfigured':
-        return 'AI 服务配置不可用。请在运行 AI 工具的电脑上检查服务配置。'
-      case 'unavailable':
-        return `AI 服务暂时不可用。${recheck}`
-    }
-  }
-
-  return `当前安装尚不能创建会话。${recheck}`
+  return advisory ?? '此工具暂时不能创建会话，请在电脑详情重新检查。'
 }
 
 export type ConversationCreationProviderOption = ReturnType<

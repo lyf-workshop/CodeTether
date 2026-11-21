@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 
 import {
+  Disclosure,
   Badge,
   Button,
   Dialog,
@@ -269,10 +270,10 @@ export function MachineRelaySection({
       )}
 
       {relay === undefined || relay.state === 'not_configured' ? null : (
-        <details className="mt-4 min-w-0 border-t border-border pt-4 text-xs text-text-muted">
-          <summary className="w-fit cursor-pointer rounded-xs font-medium text-text-secondary outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-            技术详情
-          </summary>
+        <Disclosure
+          label="技术详情"
+          className="mt-4 min-w-0 border-t border-border pt-4 text-xs text-text-muted"
+        >
           <dl className="mt-3 grid min-w-0 gap-2 sm:grid-cols-2">
             <RelayMetadata label="连接状态" value={relay.state} monospace />
             <RelayMetadata
@@ -299,7 +300,7 @@ export function MachineRelaySection({
               monospace
             />
           </dl>
-        </details>
+        </Disclosure>
       )}
 
       {configurationOpen ? (

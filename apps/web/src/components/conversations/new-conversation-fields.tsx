@@ -1,3 +1,4 @@
+import { ProviderSummaryBadge } from '../../provider/provider-summary-badge'
 import { FolderOpen, LockKeyhole, Monitor } from 'lucide-react'
 import {
   AgentIdentityMark,
@@ -73,11 +74,11 @@ export function NewConversationFields({
       ? undefined
       : !presentation.capabilities.interrupt &&
           !presentation.capabilities.approvals
-        ? '这里不能停止或审批命令。'
+        ? '这里不能停止或批准命令。'
         : !presentation.capabilities.interrupt
           ? '这里不能停止会话。'
           : !presentation.capabilities.approvals
-            ? '这里不能审批命令。'
+            ? '这里不能批准命令。'
             : undefined
 
   return (
@@ -234,7 +235,7 @@ export function NewConversationFields({
                               ? '可以搜索文件'
                               : '可恢复的流式会话'
                 return (
-                  <label key={provider.provider} className="min-w-0">
+                  <label key={provider.provider} className="h-full min-w-0">
                     <input
                       type="radio"
                       name={formId + '-provider'}
@@ -252,7 +253,7 @@ export function NewConversationFields({
                     <span
                       data-state={selected ? 'selected' : undefined}
                       className={cn(
-                        'flex min-h-20 items-center gap-3 rounded-md border bg-surface px-3 py-3 peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60',
+                        'flex h-full min-h-20 items-start gap-3 rounded-md border bg-surface px-3 py-3 peer-focus-visible:ring-2 peer-focus-visible:ring-ring/60',
                         selected
                           ? 'border-ring bg-primary-muted'
                           : 'border-border',
@@ -266,14 +267,20 @@ export function NewConversationFields({
                         aria-hidden="true"
                       />
                       <span className="min-w-0">
-                        <span className="block text-sm font-semibold text-text-primary">
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sm font-semibold text-text-primary">
                           {provider.displayName}
-                        </span>
-                        <span
-                          id={formId + '-provider-' + provider.provider}
-                          className="mt-0.5 block text-xs text-text-muted"
-                        >
-                          {description}
+                          <ProviderSummaryBadge
+                            summary={option.eligibility.summary}
+                            placement="inline"
+                            supportingContent={
+                              <span
+                                id={formId + '-provider-' + provider.provider}
+                                className="basis-full text-xs font-normal text-text-muted"
+                              >
+                                {description}
+                              </span>
+                            }
+                          />
                         </span>
                       </span>
                     </span>

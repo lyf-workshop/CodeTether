@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react'
 import type { AttentionType } from '@codetether/protocol'
 
-import { Notice, SettingsRow, Switch } from '@codetether/ui'
+import { PageHeader, Notice, SettingsRow, Switch } from '@codetether/ui'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities'
 import {
   persistDesktopNotificationPreferences,
@@ -61,12 +61,7 @@ export function DesktopNotificationSettings({
   }
   return (
     <section aria-labelledby="desktop-notifications-heading">
-      <h2
-        id="desktop-notifications-heading"
-        className="mb-5 text-xl font-semibold"
-      >
-        通知
-      </h2>
+      <PageHeader title="通知" headingId="desktop-notifications-heading" />
       {notificationAvailable && preferenceStorage !== undefined ? (
         <fieldset className="overflow-hidden rounded-lg border border-border bg-surface">
           <legend className="sr-only">桌面通知类型</legend>

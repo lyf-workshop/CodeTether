@@ -525,11 +525,18 @@ function ConnectedLiveConversationDetail({
     source.conversation.capabilities,
     machine?.kind,
   )
+  const modelCatalog = controls.modelSwitch?.catalog ?? machineProvider
+  const modelName = modelCatalog?.availableModels?.find(
+    (option) => option.id === source.conversation.model,
+  )?.name
 
   return (
     <ConversationDetailPage
       anchorRequestKey={anchorRequestKey}
-      viewModel={source.conversation}
+      viewModel={{
+        ...source.conversation,
+        model: modelName ?? source.conversation.model,
+      }}
       connectionIndicator={source.connectionIndicator}
       {...(executionAvailable ||
       machine === undefined ||

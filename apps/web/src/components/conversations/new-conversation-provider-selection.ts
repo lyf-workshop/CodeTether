@@ -1,66 +1,44 @@
 import {
-  providerExecutionHealthPresentation,
+  providerSummary,
+  type ProviderSummary,
   type ProviderPresentation,
 } from '../../provider/provider-presentation.js'
 
 export interface NewConversationProviderEligibility {
   readonly eligible: boolean
   readonly label: string
+  readonly summary: ProviderSummary
   readonly checking?: boolean
-  readonly executionLabel?: string
   readonly executionAdvisory?: string
 }
 
 /** Installation/capabilities gate selection; recent runtime health stays advisory. */
 export function newConversationProviderEligibility(
   provider: ProviderPresentation,
+  summary = providerSummary(provider),
 ): NewConversationProviderEligibility {
-  if (!provider.available) {
+  if (summary.checking) {
     return {
       eligible: false,
-      label: `${provider.displayName} · ${provider.availabilityLabel}`,
+      checking: true,
+      label: `${provider.displayName} · 正在检查…`,
+      summary,
     }
   }
-
-  const health = providerExecutionHealthPresentation(
-    provider.executionHealth,
-    provider.displayName,
-  )
-  const currentFailure =
-    provider.executionHealth?.freshness === 'current'
-      ? provider.executionHealth.failure
-      : undefined
-  if (!provider.capabilities.streaming || !provider.capabilities.resume) {
-    if (currentFailure !== undefined) {
-      return {
-        eligible: false,
-        label: `${provider.displayName} · ${provider.availabilityLabel}`,
-        executionLabel: `${health.stateLabel} · ${health.freshnessLabel}`,
-        executionAdvisory: `${health.description} 完成所需操作并通过现有刷新流程重新验证后，才能选择此AI 工具。`,
-      }
-    }
-    return {
-      eligible: false,
-      label: `${provider.displayName} · 不支持流式会话与原生恢复`,
-    }
-  }
-
-  const healthIsCurrentAndHealthy =
-    provider.executionHealth?.state === 'healthy' &&
-    provider.executionHealth.freshness === 'current'
+  const supported =
+    provider.capabilities.streaming && provider.capabilities.resume
+  const eligible = provider.available && supported
   return {
-    eligible: true,
-    label: `${provider.displayName} · ${provider.availabilityLabel}`,
-    ...(provider.executionHealth === undefined
-      ? {}
-      : {
-          executionLabel: `${health.stateLabel} · ${health.freshnessLabel}`,
-        }),
-    ...(provider.executionHealth === undefined || healthIsCurrentAndHealthy
-      ? {}
-      : {
-          executionAdvisory: `${health.stateLabel} · ${health.freshnessLabel}。${health.description} 这是最近一次观测；新会话的首个明确轮次会重新验证，不会重发任何旧请求。`,
-        }),
+    eligible,
+    summary,
+    label:
+      !supported &&
+      provider.available &&
+      (!summary.advisory ||
+        provider.executionHealth?.freshness === 'last_known')
+        ? '此工具暂不支持创建可恢复的会话。'
+        : (summary.advisory ?? summary.status?.label ?? summary.freshnessLabel),
+    executionAdvisory: summary.advisory,
   }
 }
 

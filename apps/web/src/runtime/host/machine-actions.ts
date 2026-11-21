@@ -214,9 +214,18 @@ export class MachineActions {
         .refreshMachineProviders(machine, {
           actionId: this.#createActionId(),
         })
-        .then((response) => {
-          this.#queryClient.setQueryData<GetMachineResponse>(
-            machineQueryKeys.detail(machine),
+        .then(async (response) => {
+          const detailQuery = {
+            queryKey: machineQueryKeys.detail(machine),
+            exact: true,
+          }
+          const reading =
+            this.#queryClient.getQueryState(detailQuery.queryKey)
+              ?.fetchStatus === 'fetching'
+          // A read started before the explicit check can return older facts.
+          if (reading) await this.#queryClient.cancelQueries(detailQuery)
+          const detail = this.#queryClient.setQueryData<GetMachineResponse>(
+            detailQuery.queryKey,
             (current) =>
               current === undefined
                 ? undefined
@@ -231,6 +240,10 @@ export class MachineActions {
                     providerDiscovery: response.data.providerDiscovery,
                   },
           )
+          // Resume any interrupted full-detail read, including a cold/failed one.
+          if (reading || detail === undefined) {
+            void this.#queryClient.invalidateQueries(detailQuery)
+          }
           void this.#queryClient.invalidateQueries({
             queryKey: machineQueryKeys.list,
             exact: true,

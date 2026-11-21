@@ -1,3 +1,4 @@
+import { installationCompatibilityLabel } from '../../provider/provider-presentation'
 import { Check, ShieldAlert } from 'lucide-react'
 
 import { Badge, Button, cn } from '@codetether/ui'
@@ -82,7 +83,7 @@ function ProviderInstallationOption({
       compatibility.state === 'limited')
   const selected = installation.selected
   const version = installation.version ?? '版本未知'
-  const status = installationStatus(installation)
+  const status = installationCompatibilityLabel(installation)
   const actionDisabled = selected || !eligible || disabled || pending
 
   return (
@@ -139,24 +140,4 @@ function ProviderInstallationOption({
       </Button>
     </li>
   )
-}
-
-function installationStatus(installation: ProviderInstallationSummary): string {
-  const compatibility = installation.compatibility
-  if (installation.availability !== 'available') return '安装不可用'
-  if (compatibility === undefined || compatibility.freshness !== 'current') {
-    return '等待当前验证'
-  }
-  switch (compatibility.state) {
-    case 'verified':
-      return '已验证 · 可运行'
-    case 'compatible_unverified':
-      return '兼容 · 可运行'
-    case 'limited':
-      return '受限 · 可运行'
-    case 'incompatible':
-      return '不兼容 · 已阻止'
-    case 'unavailable':
-      return '不可用 · 已阻止'
-  }
 }

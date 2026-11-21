@@ -13,7 +13,10 @@ const source = (name) =>
   readFile(new URL('../src/' + name, import.meta.url), 'utf8')
 
 test('onboarding first-party service and authentication guidance use Chinese tool terminology', () => {
-  const { backendModeLabel, providerRepairText } = loadWebComponent(
+  const { backendModeLabel } = loadWebComponent(
+    'provider/provider-presentation.ts',
+  )
+  const { providerRepairText } = loadWebComponent(
     'components/onboarding/onboarding-model.ts',
   )
   assert.equal(backendModeLabel({ mode: 'first_party' }), '官方 AI 服务')

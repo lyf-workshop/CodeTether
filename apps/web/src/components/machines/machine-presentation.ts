@@ -123,7 +123,7 @@ export function machineConnectionTransportLabel(
 ): string {
   switch (state) {
     case 'local':
-      return '这台电脑'
+      return '本地电脑'
     case 'online':
     case 'connecting':
     case 'offline':
@@ -181,7 +181,7 @@ export function machineConnectionBadgeVariant(
 }
 
 export function machineKindLabel(machine: Pick<MachineSummary, 'kind'>) {
-  return machine.kind === 'local' ? '这台电脑' : '远程电脑'
+  return machine.kind === 'local' ? '本地电脑' : '远程电脑'
 }
 
 export function remoteMachineAddressLabel(

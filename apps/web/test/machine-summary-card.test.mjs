@@ -14,13 +14,18 @@ const machine = {
 function renderCard(backendFreshness) {
   const record = {
     ...machine,
-    providers: [{ provider: 'codex', availability: 'available' }],
+    providers: [
+      { provider: 'codex', availability: 'available', displayName: 'Codex' },
+    ],
     providerLifecycles: [
       {
         provider: 'codex',
+        selectedInstallationId: 'install_codex',
         installations: [
           {
             selected: true,
+            installationId: 'install_codex',
+            availability: 'available',
             backend: {
               freshness: backendFreshness,
               readiness: 'authentication_required',

@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react'
 
-import { Badge, Button, cn } from '@codetether/ui'
+import { Disclosure, Badge, Button, cn } from '@codetether/ui'
 
 import type { ApprovalController } from './conversation-controls'
 import type { ConversationApprovalViewModel } from './conversation-view-model'
@@ -116,7 +116,7 @@ export function PendingActionDock({
             id="pending-action-dock-title"
             className="truncate text-sm font-semibold text-text-primary"
           >
-            等待你的审批
+            等待你的批准
           </h2>
           <p className="truncate text-xs text-text-muted">
             请确认每项操作后，AI 工具才会继续。
@@ -177,10 +177,10 @@ export function PendingActionDock({
               </span>
             </div>
 
-            <details className="group mt-2 min-w-0 text-xs text-text-secondary">
-              <summary className="w-fit cursor-pointer rounded-xs outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/50">
-                查看详情
-              </summary>
+            <Disclosure
+              label="查看详情"
+              className="mt-2 min-w-0 text-xs text-text-secondary"
+            >
               <dl className="mt-2 grid min-w-0 gap-2 rounded-sm bg-surface-muted/45 p-3">
                 <div className="grid min-w-0 gap-1">
                   <dt className="text-text-muted">
@@ -199,7 +199,7 @@ export function PendingActionDock({
                   </div>
                 ) : null}
               </dl>
-            </details>
+            </Disclosure>
 
             {item.controls.error ? (
               <p role="alert" className="mt-2 text-xs text-danger-text">

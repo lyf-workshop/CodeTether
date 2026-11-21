@@ -12,7 +12,7 @@ test('real roadmap lists all eleven handoff gaps as plans, never enabled capabil
     '同一账号下的 Mac 和 Windows',
     'Windows 设备配对',
     '远程停止',
-    '远程审批',
+    '远程批准',
     '删除会话',
     '运行中排队、补充指令',
     '跨项目按内容搜索',

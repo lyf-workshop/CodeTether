@@ -375,7 +375,7 @@ export function mutationErrorMessage(error: unknown, fallback: string): string {
     const presentation = canonicalFailureActionPresentation(
       error.envelope.failure,
     )
-    return `${presentation.cause} ${presentation.guidance}`
+    return `${presentation.cause}${presentation.guidance}`
   }
 
   switch (error.envelope.code) {

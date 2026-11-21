@@ -4,13 +4,14 @@ import { Link } from '@tanstack/react-router'
 import { Folder, Monitor, Server } from 'lucide-react'
 
 import { StatusTag } from '@codetether/ui'
-import type {
-  GetMachineResponse,
-  MachineSummary,
-  ProjectRecord,
-  ProviderId,
-} from '@codetether/protocol'
+import type { MachineSummary, ProjectRecord } from '@codetether/protocol'
 
+import {
+  machineProviderSummary,
+  providerDisplayName,
+  supportedAgentProviders,
+} from '../../provider/provider-presentation'
+import { ProviderSummaryBadge } from '../../provider/provider-summary-badge'
 import { useHostRuntime } from '../../runtime/host/host-runtime-hooks'
 import { machineDetailQueryOptions } from '../../runtime/host/machine-query'
 import { projectLocationForMachine } from '../../runtime/host/project-location'
@@ -27,11 +28,6 @@ interface MachineSummaryCardProps {
   readonly projectError: boolean
   readonly hostConnected: boolean
 }
-
-const providers = [
-  { id: 'codex', label: 'Codex' },
-  { id: 'claude-code', label: 'Claude Code' },
-] as const satisfies readonly { id: ProviderId; label: string }[]
 
 export function MachineSummaryCard({
   machine,
@@ -114,35 +110,45 @@ export function MachineSummaryCard({
         </StatusTag>
       </div>
       <dl className="mt-5 space-y-2 border-t border-border pt-4 text-sm">
-        {providers.map((provider) => {
-          const status = providerCardStatus(detail.data, provider.id)
+        {supportedAgentProviders.map((provider) => {
           return (
             <div
-              key={provider.id}
+              key={provider}
               className="flex items-center justify-between gap-3"
             >
-              <dt className="text-text-secondary">{provider.label}</dt>
-              <dd
-                className={
-                  status.available ? 'text-success-text' : 'text-text-muted'
-                }
-              >
-                {detail.isError && detail.data === undefined
-                  ? '状态暂不可用'
-                  : detail.data === undefined
-                    ? '正在读取…'
-                    : status.label}
+              <dt className="text-text-secondary">
+                {providerDisplayName(provider)}
+              </dt>
+              <dd>
+                {detail.data ? (
+                  <ProviderSummaryBadge
+                    summary={machineProviderSummary(
+                      detail.data,
+                      provider,
+                      machine.connectionState,
+                    )}
+                  />
+                ) : (
+                  <span className="text-text-muted">
+                    {machine.connectionState !== 'local' &&
+                    machine.connectionState !== 'online'
+                      ? '电脑未连接'
+                      : detail.isError
+                        ? '状态暂不可用'
+                        : '正在读取…'}
+                  </span>
+                )}
               </dd>
             </div>
           )
         })}
       </dl>
       {detail.isError && detail.data !== undefined ? (
-        <p role="status" className="mt-2 text-xs text-text-muted">
+        <p role="status" className="mt-2 mb-4 text-xs text-text-muted">
           AI 工具状态未能更新，显示上次读取结果
         </p>
       ) : detail.data?.providerDiscovery?.state === 'last_known' ? (
-        <p className="mt-2 text-xs text-text-muted">
+        <p className="mt-2 mb-4 text-xs text-text-muted">
           AI 工具显示上次已知的安装状态
         </p>
       ) : null}
@@ -169,35 +175,4 @@ export function MachineSummaryCard({
       </div>
     </article>
   )
-}
-
-function providerCardStatus(
-  detail: GetMachineResponse | undefined,
-  provider: ProviderId,
-): { label: string; available: boolean } {
-  if (detail === undefined) return { label: '正在读取…', available: false }
-  if (
-    detail.machine.kind === 'remote' &&
-    detail.providerDiscovery?.state === 'not_observed'
-  )
-    return { label: '尚未检测', available: false }
-  const descriptor = detail.providers.find(
-    (candidate) => candidate.provider === provider,
-  )
-  if (descriptor === undefined) return { label: '尚未检测', available: false }
-  const selected = detail.providerLifecycles
-    ?.find((lifecycle) => lifecycle.provider === provider)
-    ?.installations.find((installation) => installation.selected)
-  if (
-    selected?.backend?.freshness === 'current' &&
-    selected.backend.readiness === 'authentication_required'
-  )
-    return { label: '未登录', available: false }
-  if (descriptor.availability === 'available')
-    return { label: '可用', available: true }
-  if (descriptor.availability === 'not_installed')
-    return { label: '未安装', available: false }
-  if (descriptor.availability === 'unsupported_version')
-    return { label: '版本不支持', available: false }
-  return { label: '暂不可用', available: false }
 }

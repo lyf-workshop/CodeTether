@@ -157,16 +157,11 @@
   );
   --motion-timeline-highlight: 2s;
   --page-w: 1040px;
-  --page-narrow-w: 760px;
   --pairing-w: 680px;
-  --layout-onboarding-width: 560px;
+  --layout-form-width: 560px;
+  --layout-page-gutter: var(--s8);
   --layout-onboarding-progress-height: 3px;
   --layout-onboarding-progress-radius: 2px;
-  --layout-onboarding-title-size: 32px;
-  --layout-onboarding-title-weight: 650;
-  --layout-onboarding-title-tracking: -0.025em;
-  --layout-onboarding-title-leading: 1.25;
-  --layout-onboarding-lead-leading: 1.6;
   --layout-onboarding-brand-size: 52px;
   --layout-onboarding-completion-size: 56px;
   --layout-onboarding-feature-spacing: 14px;
@@ -333,9 +328,6 @@
   --layout-conversations-activity-width: 7.75rem;
 
   /* Inbox geometry — Figma 02 Desktop at 1536 × 1024 */
-  --layout-inbox-page-block-padding: 1.5rem;
-  --layout-inbox-header-height: 3.125rem;
-  --layout-inbox-header-summary-gap: 1.25rem;
   --layout-inbox-summary-height: 6.25rem;
   --layout-inbox-summary-filter-gap: 1.375rem;
   --layout-inbox-filter-width: 3.625rem;
@@ -551,6 +543,8 @@
     color: var(--text-primary);
     font-size: var(--fs-base);
     line-height: 1.5;
+    /* Improve paragraph endings while preserving nowrap and preformatted content. */
+    text-wrap-style: pretty;
   }
 
   button,
@@ -563,6 +557,44 @@
   ::selection {
     background: color-mix(in srgb, var(--primary) 38%, transparent);
     color: var(--text-primary);
+  }
+}
+
+@layer components {
+  .ct-page-content {
+    inline-size: 100%;
+    min-inline-size: 0;
+    max-inline-size: var(--page-w);
+    margin-inline: auto;
+    padding: var(--layout-content-block-padding) var(--layout-page-gutter);
+  }
+
+  /* Center forms on the window in both Setup and the sidebar workspace.
+     When space is tight, the workspace gutter takes precedence. */
+  .ct-page-content[data-page-type='form'] {
+    max-inline-size: calc(
+      var(--layout-form-width) + 2 * var(--layout-page-gutter)
+    );
+    margin-inline-start: max(
+      0px,
+      calc(
+        (
+            100% - var(--layout-sidebar-current-width) -
+              var(--layout-form-width)
+          ) /
+          2 - var(--layout-page-gutter)
+      )
+    );
+  }
+
+  [data-slot='page-header'] :is(h1, h2) {
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (width < 40rem) {
+  :root {
+    --layout-page-gutter: var(--s4);
   }
 }
 
@@ -607,8 +639,6 @@
 @media (height < 60rem) {
   :root,
   [data-theme='dark'] {
-    --layout-inbox-page-block-padding: 1.25rem;
-    --layout-inbox-header-summary-gap: 1rem;
     --layout-inbox-summary-height: 5.5rem;
     --layout-inbox-summary-filter-gap: 0.875rem;
     --layout-inbox-filter-list-gap: 0.75rem;

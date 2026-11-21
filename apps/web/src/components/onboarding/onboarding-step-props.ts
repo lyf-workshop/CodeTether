@@ -1,3 +1,4 @@
+import type { MachineProviderRead } from '../../provider/use-machine-provider-details'
 import type {
   DoctorReport,
   MachineId,
@@ -7,6 +8,7 @@ import type {
 } from '@codetether/protocol'
 
 export interface SetupStepProps {
+  readonly providerDetails: ReadonlyMap<MachineId, MachineProviderRead>
   readonly doctor: DoctorReport
   readonly machines: readonly MachineSummary[]
   readonly onboarding: OnboardingProgress

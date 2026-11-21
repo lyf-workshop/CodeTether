@@ -158,9 +158,9 @@ test('device pages preserve machine queries, bounded indexes, provider controls 
   assert.match(detail, /MachineRelaySection/u)
   assert.match(providers, /ProviderInstallationSelector/u)
   assert.match(providers, /label="安装状态"/u)
-  assert.match(providers, /label="运行时"/u)
-  assert.match(providers, /label="后端"/u)
-  assert.match(providers, /label="执行状态"/u)
+  assert.match(providers, /label="运行环境"/u)
+  assert.match(providers, /label="AI 服务"/u)
+  assert.match(providers, /label="运行情况"/u)
   assert.match(unpair, /unpairMachinePreflight/u)
   assert.match(unpair, /知道了/u)
   assert.match(unpair, /machineErrorMessage\(unpairMutation.error, 'unpair'\)/u)
@@ -293,7 +293,7 @@ test('device card pairs a decorative folder icon with its known project count', 
   assert.match(html, /1 个项目/u)
 })
 
-test('provider cards wrap identities and diagnostic values in narrow layouts', async () => {
+test('provider rows share name, version and status columns while diagnostic values can wrap', async () => {
   const source = await readFile(
     new URL(
       '../src/components/machines/machine-providers-section.tsx',
@@ -301,8 +301,8 @@ test('provider cards wrap identities and diagnostic values in narrow layouts', a
     ),
     'utf8',
   )
-  assert.match(source, /flex min-w-0 flex-wrap items-start gap-3/u)
-  assert.match(source, /min-w-0 flex-1 basis-32/u)
+  assert.match(source, /grid-cols-\[max-content_minmax\(0,1fr\)_max-content\]/u)
+  assert.match(source, /col-span-full grid min-w-0 grid-cols-subgrid/u)
   assert.match(source, /flex min-w-0 flex-wrap items-baseline/u)
   assert.match(source, /min-w-0 break-words text-right font-medium/u)
 })

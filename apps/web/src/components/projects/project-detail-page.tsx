@@ -1,9 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useParams, useSearch } from '@tanstack/react-router'
-import { ArrowLeft, Folder, Plus, Trash2 } from 'lucide-react'
+import { Folder, Plus, Trash2 } from 'lucide-react'
 
-import { Button, Notice, SectionState } from '@codetether/ui'
+import { Button, Notice, PageHeader, SectionState } from '@codetether/ui'
 import { ProjectIdSchema, type ProjectId } from '@codetether/protocol'
 
 import {
@@ -114,7 +114,7 @@ function ProjectDetailPage({
   if (context.kind !== 'selected')
     return (
       <ProjectFrame>
-        <h1 className="mb-6 text-page font-semibold">{project.name}</h1>
+        <PageHeader title={project.name} />
         <Notice
           tone={context.kind === 'invalid-device' ? 'warn' : 'info'}
           title={
@@ -188,27 +188,11 @@ function ProjectDetailPage({
 
   return (
     <ProjectFrame>
-      <Link
-        to={searchPage ? '/projects/$projectId' : '/devices/$machineId'}
-        params={searchPage ? { projectId } : { machineId: location.machineId }}
-        search={searchPage ? { machineId: location.machineId } : {}}
-        className="mb-4 inline-flex items-center gap-1.5 rounded-xs text-sm text-text-secondary outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <ArrowLeft aria-hidden="true" className="size-4" />
-        {searchPage ? '返回项目' : '返回设备'}
-      </Link>
-      <header className="mb-8 flex min-w-0 flex-wrap items-center gap-4">
-        <span
-          aria-hidden="true"
-          className="grid size-12 shrink-0 place-items-center rounded-lg border border-border bg-surface-inset text-text-muted"
-        >
-          <Folder className="size-6" />
-        </span>
-        <div className="min-w-0 flex-1 basis-48">
-          <h1 title={project.name} className="truncate text-page font-semibold">
-            {searchPage ? `在 ${project.name} 中搜索` : project.name}
-          </h1>
-          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-muted">
+      <PageHeader
+        title={searchPage ? `在 ${project.name} 中搜索` : project.name}
+        icon={<Folder className="size-6" />}
+        description={
+          <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-muted">
             <Link
               to="/devices/$machineId"
               params={{ machineId: location.machineId }}
@@ -224,20 +208,22 @@ function ProjectDetailPage({
               {location.rootPath}
             </span>
           </div>
-        </div>
-        {!searchPage ? (
-          <NewConversationDialog
-            currentProject={project}
-            currentMachineId={location.machineId}
-            trigger={
-              <Button disabled={!canCreate} title={state.reason}>
-                <Plus aria-hidden="true" />
-                新建会话
-              </Button>
-            }
-          />
-        ) : null}
-      </header>
+        }
+        actions={
+          !searchPage ? (
+            <NewConversationDialog
+              currentProject={project}
+              currentMachineId={location.machineId}
+              trigger={
+                <Button disabled={!canCreate} title={state.reason}>
+                  <Plus aria-hidden="true" />
+                  新建会话
+                </Button>
+              }
+            />
+          ) : null
+        }
+      />
       {!state.available ? (
         <div className="mb-6">
           <Notice
@@ -334,9 +320,5 @@ function ProjectNotFound() {
 }
 
 function ProjectFrame({ children }: { children: ReactNode }) {
-  return (
-    <div className="mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
-      {children}
-    </div>
-  )
+  return <div className="ct-page-content min-h-full">{children}</div>
 }

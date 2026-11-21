@@ -90,9 +90,7 @@ function TopBar({
   ...props
 }: TopBarProps) {
   const notificationsLabel =
-    notificationCount > 0
-      ? `收件箱，${notificationCount} 个待处理事项`
-      : '收件箱'
+    notificationCount > 0 ? `待处理，${notificationCount} 项` : '待处理'
   const resolvedBreadcrumbs = breadcrumbs ?? [{ label: currentPage }]
   const parentBreadcrumb = resolvedBreadcrumbs
     .slice(0, -1)

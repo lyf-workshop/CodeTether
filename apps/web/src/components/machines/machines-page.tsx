@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { Plus } from 'lucide-react'
 
-import { Button, Notice } from '@codetether/ui'
+import { Button, Notice, PageHeader } from '@codetether/ui'
 import type { MachineSummary } from '@codetether/protocol'
 
 import {
@@ -73,26 +73,23 @@ export function MachinesPage() {
   }
 
   return (
-    <div className="@container/devices mx-auto min-h-full w-full min-w-0 max-w-(--page-w) px-4 py-6 sm:px-8">
-      <header className="mb-8 flex min-w-0 flex-wrap items-end justify-between gap-4">
-        <div className="min-w-0 flex-1 basis-64">
-          <h1 className="text-page font-semibold">设备</h1>
-          <p className="mt-2 max-w-prose text-base text-text-secondary">
-            每台电脑独立显示它的项目和 AI
-            工具。选择一台电脑，查看项目与最近的会话。
-          </p>
-        </div>
-        <Button
-          variant="secondary"
-          disabled={connectionState !== 'connected'}
-          onClick={() => {
-            void navigate({ to: '/add' })
-          }}
-        >
-          <Plus aria-hidden="true" />
-          添加设备
-        </Button>
-      </header>
+    <div className="ct-page-content @container/devices min-h-full">
+      <PageHeader
+        title="设备"
+        description="每台电脑独立显示它的项目和 AI 工具。选择一台电脑，查看项目与最近的会话。"
+        actions={
+          <Button
+            variant="secondary"
+            disabled={connectionState !== 'connected'}
+            onClick={() => {
+              void navigate({ to: '/add' })
+            }}
+          >
+            <Plus aria-hidden="true" />
+            添加设备
+          </Button>
+        }
+      />
       {unavailable ? (
         <MachinesErrorState
           incompatible={connectionState === 'incompatible'}

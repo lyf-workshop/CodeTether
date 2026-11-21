@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { ArrowRight, FolderOpen, LoaderCircle, RefreshCw } from 'lucide-react'
 import {
+  Disclosure,
   Badge,
   Button,
   Card,
@@ -8,11 +9,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@codetether/ui'
-import {
-  doctorStateBadgeVariant,
-  doctorStateLabel,
-  onboardingConnectionStateLabel,
-} from './onboarding-model'
+import { onboardingConnectionStateLabel } from './onboarding-model'
+import { doctorComponentStatus } from '../doctor/doctor-component-status'
 
 export function PrimaryContinue({
   busy,
@@ -43,12 +41,12 @@ export function StatusRow({
   detail,
   label,
   state,
-  statusLabel,
+  status,
 }: {
   readonly detail: string
   readonly label: string
-  readonly state: Parameters<typeof doctorStateLabel>[0]
-  readonly statusLabel?: string
+  readonly state?: Parameters<typeof doctorComponentStatus>[0]
+  readonly status?: ReactNode
 }) {
   return (
     <div className="flex min-w-0 items-center gap-3 rounded-md border border-border bg-surface-muted px-4 py-3 text-left">
@@ -63,9 +61,13 @@ export function StatusRow({
           {detail}
         </span>
       </span>
-      <Badge variant={doctorStateBadgeVariant(state)}>
-        {statusLabel ?? doctorStateLabel(state)}
-      </Badge>
+      {state ? (
+        <Badge variant={doctorComponentStatus(state).variant}>
+          {doctorComponentStatus(state).label}
+        </Badge>
+      ) : (
+        status
+      )}
     </div>
   )
 }
@@ -123,12 +125,11 @@ export function SetupUnavailable({
           <p className="text-sm text-text-secondary">
             你的已有项目和会话没有改变。请稍候，然后重新检查。
           </p>
-          <details className="mt-4 text-xs text-text-muted">
-            <summary className="cursor-pointer">技术详情</summary>
+          <Disclosure label="技术详情" className="mt-4 text-xs text-text-muted">
             <p className="mt-2">
               连接状态：{onboardingConnectionStateLabel(connectionState)}
             </p>
-          </details>
+          </Disclosure>
           <Button className="mt-5" type="button" onClick={onRetry}>
             <RefreshCw aria-hidden="true" />
             重新检查

@@ -167,7 +167,7 @@ export function ConversationSettingsDialog({
       ? undefined
       : {
           machineName:
-            machine.kind === 'local' ? '这台电脑' : machine.displayName,
+            machine.kind === 'local' ? '本地电脑' : machine.displayName,
           projectName: project.data.name,
           rootPath: location.rootPath,
           providerName: providerDisplayName(detail.data.conversation.provider),

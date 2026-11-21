@@ -6,7 +6,13 @@ import {
   LoaderCircle,
   RefreshCw,
 } from 'lucide-react'
-import { Button, Checkbox, DialogHeader, DialogTitle } from '@codetether/ui'
+import {
+  PageHeader,
+  Button,
+  Checkbox,
+  DialogHeader,
+  DialogTitle,
+} from '@codetether/ui'
 import {
   formatCandidateTime,
   maximumImportSelection,
@@ -59,8 +65,8 @@ export function PreviousConversationsView({
           </span>
           <DialogTitle>以前的会话</DialogTitle>
           <p className="text-base leading-normal text-text-secondary">
-            可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
-            导入不会启动 AI 工具。
+            可将此项目中已有的 Codex 或 Claude Code 会话添加到
+            CodeTether。导入不会启动 AI 工具。
           </p>
         </DialogHeader>
       ) : (
@@ -71,13 +77,13 @@ export function PreviousConversationsView({
           >
             <History className="size-5" />
           </span>
-          <h2 className="mt-4 text-xl font-semibold text-text-primary">
-            以前的会话
-          </h2>
-          <p className="mt-2 text-base leading-normal text-text-secondary">
-            可选择此工作区中已有的 Codex 或 Claude Code 会话添加到 CodeTether。
-            导入不会启动 AI 工具，也不会发送任何提示词。
-          </p>
+          <div className="mt-4">
+            <PageHeader
+              level={presentation === 'embedded' ? 2 : 1}
+              title="以前的会话"
+              description="可选择此项目中已有的 Codex 或 Claude Code 会话添加到 CodeTether。导入不会启动 AI 工具，也不会发送任何提示词。"
+            />
+          </div>
         </div>
       )}
 

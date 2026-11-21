@@ -35,7 +35,7 @@ test('project choices group exact locations under real devices, local first, wit
   )
   assert.deepEqual(
     groups.map((group) => group.label),
-    ['这台电脑 (Windows)', '构建设备 (Linux)'],
+    ['本地电脑 (Windows)', '构建设备 (Linux)'],
   )
   assert.deepEqual(
     groups[1].choices.map((choice) => choice.projectId),
@@ -279,20 +279,26 @@ test('only a local startup Provider placeholder says it is still checking', () =
   const local = conversationCreationProviderOptions(
     [pending],
     [{ provider: 'codex', installations: [] }],
+    undefined,
+    undefined,
     'local',
   )[0]
-  assert.deepEqual(local.eligibility, {
-    eligible: false,
-    checking: true,
-    label: 'Codex · 正在检查…',
+  assert.equal(local.eligibility.eligible, false)
+  assert.equal(local.eligibility.checking, true)
+  assert.equal(local.eligibility.label, 'Codex · 正在检查…')
+  assert.deepEqual(local.eligibility.summary.status, {
+    label: '正在检查…',
+    variant: 'secondary',
   })
   const remote = conversationCreationProviderOptions(
     [pending],
     undefined,
+    undefined,
+    undefined,
     'remote',
   )[0]
   assert.equal(remote.eligibility.checking, undefined)
-  assert.equal(remote.eligibility.label, 'Codex · 暂时不可用')
+  assert.match(remote.eligibility.label, /暂时不可用/u)
 
   const warmDbPending = conversationCreationProviderOptions(
     [
@@ -316,6 +322,8 @@ test('only a local startup Provider placeholder says it is still checking', () =
         ],
       },
     ],
+    undefined,
+    undefined,
     'local',
   )[0]
   assert.equal(warmDbPending.eligibility.checking, true)
@@ -335,6 +343,8 @@ test('only a local startup Provider placeholder says it is still checking', () =
         ],
       },
     ],
+    undefined,
+    undefined,
     'local',
   )[0]
   assert.equal(checkedCompatibility.eligibility.checking, undefined)
@@ -348,10 +358,12 @@ test('only a local startup Provider placeholder says it is still checking', () =
       },
     ],
     undefined,
+    undefined,
+    undefined,
     'local',
   )[0]
   assert.equal(checked.eligibility.checking, undefined)
-  assert.equal(checked.eligibility.label, 'Codex · 暂时不可用')
+  assert.match(checked.eligibility.label, /暂时不可用/u)
 })
 
 test('canonical selected installation gates creation; a healthy alternate is never auto-selected', () => {
@@ -371,7 +383,7 @@ test('canonical selected installation gates creation; a healthy alternate is nev
     [group],
   )[0]
   assert.equal(option.eligibility.eligible, false)
-  assert.match(option.eligibility.label, /所选安装不可用.*重新检查/u)
+  assert.match(option.eligibility.label, /暂时不可用.*重新检查/u)
   assert.equal(group.selectedInstallationId, selected.installationId)
 })
 
@@ -397,14 +409,14 @@ test('an empty installation list directs the user to check the installation', ()
     [{ provider: 'claude-code', installations: [] }],
   )
   assert.equal(eligibility.eligible, false)
-  assert.match(eligibility.label, /未检测到安装.*确认安装状态后重新检查/u)
+  assert.match(eligibility.label, /未安装.*安装后重新检查/u)
 })
 
 test('blocked tool choices show the selected installation’s observed reason and next step', () => {
   for (const [overrides, expected] of [
     [
       { compatibility: { state: 'incompatible', freshness: 'last_known' } },
-      /上次检查时.*不兼容.*重新检查/u,
+      /需要更新 CodeTether.*重新检查/u,
     ],
     [
       {
@@ -419,11 +431,11 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'ready',
         },
       },
-      /^所选安装的运行时.*不兼容.*重新检查/u,
+      /需要更新 CodeTether.*重新检查/u,
     ],
     [
       { compatibility: { state: 'unavailable', freshness: 'not_observed' } },
-      /尚未确认所选安装能否运行.*重新检查/u,
+      /尚未确认这个工具能否运行.*重新检查/u,
     ],
     [
       {
@@ -437,7 +449,7 @@ test('blocked tool choices show the selected installation’s observed reason an
           },
         },
       },
-      /不支持新会话所需的运行或恢复能力.*重新检查/u,
+      /不支持新会话所需的功能.*重新检查/u,
     ],
     [
       {
@@ -447,7 +459,7 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'authentication_required',
         },
       },
-      /需要登录.*登录后重新检查/u,
+      /未登录.*完成登录/u,
     ],
     [
       {
@@ -457,15 +469,15 @@ test('blocked tool choices show the selected installation’s observed reason an
           readiness: 'authentication_required',
         },
       },
-      /需要身份验证.*检查服务配置/u,
+      /暂时不可用.*检查 AI 服务配置/u,
     ],
     [
       { backend: { freshness: 'current', readiness: 'misconfigured' } },
-      /AI 服务配置不可用.*检查服务配置/u,
+      /暂时不可用.*检查 AI 服务配置/u,
     ],
     [
       { backend: { freshness: 'current', readiness: 'unavailable' } },
-      /AI 服务暂时不可用.*重新检查/u,
+      /暂时不可用.*重新检查/u,
     ],
   ]) {
     const selected = installation('installation_selected01', overrides)
@@ -505,13 +517,26 @@ test('an older backend login observation does not disable a currently eligible t
   assert.doesNotMatch(eligibility.label, /需要登录/u)
 })
 
-test('legacy descriptor eligibility is preserved without Lifecycle, and runtime health stays advisory', () => {
+test('legacy descriptor eligibility is preserved without Lifecycle, and historical health stays secondary', () => {
   const item = provider('codex', {
-    executionHealth: { state: 'degraded', freshness: 'stale' },
+    executionHealth: {
+      state: 'degraded',
+      freshness: 'last_known',
+      observedAt: '2026-10-22T12:00:00Z',
+      failure: {
+        reason: 'provider_service_unavailable',
+        userAction: 'retry',
+      },
+    },
   })
   const option = conversationCreationProviderOptions([item], undefined)[0]
   assert.equal(option.eligibility.eligible, true)
-  assert.ok(option.eligibility.executionAdvisory)
+  assert.equal(option.eligibility.summary.status.label, '可用')
+  assert.equal(option.eligibility.executionAdvisory, undefined)
+  assert.match(
+    option.eligibility.summary.executionHistoryLabel,
+    /上次运行受限 · 10月22日/u,
+  )
 })
 
 function fixtureGroups(remoteOverrides = {}) {
@@ -550,6 +575,7 @@ function provider(id, overrides = {}) {
     agent: id === 'codex' ? 'codex' : 'claude',
     displayName: id === 'codex' ? 'Codex' : 'Claude Code',
     available: true,
+    availability: 'available',
     availabilityLabel: '可用',
     models: [],
     reasoningOptions: [],

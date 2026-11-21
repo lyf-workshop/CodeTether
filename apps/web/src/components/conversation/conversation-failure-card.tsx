@@ -3,7 +3,7 @@ import { Link } from '@tanstack/react-router'
 import { AlertTriangle, LoaderCircle, RotateCcw } from 'lucide-react'
 
 import type { MachineId, ProjectId } from '@codetether/protocol'
-import { Button } from '@codetether/ui'
+import { Disclosure, Button } from '@codetether/ui'
 
 import type { FailedTurnRetryController } from './conversation-controls.js'
 import type { ConversationFailureViewModel } from './conversation-view-model.js'
@@ -128,10 +128,10 @@ export function ConversationFailureCard({
             </p>
           )}
 
-          <details className="group mt-3 min-w-0 text-xs text-text-secondary">
-            <summary className="w-fit cursor-pointer rounded-xs outline-none hover:text-text-primary focus-visible:ring-2 focus-visible:ring-ring/50">
-              技术详情
-            </summary>
+          <Disclosure
+            label="技术详情"
+            className="mt-3 min-w-0 text-xs text-text-secondary"
+          >
             <dl className="mt-2 grid min-w-0 gap-2 rounded-sm bg-surface-muted/55 p-3">
               {failure.technicalDetails.map((detail) => (
                 <div key={detail.label} className="grid min-w-0 gap-1">
@@ -142,7 +142,7 @@ export function ConversationFailureCard({
                 </div>
               ))}
             </dl>
-          </details>
+          </Disclosure>
         </div>
       </div>
     </article>

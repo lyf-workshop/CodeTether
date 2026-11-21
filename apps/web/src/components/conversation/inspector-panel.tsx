@@ -2,6 +2,7 @@ import { useEffect, useState, type ComponentPropsWithoutRef } from 'react'
 import { FileCode2, Files, PanelRightClose, SquareTerminal } from 'lucide-react'
 
 import {
+  Disclosure,
   Badge,
   IconButton,
   ScrollArea,
@@ -461,12 +462,12 @@ export function InspectorPanel({
           </TabsContent>
         ) : null}
       </Tabs>
-      <details className="shrink-0 border-t border-border px-4 py-2 text-sm text-text-secondary">
-        <summary className="cursor-pointer rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          会话信息
-        </summary>
+      <Disclosure
+        label="会话信息"
+        className="shrink-0 border-t border-border px-4 py-2 text-sm text-text-secondary"
+      >
         <ConversationMetadata conversation={conversation} />
-      </details>
+      </Disclosure>
     </aside>
   )
 }

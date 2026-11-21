@@ -1,5 +1,4 @@
 import type {
-  DoctorBackendStatus,
   DoctorComponentState,
   DoctorProviderStatus,
   DoctorReport,
@@ -12,6 +11,8 @@ import type {
 } from '@codetether/protocol'
 
 import { canonicalFailureActionPresentation } from '../../failures/failure-presentation.js'
+
+import { providerDisplayName } from '../../provider/provider-presentation.js'
 
 export const onboardingSteps = [
   'welcome',
@@ -41,44 +42,6 @@ export const providerInstallationGuidance = {
 
 export function onboardingStepIndex(step: OnboardingStep): number {
   return onboardingSteps.indexOf(step)
-}
-
-export function providerDisplayName(provider: ProviderId): string {
-  return providerInstallationGuidance[provider].label
-}
-
-export function doctorStateLabel(state: DoctorComponentState): string {
-  switch (state) {
-    case 'ready':
-      return '就绪'
-    case 'needs_attention':
-      return '需要处理'
-    case 'limited':
-      return '受限'
-    case 'unavailable':
-      return '不可用'
-    case 'offline':
-      return '离线'
-    case 'unknown':
-      return '尚未检查'
-  }
-}
-
-export function doctorStateBadgeVariant(
-  state: DoctorComponentState,
-): 'success' | 'warning' | 'danger' | 'secondary' {
-  switch (state) {
-    case 'ready':
-      return 'success'
-    case 'needs_attention':
-    case 'limited':
-      return 'warning'
-    case 'unavailable':
-      return 'danger'
-    case 'offline':
-    case 'unknown':
-      return 'secondary'
-  }
 }
 
 export function doctorOverallPresentation(doctor: DoctorReport): {
@@ -272,48 +235,6 @@ export function onboardingProviderServiceUnverified(
 export const onboardingUnverifiedServiceGuidance =
   '开始首次对话时验证 AI 服务；设置过程不会发送消息或消耗模型额度。无需为了完成设置专门发送测试消息。'
 
-export function onboardingProviderInstallationLabel(
-  provider: DoctorProviderStatus,
-): string {
-  if (provider.freshness === 'not_observed') return '尚未检查'
-  const label = !provider.installed
-    ? '未安装'
-    : provider.selected
-      ? '已安装'
-      : '已安装 · 未选择'
-  return provider.freshness === 'last_known' ? `上次检查：${label}` : label
-}
-
-export function onboardingProviderRuntimeLabel(
-  provider: DoctorProviderStatus,
-): string {
-  if (provider.freshness === 'not_observed') return '尚未检查'
-  const compatibility =
-    provider.compatibility === 'compatible_unverified'
-      ? '兼容的新版本，尚未完整验证'
-      : providerCompatibilityLabel({ ...provider, freshness: 'current' })
-  const readiness =
-    provider.runtimeReadiness === 'ready'
-      ? '可用'
-      : provider.runtimeReadiness === 'limited'
-        ? '部分功能可用'
-        : undefined
-  const label =
-    readiness === undefined ? compatibility : `${readiness} · ${compatibility}`
-  return provider.freshness === 'last_known' ? `上次检查：${label}` : label
-}
-
-export function onboardingProviderServiceLabel(
-  provider: DoctorProviderStatus,
-): string {
-  if (provider.backend === undefined) return '尚未验证'
-  if (provider.backend.readiness !== 'unknown')
-    return backendReadinessLabel(provider.backend)
-  return provider.backend.freshness === 'last_known'
-    ? '上次检查：尚未验证'
-    : '尚未验证'
-}
-
 export function onboardingProviderGuidance(
   provider: DoctorProviderStatus,
 ): string {
@@ -326,17 +247,6 @@ export function onboardingProviderGuidance(
   )
     return 'AI 服务配置需要检查。请检查当前服务配置后重新检查；CodeTether 不会自动切换服务或安装。'
   return providerRepairText(provider)
-}
-
-export function onboardingSessionDiscoveryLabel(
-  state: DoctorProviderStatus['sessionDiscovery'],
-): string {
-  return {
-    supported: '支持查找',
-    unsupported: '暂不支持查找',
-    unavailable: '暂时无法查找',
-    unknown: '尚未检查',
-  }[state]
 }
 
 export function onboardingInstallMethodLabel(
@@ -401,101 +311,6 @@ export function isDoctorExecutionContextReady(
   )
 }
 
-export function providerCompatibilityLabel(
-  provider: DoctorProviderStatus,
-): string {
-  if (provider.freshness === 'not_observed') return '尚未检查'
-  const label = (() => {
-    if (!provider.installed) return '未安装'
-    switch (provider.compatibility) {
-      case 'verified':
-        return '兼容'
-      case 'compatible_unverified':
-        return '兼容 — 检测到新版本'
-      case 'limited':
-        return '部分功能受限'
-      case 'incompatible':
-        return '需要更新 CodeTether'
-      case 'unavailable':
-        return '当前不可用'
-      case undefined:
-        return '尚未检查'
-    }
-  })()
-  return provider.freshness === 'last_known' && label !== '尚未检查'
-    ? `上次检查：${label}`
-    : label
-}
-
-export function providerVersionLabel(provider: DoctorProviderStatus): string {
-  if (provider.freshness === 'not_observed') return '尚未检查'
-  const label = provider.installed ? (provider.version ?? '已安装') : '未安装'
-  return provider.freshness === 'last_known' ? `上次检查：${label}` : label
-}
-
-export function backendModeLabel(
-  backend: DoctorBackendStatus | undefined,
-): string {
-  if (backend === undefined) return 'AI 服务尚未检查'
-  switch (backend.mode) {
-    case 'first_party':
-      return '官方 AI 服务'
-    case 'custom_gateway':
-      return '自定义 AI 服务'
-    case 'bedrock':
-      return 'Amazon Bedrock'
-    case 'vertex':
-      return 'Google Vertex AI'
-    case 'unknown':
-      return 'AI 服务'
-  }
-}
-
-export function backendReadinessLabel(
-  backend: DoctorBackendStatus | undefined,
-): string {
-  if (backend === undefined) return '尚未检查'
-  const label = (() => {
-    switch (backend.readiness) {
-      case 'ready':
-        return '就绪'
-      case 'unavailable':
-        return '暂时不可用'
-      case 'authentication_required':
-        return backend.mode === 'first_party' ? '需要登录' : '需要检查配置'
-      case 'misconfigured':
-        return '需要检查配置'
-      case 'unknown':
-        return '尚未检查'
-    }
-  })()
-  return backend.freshness === 'last_known' && label !== '尚未检查'
-    ? `上次检查：${label}`
-    : label
-}
-
-export function lifecycleObservationLabel(
-  freshness: DoctorProviderStatus['freshness'],
-  observedAt?: string,
-): string {
-  if (freshness === 'not_observed') return '尚未检查'
-  const timestamp = formatObservationTime(observedAt)
-  if (freshness === 'last_known') {
-    return timestamp === undefined ? '上次检查' : `上次检查：${timestamp}`
-  }
-  return timestamp === undefined ? '当前状态' : `检查于 ${timestamp}`
-}
-
-function formatObservationTime(observedAt?: string): string | undefined {
-  if (observedAt === undefined) return undefined
-  const date = new Date(observedAt)
-  if (Number.isNaN(date.getTime())) return undefined
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date)
-}
-
 export function providerRepairText(provider: DoctorProviderStatus): string {
   if (provider.freshness === 'not_observed') {
     return '当前安装和运行状态尚未检查。电脑连接可用后选择“重新检查”。'
@@ -528,7 +343,7 @@ export function providerRepairText(provider: DoctorProviderStatus): string {
       currentHealth.failure,
       { providerDisplayName: providerDisplayName(provider.provider) },
     )
-    return `${presentation.cause} ${presentation.guidance}`
+    return `${presentation.cause}${presentation.guidance}`
   }
   if (currentHealth?.state === 'unavailable') {
     return '最近一次执行检查不可用。请检查 AI 工具和服务状态，然后重新检查。'

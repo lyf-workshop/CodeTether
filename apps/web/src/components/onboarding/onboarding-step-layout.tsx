@@ -8,7 +8,7 @@ import {
   Server,
   SquarePen,
 } from 'lucide-react'
-import { CodeTetherMark } from '@codetether/ui'
+import { PageHeader, CodeTetherMark } from '@codetether/ui'
 import { onboardingScreens } from './onboarding-presentation'
 
 export function OnboardingProgress({ current }: { readonly current: number }) {
@@ -59,21 +59,6 @@ function Feature({
   )
 }
 
-export function OnboardingStepHeading({
-  title,
-  description,
-}: {
-  readonly title: string
-  readonly description: string
-}) {
-  return (
-    <div>
-      <h2 className="ct-onboarding-title">{title}</h2>
-      <p className="ct-onboarding-lead">{description}</p>
-    </div>
-  )
-}
-
 export function OnboardingWelcome({
   children,
 }: {
@@ -82,15 +67,18 @@ export function OnboardingWelcome({
   return (
     <section data-slot="onboarding-welcome">
       <CodeTetherMark className="ct-onboarding-brand" />
-      <h2 className="ct-onboarding-title ct-onboarding-emblem-title">
-        你的 AI 编程助手，
-        <br />
-        在你的每台设备上都能接着用
-      </h2>
-      <p className="ct-onboarding-lead">
-        CodeTether 把 Codex 和 Claude Code
-        的会话集中到一个地方，按设备和项目整理，每个项目里以前的会话也能接着用。
-      </p>
+      <div className="mt-6">
+        <PageHeader
+          title={
+            <>
+              你的 AI 编程助手，
+              <br />
+              在你的每台设备上都能接着用
+            </>
+          }
+          description="CodeTether 把 Codex 和 Claude Code 的会话集中到一个地方，按设备和项目整理，每个项目里以前的会话也能接着用。"
+        />
+      </div>
       <div className="ct-onboarding-features">
         <Feature
           icon={<Monitor />}
@@ -139,10 +127,12 @@ export function OnboardingCompletion({
       >
         <Check />
       </span>
-      <h2 className="ct-onboarding-title ct-onboarding-emblem-title">
-        {ready ? '一切就绪' : 'CodeTether 设置完成'}
-      </h2>
-      <p className="ct-onboarding-lead">{description}</p>
+      <div className="mt-6">
+        <PageHeader
+          title={ready ? '一切就绪' : 'CodeTether 设置完成'}
+          description={description}
+        />
+      </div>
       <div className="ct-onboarding-readiness">{children}</div>
       <div className="ct-onboarding-features">
         <Feature

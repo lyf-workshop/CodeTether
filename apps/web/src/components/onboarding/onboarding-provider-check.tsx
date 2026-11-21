@@ -1,7 +1,10 @@
+import type { MachineProviderRead } from '../../provider/use-machine-provider-details'
+import { MachineProviderBadge } from '../../provider/provider-summary-badge'
 import { ArrowRight, RefreshCw } from 'lucide-react'
 import type { DoctorProviderStatus } from '@codetether/protocol'
 import {
-  Badge,
+  PageHeader,
+  Disclosure,
   Button,
   Card,
   CardContent,
@@ -10,23 +13,24 @@ import {
 } from '@codetether/ui'
 import type { SetupStepProps } from './onboarding-step-props'
 import { StatusRow } from './onboarding-step-feedback'
-import { OnboardingStepHeading as StepHeading } from './onboarding-step-layout'
 import { ProviderGuidanceLink } from './provider-guidance-link'
 import {
-  backendModeLabel,
   isProviderUsable,
-  lifecycleObservationLabel,
   providerInstallationGuidance,
-  providerVersionLabel,
   onboardingProviderServiceUnverified,
-  onboardingProviderInstallationLabel,
-  onboardingProviderRuntimeLabel,
-  onboardingProviderServiceLabel,
   onboardingProviderGuidance,
-  onboardingSessionDiscoveryLabel,
   onboardingInstallMethodLabel,
   onboardingUnverifiedServiceGuidance,
 } from './onboarding-model'
+import {
+  backendModeLabel,
+  lifecycleObservationLabel,
+  providerVersionLabel,
+  onboardingProviderInstallationLabel,
+  onboardingProviderRuntimeLabel,
+  onboardingProviderServiceLabel,
+  onboardingSessionDiscoveryLabel,
+} from '../../provider/provider-presentation'
 
 export function OnboardingProviderCheck(props: SetupStepProps) {
   const { doctor } = props
@@ -36,7 +40,7 @@ export function OnboardingProviderCheck(props: SetupStepProps) {
   )
   return (
     <div>
-      <StepHeading
+      <PageHeader
         title="检查 AI 工具"
         description="CodeTether 使用已经选择的安装，不会在设置过程中自动安装、更新或切换工具。"
       />
@@ -49,7 +53,11 @@ export function OnboardingProviderCheck(props: SetupStepProps) {
       </div>
       <div className="mt-7 space-y-3">
         {doctor.providers.map((provider) => (
-          <OnboardingProviderCard key={provider.provider} provider={provider} />
+          <OnboardingProviderCard
+            key={provider.provider}
+            provider={provider}
+            detail={props.providerDetails?.get(doctor.thisComputer.machineId)}
+          />
         ))}
       </div>
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
@@ -94,7 +102,9 @@ export function OnboardingProviderCheck(props: SetupStepProps) {
 
 export function OnboardingProviderCard({
   provider,
+  detail,
 }: {
+  readonly detail?: MachineProviderRead
   readonly provider: DoctorProviderStatus
 }) {
   const guidance = providerInstallationGuidance[provider.provider]
@@ -118,18 +128,7 @@ export function OnboardingProviderCard({
               )}
             </p>
           </div>
-          <Badge
-            aria-label={`${guidance.label} 安装状态`}
-            variant={
-              provider.freshness !== 'current'
-                ? 'secondary'
-                : provider.installed && provider.selected
-                  ? 'success'
-                  : 'warning'
-            }
-          >
-            {onboardingProviderInstallationLabel(provider)}
-          </Badge>
+          <MachineProviderBadge read={detail} provider={provider.provider} />
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -175,10 +174,10 @@ export function OnboardingProviderCard({
             查看官方登录指南
           </ProviderGuidanceLink>
         ) : null}
-        <details className="rounded-sm border border-border px-3 py-2 text-xs text-text-muted">
-          <summary className="cursor-pointer font-medium text-text-secondary">
-            技术详情
-          </summary>
+        <Disclosure
+          label="技术详情"
+          className="rounded-sm border border-border px-3 py-2 text-xs text-text-muted"
+        >
           <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
             <dt>选择</dt>
             <dd>{provider.selected ? '已选择' : '未选择'}</dd>
@@ -192,11 +191,10 @@ export function OnboardingProviderCard({
             ) : null}
             <dt>状态来源</dt>
             <dd>
-              {provider.freshness === 'current'
-                ? '当前'
-                : provider.freshness === 'last_known'
-                  ? '上次检查'
-                  : '尚未观察'}
+              {lifecycleObservationLabel(
+                provider.freshness,
+                provider.observedAt,
+              )}
             </dd>
             <dt>以前的会话</dt>
             <dd>
@@ -211,7 +209,7 @@ export function OnboardingProviderCard({
               </>
             ) : null}
           </dl>
-        </details>
+        </Disclosure>
       </CardContent>
     </Card>
   )

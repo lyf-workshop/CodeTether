@@ -1,17 +1,15 @@
 import { ArrowRight, Server, ShieldCheck, Smartphone } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
-import { Button, Notice } from '@codetether/ui'
+import { Button, Notice, PageHeader } from '@codetether/ui'
 import { AddMobileDeviceDialog } from './add-mobile-device-dialog'
 
 export function AddDevicePage() {
   return (
-    <div className="mx-auto w-full min-w-0 max-w-(--page-narrow-w) space-y-6 px-4 py-6 sm:px-8">
-      <header>
-        <h1 className="text-page font-semibold">添加设备</h1>
-        <p className="mt-2 text-base text-text-secondary">
-          连接另一台设备，在它的项目文件夹中使用 AI 工具。
-        </p>
-      </header>
+    <div className="ct-page-content space-y-6" data-page-type="form">
+      <PageHeader
+        title="添加设备"
+        description="连接另一台设备，在它的项目文件夹中使用 AI 工具。"
+      />
       <section className="rounded-xl border border-border bg-surface p-6">
         <div className="flex items-start gap-4">
           <Smartphone aria-hidden="true" className="size-6 shrink-0" />

@@ -10,7 +10,7 @@ export type OrganizationConversation = Pick<
   | 'archivedAt'
   | 'status'
 > &
-  Partial<Pick<ConversationSummary, 'createdAt'>>
+  Partial<Pick<ConversationSummary, 'createdAt' | 'provider'>>
 
 export function conversationArchiveBlockedReason(
   conversation: Pick<ConversationSummary, 'status'>,

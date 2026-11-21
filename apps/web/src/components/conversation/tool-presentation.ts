@@ -337,7 +337,21 @@ function unwrapPowerShellCommand(command: string): string {
 
     const wrapped = command.slice(token.end).trim()
     if (wrapped.length === 0) return command
-    return unwrapPowerShellScriptBlock(unwrapWholeQuotedValue(wrapped))
+    let unwrapped = unwrapWholeQuotedValue(wrapped)
+    if (
+      unwrapped === wrapped &&
+      wrapped.startsWith('"') &&
+      wrapped.endsWith('"')
+    ) {
+      // Codex's Windows launcher encodes an inner " as the triplet '"'.
+      // Convert it only when the result is one valid outer quoted argument.
+      const normalized = wrapped.replace(/'"'/gu, '""')
+      if (normalized !== wrapped) {
+        const decoded = unwrapWholeQuotedValue(normalized)
+        if (decoded !== normalized) unwrapped = decoded
+      }
+    }
+    return unwrapPowerShellScriptBlock(unwrapped)
   }
   return command
 }

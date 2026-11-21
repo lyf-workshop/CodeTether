@@ -9,7 +9,6 @@ import {
   SessionItem,
   StatusBadge,
   agentDefinitions,
-  cn,
 } from '@codetether/ui'
 import type { ConversationSummary } from '@codetether/protocol'
 
@@ -120,6 +119,7 @@ function ConversationRow({
   const displayTitle = displayConversationTitle(
     conversation.title,
     conversation.createdAt,
+    conversation.provider,
   )
 
   function focusAdjacentRow() {
@@ -151,6 +151,7 @@ function ConversationRow({
       <ConversationRestoreButton
         conversation={conversation}
         size="sm"
+        variant="secondary"
         onRestoreError={setRestoreError}
         onRestored={focusAdjacentRow}
         showInlineError={false}
@@ -158,18 +159,7 @@ function ConversationRow({
       {menu}
     </div>
   ) : (
-    <div
-      className={cn(
-        'flex w-max items-center gap-1',
-        !showProvider &&
-          'min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100',
-      )}
-    >
-      {conversation.pinnedAt === undefined ? null : (
-        <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
-      )}
-      {menu}
-    </div>
+    <div className="flex w-max items-center gap-1">{menu}</div>
   )
 
   return (
@@ -202,6 +192,9 @@ function ConversationRow({
               <span className="truncate">
                 {providerDisplayName(conversation.provider)}
                 {machineName === undefined ? '' : ` · ${machineName}`}
+                {conversation.pinnedAt === undefined || archived
+                  ? ''
+                  : ' · 已置顶'}
                 {archived && conversation.archivedAt !== undefined
                   ? ` · 归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
                   : ''}
@@ -224,6 +217,7 @@ function ConversationRow({
               />
             }
             actions={organizationActions}
+            actionPlacement="overlay"
           />
         ) : (
           <ConversationItem
@@ -245,9 +239,7 @@ function ConversationRow({
                   : '已置顶'
             }
             selected={selected}
-            className={cn(
-              archived ? 'pr-36' : conversation.pinnedAt && 'pr-12',
-            )}
+            actionPlacement="overlay"
             primaryAction={
               <Link
                 to="/c/$conversationId"

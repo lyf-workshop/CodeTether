@@ -39,3 +39,26 @@ test('a newly connecting computer and the local computer stay outside the group'
     false,
   )
 })
+
+test('a computer needing action leaves the offline group until it is offline again', () => {
+  for (const connectionState of [
+    'authentication_failed',
+    'recovery_required',
+    'incompatible',
+  ]) {
+    const membership = new OfflineComputerMembership()
+    assert.equal(
+      membership.isGrouped({ ...remote, connectionState: 'offline' }),
+      true,
+    )
+    assert.equal(membership.isGrouped({ ...remote, connectionState }), false)
+    assert.equal(
+      membership.isGrouped({ ...remote, connectionState: 'connecting' }),
+      false,
+    )
+    assert.equal(
+      membership.isGrouped({ ...remote, connectionState: 'offline' }),
+      true,
+    )
+  }
+})

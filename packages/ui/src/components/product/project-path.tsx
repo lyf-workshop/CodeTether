@@ -24,7 +24,10 @@ export function ProjectPath({
       ) : null}
       <span
         aria-hidden="true"
-        className="inline-flex min-w-0 max-w-full shrink-0"
+        className={cn(
+          'inline-flex min-w-0 max-w-full shrink-0',
+          prefix && '-ml-0.5',
+        )}
       >
         {flexibleTail ? (
           <span className="min-w-0 truncate">{flexibleTail}</span>

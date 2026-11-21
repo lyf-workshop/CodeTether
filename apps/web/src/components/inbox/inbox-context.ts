@@ -65,6 +65,7 @@ export function inboxItemContext(
           conversationTitle: displayConversationTitle(
             conversation.title,
             conversation.createdAt,
+            conversation.provider,
           ),
           provider: conversation.provider,
           machineId: conversation.machineId,

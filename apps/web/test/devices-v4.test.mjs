@@ -41,6 +41,53 @@ test('device cards hide unknown counts and bind every conversation to its immuta
   )
 })
 
+test('computer project cards show each running and waiting count only once', () => {
+  const machine = {
+    machineId: localId,
+    displayName: '本地电脑',
+    kind: 'local',
+    connectionState: 'local',
+    availability: 'available',
+    capabilities: { projectAccess: true, providerExecution: true },
+  }
+  const project = {
+    projectId: 'proj_activity_counts',
+    name: '活动项目',
+    locations: [
+      {
+        machineId: localId,
+        rootPath: 'D:\\活动项目',
+        availability: 'available',
+      },
+    ],
+  }
+  const f = metadataUiFixture({
+    machines: [machine],
+    projects: [project],
+    conversations: [
+      {
+        ...conversation('running', localId, 'running'),
+        projectId: project.projectId,
+      },
+      {
+        ...conversation('waiting', localId, 'waiting'),
+        projectId: project.projectId,
+      },
+    ],
+  })
+  const { MachineProjectsSection } = f.load(
+    'components/machines/machine-projects-section.tsx',
+  )
+  const html = f.render(MachineProjectsSection, {
+    machine,
+    projects: [project],
+    showAddCard: false,
+  })
+  assert.equal((html.match(/1 个运行中/gu) ?? []).length, 1)
+  assert.equal((html.match(/1 个等待批准/gu) ?? []).length, 1)
+  assert.match(html, />等待批准<\/span>/u)
+})
+
 test('bounded project indexes never claim an exact total after 100 records', () => {
   const single = Array.from({ length: 100 }, (_, index) =>
     conversation(String(index), localId),

@@ -100,7 +100,7 @@ test('visible project cards request cold metrics immediately; unobserved metrics
     showAddCard: false,
   })
   assert.match(html, /1 个会话/u)
-  assert.match(html, /1 个进行中/u)
+  assert.match(html, /1 个运行中/u)
   assert.ok(
     f.reads.some(
       (read) => read.queryKey[1] === 'project-conversations' && read.enabled,

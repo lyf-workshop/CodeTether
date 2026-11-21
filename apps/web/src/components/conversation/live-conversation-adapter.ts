@@ -147,7 +147,11 @@ export function createLiveConversationRailViewModel(
       ? undefined
       : {
           id: current.id,
-          title: displayConversationTitle(current.title, current.createdAt),
+          title: displayConversationTitle(
+            current.title,
+            current.createdAt,
+            current.provider,
+          ),
           titleSource: current.titleSource,
           archivedAt: current.archivedAt,
           status: current.status,
@@ -170,8 +174,16 @@ export function createLiveConversationRailViewModel(
           return {
             id: summary.conversationId,
             title: selected
-              ? displayConversationTitle(current.title, current.createdAt)
-              : displayConversationTitle(summary.title, summary.createdAt),
+              ? displayConversationTitle(
+                  current.title,
+                  current.createdAt,
+                  current.provider,
+                )
+              : displayConversationTitle(
+                  summary.title,
+                  summary.createdAt,
+                  summary.provider,
+                ),
             titleSource: selected ? current.titleSource : summary.titleSource,
             ...(summary.pinnedAt === undefined
               ? {}

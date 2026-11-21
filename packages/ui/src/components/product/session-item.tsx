@@ -13,6 +13,7 @@ export interface SessionItemProps extends Omit<
   activity?: ReactNode
   primaryAction?: ReactNode
   actions?: ReactNode
+  actionPlacement?: 'inline' | 'overlay'
 }
 
 /** A dense session row with separate navigation and action targets. */
@@ -24,6 +25,7 @@ export function SessionItem({
   activity,
   primaryAction,
   actions,
+  actionPlacement = 'inline',
   className,
   ...props
 }: SessionItemProps) {
@@ -60,7 +62,13 @@ export function SessionItem({
         ) : null}
       </div>
       {actions ? (
-        <div className="relative z-10 flex max-w-full basis-full flex-wrap items-center justify-end gap-1 sm:basis-auto">
+        <div
+          className={cn(
+            actionPlacement === 'overlay'
+              ? 'absolute top-1/2 right-3 z-10 flex w-max -translate-y-1/2 items-center gap-1 rounded-sm bg-surface px-1 opacity-0 shadow-sm group-hover/conversation-row:opacity-100 group-focus-within/conversation-row:opacity-100 max-[600px]:opacity-100 [@media(hover:none)]:opacity-100'
+              : 'relative z-10 flex max-w-full basis-full flex-wrap items-center justify-end gap-1 sm:basis-auto',
+          )}
+        >
           {actions}
         </div>
       ) : null}

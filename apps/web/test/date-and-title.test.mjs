@@ -28,15 +28,35 @@ test('dates use local Chinese month/day and include the year only when needed', 
 })
 
 test('Codex fallback titles are local display text; stored and named titles remain untouched', () => {
-  const createdAt = new Date(2026, 10, 1, 18, 10, 5).toISOString()
+  const createdAt = new Date(
+    new Date().getFullYear(),
+    10,
+    1,
+    18,
+    10,
+    5,
+  ).toISOString()
   assert.equal(
-    displayConversationTitle('Codex 会话', createdAt),
+    displayConversationTitle('Codex 会话', createdAt, 'codex'),
     'Codex 会话 · 11月1日 18:10',
   )
   assert.equal(
     displayConversationTitle(`Codex 会话 · ${createdAt}`),
     'Codex 会话 · 11月1日 18:10',
     'an already-adopted ISO fallback is formatted without a storage mutation',
+  )
+  assert.equal(
+    displayConversationTitle(`Codex 会话 — ${createdAt}`),
+    'Codex 会话 · 11月1日 18:10',
+    'the Owner legacy em-dash form is also formatted',
+  )
+  assert.equal(
+    displayConversationTitle(`Codex 会话 – ${createdAt}`),
+    'Codex 会话 · 11月1日 18:10',
+  )
+  assert.equal(
+    displayConversationTitle(`Codex 会话 - ${createdAt}`),
+    'Codex 会话 · 11月1日 18:10',
   )
   assert.equal(
     displayConversationTitle('Codex 会话 · 2026-99-99T00:00:00.000Z'),
@@ -47,4 +67,17 @@ test('Codex fallback titles are local display text; stored and named titles rema
     'Fix release',
   )
   assert.equal(displayConversationTitle('Codex 会话'), 'Codex 会话')
+  assert.equal(
+    displayConversationTitle('Codex 会话', createdAt, 'claude-code'),
+    'Codex 会话',
+  )
+  assert.equal(
+    displayConversationTitle(
+      `Codex 会话 — ${createdAt}`,
+      createdAt,
+      'claude-code',
+    ),
+    `Codex 会话 — ${createdAt}`,
+  )
+  assert.equal(displayConversationTitle('Codex 会话', createdAt), 'Codex 会话')
 })

@@ -72,13 +72,31 @@ test('settings reads the exact immutable device location and never chooses anoth
 })
 
 test('active rows expose hover and keyboard pin/archive without nesting actions in navigation', async () => {
-  const [controls, group] = await Promise.all([
+  const [controls, group, sessionItem, conversationItem] = await Promise.all([
     source(prefix + 'conversation-organization-controls.tsx'),
     source(prefix + 'conversation-group.tsx'),
+    readFile(
+      new URL(
+        '../../../packages/ui/src/components/product/session-item.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
+    readFile(
+      new URL(
+        '../../../packages/ui/src/components/product/conversation-item.tsx',
+        import.meta.url,
+      ),
+      'utf8',
+    ),
   ])
   assert.match(group, /quickActions=\{!archived\}/u)
   assert.match(group, /group\/conversation-row/u)
-  assert.match(group, /group-focus-within\/conversation-row:opacity-100/u)
+  assert.match(group, /actionPlacement="overlay"/u)
+  for (const item of [sessionItem, conversationItem]) {
+    assert.match(item, /group-hover\/conversation-row:opacity-100/u)
+    assert.match(item, /group-focus-within\/conversation-row:opacity-100/u)
+  }
   assert.match(controls, /data-slot="conversation-quick-pin"/u)
   assert.match(controls, /data-slot="conversation-quick-archive"/u)
   assert.match(

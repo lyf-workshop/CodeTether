@@ -34,7 +34,10 @@ test('a small project keeps Search and archived navigation without filter contro
   }).html
   assert.match(html, /aria-label="搜索这个项目的会话"/u)
   assert.match(html, /查看已归档会话/u)
-  assert.doesNotMatch(html, /group-hover\/conversation-row:opacity-100/u)
+  assert.match(
+    html,
+    /actionPlacement="overlay"|group-hover\/conversation-row:opacity-100/u,
+  )
   assert.doesNotMatch(html, /aria-label="会话状态"/u)
   assert.doesNotMatch(html, /aria-label="AI 工具"/u)
   assert.doesNotMatch(html, />搜索<\/button>/u)
@@ -163,7 +166,7 @@ function renderPrevious(props) {
   return renderToStaticMarkup(createElement(PreviousConversationsView, props))
 }
 
-test('previous sessions collapse to one accessible line when nothing is waiting to import', () => {
+test('partial native-session discovery collapses without claiming a complete count', () => {
   const candidate = {
     discoveryCandidateId: 'candidate_already_adopted',
     provider: 'codex',
@@ -187,11 +190,35 @@ test('previous sessions collapse to one accessible line when nothing is waiting 
     }),
   )
   assert.match(html, /aria-expanded="false"/u)
-  assert.match(html, /发现 1 个以前的会话/u)
+  assert.doesNotMatch(html, /发现 1 个以前的会话/u)
+  assert.match(html, /以前的会话/u)
   assert.match(html, /Claude Code：当前版本不支持查找以前的会话/u)
   assert.match(html, /hidden=""/u)
   assert.doesNotMatch(html, /border-warning/u)
   assert.doesNotMatch(html, /size-10 place-items-center/u)
+})
+
+test('unavailable native-session providers have no zero count or punctuation gap', () => {
+  const html = renderPrevious(
+    previousProps({
+      providerProblems: [
+        { provider: 'codex', status: 'failed' },
+        {
+          provider: 'claude-code',
+          status: 'unsupported',
+          failureReason: 'provider_session_format_unsupported',
+        },
+      ],
+    }),
+  )
+  assert.doesNotMatch(html, /发现 0 个以前的会话|未找到以前的会话/u)
+  assert.match(html, /Codex：以前的会话暂时不可用。Claude Code：/u)
+  assert.match(html, /部分 AI 工具暂时无法查看以前的会话/u)
+})
+
+test('complete native-session discovery can report its count', () => {
+  const html = renderPrevious(previousProps())
+  assert.match(html, /发现 0 个以前的会话/u)
 })
 
 test('the collapsed import line opens its associated details', async (t) => {

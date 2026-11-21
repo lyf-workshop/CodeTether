@@ -1390,9 +1390,8 @@ fn finish_desktop_initialization(
                 "the configured main window is missing".to_owned(),
             )
         })?;
-        window
-            .show()
-            .map_err(|error| (StartupFailureKind::HostSpawnFailed, error.to_string()))?;
+        window_geometry::show_after_ready(&app, &window)
+            .map_err(|error| (StartupFailureKind::HostSpawnFailed, error))?;
         state.surface_initialized.store(true, Ordering::Release);
         lock(&state.lifecycle).mark_window_visible();
         log_lifecycle_event("desktop_ready", &state, serde_json::json!({}));

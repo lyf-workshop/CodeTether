@@ -147,7 +147,7 @@ test('50 Conversation fixture keeps the complete Host organization order in the 
 
 test('live collection distinguishes loading, empty, ready and exact-query failure', () => {
   assert.match(renderProjectCollection({ pending: true }).html, /正在读取会话/u)
-  assert.match(renderProjectCollection().html, /还没有会话/u)
+  assert.match(renderProjectCollection().html, /没有进行中的会话/u)
   assert.match(
     renderProjectCollection({ search: { view: 'archived' } }).html,
     /没有已归档的会话/u,

@@ -889,7 +889,7 @@ function usesRecordedUnselectedInstallation(
 export function backendModeLabel(
   backend: Pick<DoctorBackendStatus, 'mode'> | undefined,
 ): string {
-  if (backend === undefined) return 'AI 服务尚未检查'
+  if (backend === undefined) return 'AI 服务'
   switch (backend.mode) {
     case 'first_party':
       return '官方 AI 服务'

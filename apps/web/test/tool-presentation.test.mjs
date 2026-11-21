@@ -6,6 +6,7 @@ import {
   createToolPresentation,
   displayToolCommand,
 } from '../.tmp/test-dist/components/conversation/tool-presentation.js'
+import { inspectorToolEntries } from '../.tmp/test-dist/components/conversation/inspector-tool-output.js'
 
 test('classifies direct and safely unwrapped PowerShell commands', () => {
   assert.deepEqual(present('git status --short'), {
@@ -287,6 +288,60 @@ test('PowerShell command display removes transport quoting without changing raw 
   )
   assert.equal(codexPresentation.subject, codexPresentation.displayCommand)
   assert.equal(codexPresentation.rawCommand, quotedCodexCommand)
+})
+
+test('real Codex Windows launcher quoting stays raw but reads like typed commands', () => {
+  const commands = [
+    {
+      raw: '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "rg --files --hidden -g \'"\'!.git\'"\'"',
+      display: 'rg --files --hidden -g "!.git"',
+      timeline: 'rg --files --hidden -g "!.git"',
+    },
+    {
+      raw: '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "Get-Location; rg --files --hidden -g \'"\'!.git\'"\' -g \'"\'!node_modules\'"\'"',
+      display:
+        'Get-Location; rg --files --hidden -g "!.git" -g "!node_modules"',
+      timeline: 'Get-Location 等 2 条',
+    },
+  ]
+  for (const [index, command] of commands.entries()) {
+    const presentation = createTimelineToolPresentation({
+      command: command.raw,
+      kind: 'shell',
+      status: 'completed',
+    })
+    assert.equal(presentation.rawCommand, command.raw)
+    assert.equal(presentation.displayCommand, command.display)
+    assert.equal(presentation.subject, command.timeline)
+    const entries = inspectorToolEntries({
+      dayLabel: '今天',
+      blocks: [
+        {
+          kind: 'agent-run',
+          id: 'run',
+          turnId: 'turn_one',
+          time: '12:00',
+          status: 'completed',
+          executions: [
+            {
+              kind: 'tool',
+              id: 'tool-' + index,
+              tool: {
+                id: 'tool-' + index,
+                presentationKind: presentation.kind,
+                title: presentation.title,
+                subject: presentation.subject,
+                displayCommand: presentation.displayCommand,
+                status: 'completed',
+                rawCommand: presentation.rawCommand,
+              },
+            },
+          ],
+        },
+      ],
+    })
+    assert.equal(entries[0]?.title, command.display)
+  }
 })
 
 test('timeline keeps canonical tool subjects and renders only verified metadata', () => {

@@ -8,7 +8,7 @@ export function PreviousConversationsCompactHeader({
   contentId,
   onToggle,
 }: {
-  count: number
+  count?: number
   problemSummary: string
   expanded: boolean
   contentId: string
@@ -27,7 +27,7 @@ export function PreviousConversationsCompactHeader({
         className={cn('size-4 shrink-0', expanded && 'rotate-90')}
       />
       <span className="shrink-0 font-medium text-text-primary">
-        发现 {count} 个以前的会话
+        {count === undefined ? '以前的会话' : `发现 ${count} 个以前的会话`}
       </span>
       {problemSummary ? (
         <span className="min-w-0 truncate text-xs" title={problemSummary}>

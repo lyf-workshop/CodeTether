@@ -175,7 +175,7 @@ test('offscreen cards do not read metrics; intersection loads only that exact bo
       2,
     )
     assert.equal(f.dom.container.textContent.match(/1 个会话/gu).length, 1)
-    assert.match(f.dom.container.textContent, /1 个进行中/u)
+    assert.match(f.dom.container.textContent, /1 个运行中/u)
     assert.equal(f.observers[0].disconnected, true)
     await f.dom.perform(() => {
       f.observers[0].emit(false)

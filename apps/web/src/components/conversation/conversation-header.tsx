@@ -33,6 +33,7 @@ export function ConversationHeader({
   const title = displayConversationTitle(
     conversation.title,
     conversation.createdAt,
+    conversation.provider,
   )
   return (
     <header className="w-full min-w-0 border-b border-border pt-3 pb-4">

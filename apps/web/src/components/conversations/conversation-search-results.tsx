@@ -176,6 +176,7 @@ function ConversationSearchResultRow({
   const displayTitle = displayConversationTitle(
     conversation.title,
     conversation.createdAt,
+    conversation.provider,
   )
   const archived =
     archiveView === 'archived' || conversation.archivedAt !== undefined

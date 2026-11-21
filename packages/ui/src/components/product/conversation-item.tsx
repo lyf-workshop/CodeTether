@@ -22,6 +22,7 @@ export interface ConversationItemProps extends Omit<
   model?: string
   primaryAction?: ReactNode
   selected?: boolean
+  actionPlacement?: 'inline' | 'overlay'
 }
 
 /** Shared presentational summary for the component showcase and dense lists. */
@@ -36,6 +37,7 @@ export function ConversationItem({
   model,
   primaryAction,
   selected = false,
+  actionPlacement = 'inline',
   status,
   className,
   ...props
@@ -127,7 +129,13 @@ export function ConversationItem({
         ) : null}
 
         {action ? (
-          <div className="relative z-10 flex size-8 shrink-0 items-center justify-center">
+          <div
+            className={cn(
+              actionPlacement === 'overlay'
+                ? 'absolute top-1/2 right-3 z-10 flex w-max -translate-y-1/2 items-center rounded-sm bg-surface px-1 opacity-0 shadow-sm group-hover/conversation-row:opacity-100 group-focus-within/conversation-row:opacity-100 max-[600px]:opacity-100 [@media(hover:none)]:opacity-100'
+                : 'relative z-10 flex size-8 shrink-0 items-center justify-center',
+            )}
+          >
             {action}
           </div>
         ) : null}

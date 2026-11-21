@@ -67,12 +67,14 @@ export function scanStatusText(
   candidateCount: number,
   importedCount: number,
   hasSupportedProvider: boolean,
+  hasProviderProblems = false,
 ): string {
   if (state === 'scanning') return '正在查找以前的会话。'
   if (state === 'loading-more') return '正在加载更多以前的会话。'
   if (state === 'failed') return '无法检查以前的会话。'
   if (importedCount > 0) return `已导入 ${importedCount} 个会话。`
   if (!hasSupportedProvider) return '以前的会话当前不可用。'
+  if (hasProviderProblems) return '部分 AI 工具暂时无法查看以前的会话。'
   return candidateCount === 0
     ? '未找到以前的会话。'
     : `已找到 ${candidateCount} 个以前的会话。`

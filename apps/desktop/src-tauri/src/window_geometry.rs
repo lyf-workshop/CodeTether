@@ -2,13 +2,25 @@
 //! restores partly visible/undersized rectangles and serializes visibility
 //! even when that flag is disabled, so this bounded record keeps startup hidden.
 
-use std::{fs, path::PathBuf, sync::Mutex};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 #[cfg(windows)]
+use windows_sys::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
+#[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+    GWL_EXSTYLE, GetWindowLongW, GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+    WS_EX_TOOLWINDOW,
 };
 
 const MAIN_WINDOW: &str = "main";
@@ -52,6 +64,7 @@ impl From<&Monitor> for Screen {
 struct WindowGeometryState {
     path: PathBuf,
     normal: Mutex<Option<Geometry>>,
+    maximize_on_first_show: AtomicBool,
 }
 
 fn state_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -140,6 +153,20 @@ fn current_frame(window: &WebviewWindow) -> Result<(u32, u32), String> {
 }
 
 #[cfg(windows)]
+fn workspace_position_to_screen(
+    normal: windows_sys::Win32::Foundation::RECT,
+    monitor: windows_sys::Win32::Graphics::Gdi::MONITORINFO,
+) -> Option<(i32, i32)> {
+    let x = normal
+        .left
+        .checked_add(monitor.rcWork.left.checked_sub(monitor.rcMonitor.left)?)?;
+    let y = normal
+        .top
+        .checked_add(monitor.rcWork.top.checked_sub(monitor.rcMonitor.top)?)?;
+    Some((x, y))
+}
+
+#[cfg(windows)]
 fn maximized_normal_geometry(window: &WebviewWindow) -> Option<Geometry> {
     let mut placement = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
@@ -156,6 +183,22 @@ fn maximized_normal_geometry(window: &WebviewWindow) -> Option<Geometry> {
     let outer = window.outer_size().ok()?;
     let inner = window.inner_size().ok()?;
     let normal = placement.rcNormalPosition;
+    let (x, y) = if unsafe { GetWindowLongW(hwnd.0, GWL_EXSTYLE) } as u32 & WS_EX_TOOLWINDOW != 0 {
+        (normal.left, normal.top)
+    } else {
+        let monitor = unsafe { MonitorFromWindow(hwnd.0, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_null() {
+            return None;
+        }
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+            return None;
+        }
+        workspace_position_to_screen(normal, info)?
+    };
     let width = i64::from(normal.right)
         - i64::from(normal.left)
         - i64::from(outer.width.saturating_sub(inner.width));
@@ -163,8 +206,8 @@ fn maximized_normal_geometry(window: &WebviewWindow) -> Option<Geometry> {
         - i64::from(normal.top)
         - i64::from(outer.height.saturating_sub(inner.height));
     Some(Geometry {
-        x: normal.left,
-        y: normal.top,
+        x,
+        y,
         width: u32::try_from(width).ok()?,
         height: u32::try_from(height).ok()?,
         maximized: true,
@@ -189,28 +232,51 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
     let frame = current_frame(&window)?;
     let accepted =
         saved.filter(|geometry| fits_screen(*geometry, &screens, minimum_size(app), frame));
+    let mut restored = None;
     if let Some(geometry) = accepted {
-        let restored = window
-            .set_size(PhysicalSize::new(geometry.width, geometry.height))
-            .and_then(|_| window.set_position(PhysicalPosition::new(geometry.x, geometry.y)))
-            .and_then(|_| {
-                if geometry.maximized {
-                    window.maximize()
-                } else {
-                    Ok(())
-                }
-            });
-        if let Err(error) = restored {
+        let restore_result = window
+            .set_position(PhysicalPosition::new(geometry.x, geometry.y))
+            .and_then(|_| window.set_size(PhysicalSize::new(geometry.width, geometry.height)));
+        if let Err(error) = restore_result {
             eprintln!("[codetether:desktop] could not restore saved window geometry: {error}");
             // A failed native restore keeps the configured default placement.
             let _ = window.center();
+        } else {
+            restored = Some(geometry);
         }
     }
-    let normal = accepted.or_else(|| current_geometry(&window, false).ok());
+    let normal = restored.or_else(|| current_geometry(&window, false).ok());
     app.manage(WindowGeometryState {
         path,
         normal: Mutex::new(normal),
+        // Tao's hidden-window maximize calls ShowWindow(SW_MAXIMIZE) before
+        // hiding again. Apply it only after Host-ready reveals the window.
+        maximize_on_first_show: AtomicBool::new(
+            restored.is_some_and(|geometry| geometry.maximized),
+        ),
     });
+    Ok(())
+}
+
+/// Reveal first, then maximize in the same Host-ready main-thread turn.
+pub(crate) fn show_after_ready(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    window.show().map_err(|error| error.to_string())?;
+    let Some(state) = app.try_state::<WindowGeometryState>() else {
+        return Ok(());
+    };
+    if state.maximize_on_first_show.swap(false, Ordering::AcqRel) {
+        if let Err(error) = window.maximize() {
+            eprintln!("[codetether:desktop] could not restore saved maximized state: {error}");
+            if let Some(geometry) = state
+                .normal
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .as_mut()
+            {
+                geometry.maximized = false;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -222,6 +288,9 @@ pub(crate) fn observe(app: &AppHandle) {
     ) else {
         return;
     };
+    if state.maximize_on_first_show.load(Ordering::Acquire) {
+        return;
+    }
     if window.is_minimized().unwrap_or(false) {
         return;
     }
@@ -331,6 +400,38 @@ mod tests {
             (1100.0, 700.0),
             FRAME
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn placement_workspace_coordinates_include_a_top_or_left_taskbar() {
+        use windows_sys::Win32::Foundation::RECT;
+
+        let normal = RECT {
+            left: 80,
+            top: 100,
+            right: 1000,
+            bottom: 800,
+        };
+        let monitor = MONITORINFO {
+            rcMonitor: RECT {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            rcWork: RECT {
+                left: 40,
+                top: 50,
+                right: 1920,
+                bottom: 1080,
+            },
+            ..Default::default()
+        };
+        assert_eq!(
+            workspace_position_to_screen(normal, monitor),
+            Some((120, 150))
+        );
     }
 
     #[test]

@@ -90,7 +90,11 @@ export function commandPaletteGroups(
   const conversationEntries: PaletteEntry[] = recent
     .filter((conversation) =>
       matches(
-        displayConversationTitle(conversation.title, conversation.createdAt),
+        displayConversationTitle(
+          conversation.title,
+          conversation.createdAt,
+          conversation.provider,
+        ),
       ),
     )
     .slice(0, needle === '' ? 4 : 6)
@@ -99,6 +103,7 @@ export function commandPaletteGroups(
       label: displayConversationTitle(
         conversation.title,
         conversation.createdAt,
+        conversation.provider,
       ),
       description: [
         machines.get(conversation.machineId)?.displayName ?? '设备未知',

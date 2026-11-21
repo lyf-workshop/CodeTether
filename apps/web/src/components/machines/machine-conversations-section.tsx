@@ -60,12 +60,14 @@ export function MachineConversationsSection({
                     title={displayConversationTitle(
                       conversation.title,
                       conversation.createdAt,
+                      conversation.provider,
                     )}
                     className="truncate text-base font-medium"
                   >
                     {displayConversationTitle(
                       conversation.title,
                       conversation.createdAt,
+                      conversation.provider,
                     )}
                   </h3>
                   <div className="mt-1 flex min-w-0 flex-wrap items-center gap-2 text-sm text-text-muted">

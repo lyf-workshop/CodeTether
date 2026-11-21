@@ -183,7 +183,7 @@ export function ConversationOrganizationMenu({
         <DropdownMenuTrigger ref={triggerRef} asChild>
           {trigger ?? (
             <IconButton
-              label={`更多会话操作：${displayConversationTitle(conversation.title, conversation.createdAt)}`}
+              label={`更多会话操作：${displayConversationTitle(conversation.title, conversation.createdAt, conversation.provider)}`}
               size="sm"
               variant="ghost"
             >

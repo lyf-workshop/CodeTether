@@ -200,6 +200,7 @@ function WorkspaceConversationRow({
   const title = displayConversationTitle(
     conversation.title,
     conversation.createdAt,
+    conversation.provider,
   )
   return (
     <li className="min-w-0">

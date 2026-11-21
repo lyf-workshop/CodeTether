@@ -60,6 +60,7 @@ export function InboxItem({
         ? presentation.conversation
         : item.payload.conversationTitle),
     item.createdAt,
+    metadata?.provider,
   )
   const Icon =
     item.type === 'approval'

@@ -17,19 +17,25 @@ export function inspectorToolEntries(
     block.kind === 'agent-run'
       ? block.executions.flatMap((execution): InspectorToolEntry[] => {
           if (execution.kind === 'tool') {
+            const tool = execution.tool
+            const commandTitle =
+              tool.presentationKind === 'command' ||
+              tool.presentationKind === 'git-status' ||
+              tool.presentationKind === 'test'
+                ? createToolCommandSubtitle(tool.displayCommand ?? tool.title)
+                : undefined
             return [
               {
                 id: execution.id,
                 title:
-                  execution.tool.subject ??
-                  createToolCommandSubtitle(
-                    execution.tool.displayCommand ?? execution.tool.title,
-                  ),
-                ...(execution.tool.status === 'failed' &&
-                execution.tool.failureSummary !== undefined
-                  ? { summary: execution.tool.failureSummary }
+                  commandTitle ??
+                  tool.subject ??
+                  createToolCommandSubtitle(tool.displayCommand ?? tool.title),
+                ...(tool.status === 'failed' &&
+                tool.failureSummary !== undefined
+                  ? { summary: tool.failureSummary }
                   : {}),
-                status: execution.tool.status,
+                status: tool.status,
               },
             ]
           }

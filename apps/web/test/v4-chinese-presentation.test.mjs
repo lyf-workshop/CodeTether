@@ -20,6 +20,7 @@ test('onboarding first-party service and authentication guidance use Chinese too
     'components/onboarding/onboarding-model.ts',
   )
   assert.equal(backendModeLabel({ mode: 'first_party' }), '官方 AI 服务')
+  assert.equal(backendModeLabel(undefined), 'AI 服务')
   const copy = providerRepairText({
     freshness: 'current',
     installed: true,

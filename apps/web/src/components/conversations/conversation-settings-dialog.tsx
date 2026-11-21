@@ -55,6 +55,7 @@ export function ConversationSettingsDialog({
   const displayTitle = displayConversationTitle(
     conversation.title,
     conversation.createdAt,
+    conversation.provider,
   )
   const [title, setTitle] = useState(displayTitle)
   const [localError, setLocalError] = useState<string>()

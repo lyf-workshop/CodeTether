@@ -61,8 +61,7 @@ export function PreviousConversationsView({
     !importing &&
     !scanNotice &&
     !hasCandidateError
-  const problemSummary = providerProblems.map(providerProblemText).join(' ')
-
+  const problemSummary = providerProblems.map(providerProblemText).join('')
   return (
     <div
       ref={stepRef}
@@ -74,7 +73,7 @@ export function PreviousConversationsView({
     >
       {collapsed ? (
         <PreviousConversationsCompactHeader
-          count={candidates.length}
+          count={providerProblems.length === 0 ? candidates.length : undefined}
           problemSummary={problemSummary}
           expanded={expanded}
           contentId={detailsId}
@@ -113,9 +112,9 @@ export function PreviousConversationsView({
             candidates.length,
             importedCount,
             hasSupportedProvider,
+            providerProblems.length > 0,
           )}
         </p>
-
         {scanNotice ? (
           <p role="status" className="text-sm text-text-secondary">
             {scanNotice}
@@ -169,7 +168,8 @@ export function PreviousConversationsView({
 
         {scanState === 'ready' &&
         candidates.length === 0 &&
-        hasSupportedProvider ? (
+        hasSupportedProvider &&
+        providerProblems.length === 0 ? (
           <div
             role="status"
             className="rounded-md border border-border bg-surface-muted px-4 py-5 text-center"
@@ -226,6 +226,7 @@ export function PreviousConversationsView({
                       const displayTitle = displayConversationTitle(
                         candidate.title,
                         candidate.createdAt,
+                        group.provider,
                       )
                       const candidateActivity = activity.get(
                         candidate.discoveryCandidateId,

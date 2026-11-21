@@ -80,6 +80,7 @@ export function ArchiveConversationDialog({
             {displayConversationTitle(
               conversation.title,
               conversation.createdAt,
+              conversation.provider,
             )}
             ”后，该会话不会出现在活跃会话列表中。
           </DialogDescription>

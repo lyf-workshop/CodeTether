@@ -393,7 +393,7 @@ export function ProjectConversationCollection({
                     ? '没有符合条件的会话'
                     : archiveView === 'archived'
                       ? '没有已归档的会话'
-                      : '还没有会话'
+                      : '没有进行中的会话'
               }
               description={
                 browseQuery.data !== undefined && browseQuery.data.length >= 100

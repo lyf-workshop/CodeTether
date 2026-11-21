@@ -43,5 +43,6 @@ test('the full path remains available on hover and to screen readers', () => {
   assert.match(markup, /title="D:\\Projects\\Software\\weather-cli"/u)
   assert.match(markup, /class="sr-only">D:\\Projects\\Software\\weather-cli/u)
   assert.match(markup, /aria-hidden="true"/u)
+  assert.match(markup, /-ml-0\.5/u)
   assert.match(markup, /class="shrink-0">\\weather-cli<\/span>/u)
 })

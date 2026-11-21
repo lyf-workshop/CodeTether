@@ -197,15 +197,9 @@ function MachineProjectCard({
               {state.label}
             </Badge>
           ) : metrics !== undefined && metrics.waitingCount > 0 ? (
-            <StatusTag tone="warn">
-              {metrics.capped ? '已加载 ' : ''}
-              {metrics.waitingCount} 个等待批准
-            </StatusTag>
+            <StatusTag tone="warn">等待批准</StatusTag>
           ) : metrics !== undefined && metrics.runningCount > 0 ? (
-            <StatusTag tone="run">
-              {metrics.capped ? '已加载 ' : ''}
-              {metrics.runningCount} 个进行中
-            </StatusTag>
+            <StatusTag tone="run">运行中</StatusTag>
           ) : undefined
         }
         metrics={

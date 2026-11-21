@@ -482,7 +482,7 @@ function DoctorSection({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
           <div className="flex items-center gap-2">
             <span className="text-primary [&>svg]:size-4">{icon}</span>
             <CardTitle>{title}</CardTitle>
@@ -513,7 +513,11 @@ function DoctorProviderCard({
       icon={<Bot aria-hidden="true" />}
       title={providerDisplayName(provider.provider)}
       status={
-        <MachineProviderBadge read={detail} provider={provider.provider} />
+        <MachineProviderBadge
+          read={detail}
+          provider={provider.provider}
+          placement="inline"
+        />
       }
     >
       <div className="space-y-2">
@@ -703,7 +707,7 @@ function RemoteComputerCard({
             key={provider.provider}
             className="rounded-sm border border-border bg-surface-muted px-3 py-2.5"
           >
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
               <span className="text-sm font-medium text-text-primary">
                 {providerDisplayName(provider.provider)}
               </span>
@@ -711,6 +715,7 @@ function RemoteComputerCard({
                 read={detail}
                 provider={provider.provider}
                 connectionState={machine.connectionState}
+                placement="inline"
               />
             </div>
             <div className="mt-2 space-y-1">

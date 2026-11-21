@@ -165,6 +165,42 @@ test('last-known execution failure and degradation stay dated secondary context'
   }
 })
 
+test('shared badge placements keep row badges right aligned and inline notes after supporting copy', () => {
+  const summary = providerSummary({
+    ...descriptor,
+    executionHealth: {
+      state: 'unavailable',
+      freshness: 'last_known',
+      observedAt: '2026-10-22T12:00:00Z',
+    },
+  })
+  const row = renderToStaticMarkup(h(ProviderSummaryBadge, { summary }))
+  assert.match(row, /justify-self-end/u)
+  assert.match(row, /items-end/u)
+  assert.match(row, /上次运行失败 · 10月22日/u)
+
+  const inline = renderToStaticMarkup(
+    h(
+      'span',
+      { className: 'flex flex-wrap' },
+      'Claude Code',
+      h(ProviderSummaryBadge, {
+        summary,
+        placement: 'inline',
+        supportingContent: h(
+          'span',
+          { id: 'capability', className: 'basis-full' },
+          '可以读取和搜索文件',
+        ),
+      }),
+    ),
+  )
+  assert.match(inline, /Claude Code<[^>]+data-slot="badge"/u)
+  assert.ok(inline.indexOf('id="capability"') < inline.indexOf('上次运行失败'))
+  assert.match(inline, /basis-full text-left text-xs/u)
+  assert.doesNotMatch(inline, /justify-self-end/u)
+})
+
 test('current execution failure remains a red summary', () => {
   const summary = providerSummary(
     {

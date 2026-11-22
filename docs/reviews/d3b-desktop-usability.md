@@ -424,3 +424,86 @@ On the same branch and worktree, from `a237312`.
   - item 2: the shown text and screenshots
 - **Report:** append a "Follow-up round 3" section to the D3b report.
 - **Push** the branch.
+
+## Review of follow-up round 3 (`4773611`)
+
+**Branch.** One commit on `a237312`: `4773611`. 6 files, +167 / −87 lines.
+
+- The changes are in the desktop shell's `window_geometry.rs`, the Approval dock, `packages/ui`'s project path and the tests.
+- No Host, Protocol or `docs/` file changed.
+
+**Gates (as reported).**
+
+- typecheck, lint, build and test: 2,671 passed, 14 skipped, 0 failed
+- Prettier on the changed files
+- the desktop's `cargo test`: 98 + 3
+- `rustfmt` on the changed Rust file
+- The repository-wide `pnpm format:check` still fails on the same 962 unchanged files (in the backlog).
+
+**Checked hands-on.**
+
+- **Build:** Claude Code rebuilt the isolated app at `4773611`, with the same recipe and data snapshot as before.
+- **Window:** the Owner's size (1252 CSS px) and 1100 × 796 CSS px.
+- **Paths:** every card on the computer page, and the tablet scratch project's header and New Conversation, at both widths.
+- **The Approval's label:**
+  - The dock's classes were rendered in Edge with 13 folder names (`rtl3.html`, `rtl3.png`).
+  - One Codex conversation ran in `ta-budget-app`, a scratch fixture, with two Turns. `node --version` in the project's `.git` folder needed no Approval. `node --test` in the same folder raised one, which was allowed once.
+- **Evidence:** `D:/Projects/Software/agenthub-archive/d3b-review-r3-2026-11-22/`. The installed app was not running and was not touched.
+
+**Verdict.** Approved.
+
+- Both should-fix items and the nit are met.
+- D3b is ready for the release step: the merge into `main` and alpha.6, with the Owner's acceptance.
+- Two small findings go to the backlog. Neither comes from D3b.
+
+**What holds up:**
+
+- **Should-fix 1, the Approval's folder label:**
+  - **Code:** the `…/` marker and the folder name are now one `<bdi dir="ltr">` inside the box that cuts at its start. The title and the accessible label are the full path.
+  - **Render** (`rtl3.png`):
+    - `.github`, `_build`, `copy (1)`, `中文项目`, `name.`, `-dash-start` and `[tmp] scratch_dir_` all show as written, after `…/`.
+    - Long names show one ellipsis, at the cut, and keep their end. The tested names were `windows-desktop-audit-scratch`, `(old) backup copy of project` and a long CJK name.
+    - This matches the agent's render of the component and its sweep over 23 lengths.
+  - **In the app:** a conversation that CodeTether creates always runs in its project root, so its Approval shows no label (finding A). The render is the evidence for subfolders.
+- **Should-fix 2, long folder names:**
+  - **Code:** the fixed limit on the folder name is gone. The fitter tries, in order:
+    - the whole path
+    - the parent shortened toward the root, down to `D:\…\name`
+    - `…` and the end of the name
+
+    Each step is measured, and at most one ellipsis is shown.
+
+  - **Computer page at 1100 CSS px** (`31-computer-1100-mid.png`):
+    - tablet: `D:\Projects\So…\t1a-tablet-tb375fc-scratch-20261107`
+    - vivo: `D:\Projects…\t1a-vivo-x60-scratch-20261106-e2945b18`
+  - **At 1252 CSS px** (`30-computer-1252-top.png`): the cards are narrower, three to a row.
+    - tablet: `…t1a-tablet-tb375fc-scratch-20261107`
+    - vivo: `…1a-vivo-x60-scratch-20261106-e2945b18`
+  - **The other 13 cards** keep their whole folder name, with at most one ellipsis and no gap after it.
+  - **Elsewhere, at both widths:**
+    - the project header: `D:\Projects\Software\agenthub-arch…\t1a-tablet-tb375fc-scratch-20261107`
+    - New Conversation: `D:\Projects\Software\agent…\t1a-tablet-tb375fc-scratch-20261107`
+    - Screenshots: `32-*` and `33-*`.
+  - The shown text matches the agent's report.
+- **Nit:**
+  - `show_after_ready` now does the maximized reveal in a closure. It clears `maximize_on_first_show` on every path and then returns the reveal's result.
+  - The window animation is turned back on before an error returns.
+  - This was checked by reading the code: a failing `hwnd()` cannot be produced by hand.
+
+### For the backlog
+
+A. **An Approval does not show the command's own working folder.**
+
+- **What it does:** the dock's label is the conversation's working folder (`live-conversation-adapter.ts`: `context: model.cwd ?? projectRootPath`), not the folder of the command being approved.
+- **Measured:**
+  - Codex ran `node --test` with its working folder set to the project's `.git`.
+  - The dock showed only `node --test` and the time (`turn-r3b-approval-0.png`). The label is left out for the project root, so this reads as a command in the project root.
+  - The timeline and 工具输出 do not show the folder either.
+- **The data exists:** Codex sends the folder with the command. Its `commandExecution` item carries `cwd`, which the adapter maps to the `summary` of `tool.started`.
+- **Change:** show the command's working folder in the Approval when it differs from the project root. It joins the small Host and Protocol task, unless the web can link the Approval to its tool item.
+
+B. **A whole folder name can look cut.**
+
+- At 1252 CSS px, the tablet card shows `…t1a-tablet-tb375fc-scratch-20261107`. That is the whole name, but it looks the same as a cut one, such as `…1a-vivo-…`.
+- **Change:** when `…\` and the whole name fit, keep the separator: `…\t1a-tablet-tb375fc-scratch-20261107`.
+- It is a one-line change in `fitProjectPathToWidth`, and can go with the next change to that file.

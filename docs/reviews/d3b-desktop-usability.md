@@ -117,7 +117,8 @@ The process was stopped rather than quit from the tray: the tray icon of the ins
      - `"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files --hidden -g '"'!.git'"'"`
      - `"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files --hidden -g '"'!.git'"' -g '"'!node_modules'"'"`
    - **The gap:** D3b's tests cover a bare `powershell -Command "…""…"""` and a wholly quoted `rg` command, but not this form: a quoted launcher whose argument contains `'"'…'"'`.
-   - **Fix:** make the display show these as the user would type them, for example `rg --files --hidden -g "!.git"`. Keep the raw command intact.
+   - **Fix:** make the display show these as the user would type them. Keep the raw command intact.
+   - **Correction (round 1 review):** the example given here, `rg --files --hidden -g "!.git"`, was wrong. The command that ran is `rg --files --hidden -g '!.git'`. See round 2, must-fix 2.
    - **Tests:** use these two exact strings, carried through the presentation used by both the timeline and "工具输出".
 4. **One more raw timestamp** (goal 2).
    - **Where:** the Owner's active conversation "Codex 会话 — 2026-10-20T16:09:22.000Z" shows its ISO time on 待处理 and wherever its title appears.
@@ -200,4 +201,134 @@ On the same branch and worktree:
   - the measurement for should-fix 6
   - before-and-after screenshots for should-fix 7, 8 and 10
 - **Report:** append a "Follow-up round 1" section to the D3b report.
+- **Push** the branch.
+
+## Review of follow-up round 1 (`5d3584a`)
+
+**Branch.** Two commits on `03995ba`: `55856f9` (the review fixes) and `5d3584a` (root scroll containment). 45 files, +510 / −127 lines.
+
+- The changes are in the desktop shell's `window_geometry.rs` and `host_supervisor.rs`, the web UI, `packages/ui` and the tests.
+- No Host, Protocol or `docs/` file changed.
+
+**Gates (as reported).**
+
+- typecheck, lint, build and test: 2,663 passed, 14 skipped, 0 failed
+- Prettier on the changed files
+- the desktop's `cargo test`: 98 + 3
+- `rustfmt` on the changed Rust files
+
+**Checked hands-on.**
+
+- **Build:** Claude Code rebuilt the isolated app at `5d3584a`. It used the same recipe and data snapshot as before, and the web entry `index-B9YSqcAh.js`.
+- **Window:** the Owner's size (1252 CSS px) and 1100 × 796 CSS px.
+- **A Turn:** one Codex Turn ran in `ta-budget-app`. Its one Approval was declined by the script.
+- **Commands:** every real Codex command in the snapshot was run through the branch's command display.
+- **Evidence:** `D:/Projects/Software/agenthub-archive/d3b-review-r1-2026-11-21/`. The installed app was not touched; it stayed hidden in the tray.
+
+**Verdict.** One more round. Must-fix 1 and 3 are not met. Four smaller problems were found.
+
+**What holds up:**
+
+- **Must-fix 2:** the two paired computers return as "身份验证失败" and show as cards, not in the offline group. The tests cover the rule.
+- **Must-fix 4:** the em-dash title reads "Codex 会话 · 10月20日 11:09" on 待处理. That is local time; the machine is on US Central time.
+- **Must-fix 5:**
+  - The blank screenshot was replaced.
+  - With the mouse wheel, 关于与检查 scrolls and the app frame stays put.
+  - The `scrollIntoView` shift is reproduced and fixed in the agent's evidence.
+- **The normal-size restart** (`n1-normal-events.txt`): one SHOW at the saved rectangle, after the Host is ready, and no later move.
+- **Should-fix 6:**
+  - The dock is 131 CSS px, down from 189. Its header is one line, and the command, context and time share one line.
+  - The message box stayed 73 px from sending to the end.
+  - For the timeline, see round 2, should-fix 7.
+- **Should-fix 7:** rows show no actions at rest. On the archived view, "恢复会话 ⋯" is secondary and covers the status and the date whole.
+- **Should-fix 9 and 11:**
+  - 9 is code-read; the snapshot has no running conversation.
+  - 11: "AI 服务" reads "尚未检查".
+- **Nits:** the workspace-to-screen conversion and the order "position before size" are in, with a test.
+
+## Follow-up round 2
+
+On the same branch and worktree, from `5d3584a`.
+
+### Must-fix
+
+1. **A maximized start still shows the normal window first** (round 1, must-fix 1).
+   - **Measured:** `m2-maximized-events.txt` records the Tauri window's SHOW at 1828 ms. At that moment it is not maximized: its rectangle is the saved normal one, 1267 × 833 logical px. A LOCATION event at the same millisecond then maximizes it.
+   - **The agent's own trace** says the same: "`zoomed=False` … Tauri maximized it immediately afterward".
+   - **On screen:** a capture burst (`m2-maximized-frames/`, `m2-maximized-strip.png`) shows the window at its normal size first. Then the maximize animation plays for about 250 ms, with a ghosted double image, before the window fills the screen.
+   - **The cause:** `show_after_ready` calls `window.show()` (`SW_SHOW`, at the normal rectangle) and then `window.maximize()` (`SW_MAXIMIZE`).
+   - **Fix:** the window's first visible frame is maximized.
+     - For example, reveal the hidden window with one `ShowWindow(hwnd, SW_SHOWMAXIMIZED)` call. Then call `window.show()` so that tao's visible flag agrees. tao updates its maximized flag from `WM_SIZE`.
+     - Keep the saved normal rectangle as the restore rectangle.
+   - **Verify:**
+     - Record SHOW, HIDE, FOREGROUND and LOCATION events. At the SHOW, the window is maximized. After it, there is no LOCATION event from the normal rectangle to the maximized one.
+     - Capture the screen during the start: no frame shows the window at its normal size.
+     - Claude Code's scripts do both: `launch-watch2.ps1 -Burst` and `capture-burst.ps1`.
+     - Run the normal-size start again too, and quote both traces.
+2. **The command display still shows transport quoting** (round 1, must-fix 3, which gave a wrong example).
+   - **Measured:** the snapshot has 148 Codex PowerShell commands. The 138 in the `powershell.exe -Command <script>` form were run through the branch's `createTimelineToolPresentation`, using the probes `real_probe2.mjs` and `quote_probe.mjs`:
+     - 101 show the script exactly.
+     - 29 still show quoting, for example `'$n=0; Get-Content -LiteralPath '"'index.html' | ForEach-Object { "'$n++; …'`.
+     - 2 show doubled backslashes, for example `-LiteralPath '.git\\HEAD'`.
+     - 6 show other wrong text.
+     - The other 10 use `pwsh -NoProfile -Command` and were not compared.
+   - **What ran:**
+     - The review's example was wrong: `rg --files --hidden -g '!.git'` ran, not `-g "!.git"`.
+     - The `'"'` → `""` replacement changes meaning: `-Pattern '$state'` displays as `-Pattern "$state"`, which PowerShell expands.
+   - **The cause:**
+     - Codex's command string is a POSIX shell join, Rust `shlex`, of `[powershell.exe, -Command, <script>]`.
+     - A run of characters that contains `'` goes in double quotes, with `\` escaping `\`, `"`, `$` and the backquote.
+     - A run that contains `!`, `$` or the backquote goes in single quotes.
+     - A script with none of `'`, `\` or `^` is single-quoted whole.
+   - **Fix:**
+     - When the command string splits as POSIX shell words into a PowerShell executable, its flags, `-Command` and exactly one script word, display that script word.
+     - Otherwise keep today's handling, and remove the `'"'` replacement.
+     - The decode stays in the web presentation: D3b changes no Host or Protocol field. An adapter-provided argv joins the backlog.
+   - **Tests:** a round trip. For a table of scripts, build the raw string with the same quoting as Codex, then check that the displayed command equals the script, along with the timeline subject and the "工具输出" title. Include:
+     - paths with `\`
+     - `'$x'`, `"…"`, `!`, `|`, `;` and nested quotes
+     - `-NoProfile`
+     - the two strings from round 1 must-fix 3, now expected as `rg --files --hidden -g '!.git'` and `Get-Location; rg --files --hidden -g '!.git' -g '!node_modules'`
+   - **Also check:** the Approval dock and 待处理 use the same presentation.
+   - **Claude Code** reruns its probe over the snapshot's real commands.
+
+### Should-fix
+
+3. **A row's actions cut its status in half** (`21-crop.png`).
+   - On hover, the action pill covers "成" of "已完成", so "已完" shows beside the pill.
+   - **Fix:** on hover and focus, the actions take the place of either the whole status-and-date group, or the date alone with the status whole. No word may be cut.
+   - **Check** with the widest status and date, at 1100 and 1252 CSS px.
+4. **The previous-sessions header hides Codex's count** (`20-project-ta-budget-rest.png`, `24-previous-expanded.png`).
+   - **What it does:** any tool that is not `supported` removes the count, including Claude Code reporting "当前版本不支持查找以前的会话".
+   - **The effect:** on the Owner's data, every project's header reads "以前的会话 · Claude Code：…". The expanded panel says "已找到 5 个会话".
+   - **Fix:**
+     - Count the sessions of the tools that listed.
+     - Leave out the count only when no tool listed.
+     - When the panel is expanded, show each problem note once: it is now in both the header and the body.
+5. **The shortened-path gap remains on the computer page** (`30-path-zoom.png`).
+   - At 1252 CSS px, cards still read "E:\Projects\Softw… \read-only-preflight", "Software\… \w0b-native-seed" and "ag… \ta-budget-app".
+   - **The cause:** `text-overflow: ellipsis` leaves the unused part of the last character cell inside the box. In a monospace font that is 0 to 1 character wide, so a fixed −2 px margin fits only some cases.
+   - **Fix:** cut the prefix at a character boundary, so that the ellipsis ends the box. For example, compute how many characters fit.
+   - **Check** every card on the computer page at 1100 and 1252 CSS px, plus the project header and New Conversation. Report the measured gaps.
+6. **The Approval's context label loses the project name** (`turn1100-approval-0.png`).
+   - It reads "windows-deskto…": the last two segments of the working folder, cut at 96 px.
+   - **Fix:**
+     - Leave the context out when it is the conversation's project root.
+     - Otherwise keep its end: the folder name stays and the parent is cut.
+7. **The model notice takes the message box's room for the whole conversation** (`turn1100-approval-0.png`, `turn1100-99-end.png`).
+   - **The notice:** "Codex 配置的默认模型 gpt-6.2-astra 当前不在模型列表中…" stays for the conversation's whole life, at 48 CSS px. It predates D3b.
+   - **The cost:** during an Approval at 1100 × 796, the visible timeline is 298 CSS px with the notice and about 346 without it. The target is 320.
+   - **Fix:** show the notice until the first Turn starts, or let the user dismiss it.
+   - **Measure** the timeline below the title block. The report's 433 CSS px includes about 88 CSS px under the title block.
+
+**Nit:** 关于与检查 says "此版本暂不支持查找以前的对话"; the app's word is "会话" (`onboarding-model.ts`).
+
+### Process
+
+- **Gates:** all of them, including `cargo test` in `apps/desktop/src-tauri`.
+- **Evidence:**
+  - must-fix 1: the event lines for both starts, and the frames for the maximized start
+  - must-fix 2: the round-trip test table
+  - should-fix 3–7: before-and-after screenshots or measurements
+- **Report:** append a "Follow-up round 2" section to the D3b report.
 - **Push** the branch.

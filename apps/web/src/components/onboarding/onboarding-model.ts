@@ -352,7 +352,7 @@ export function providerRepairText(provider: DoctorProviderStatus): string {
     return '最近一次执行检查显示服务受限。请稍后重新检查或明确开始一个新轮次。'
   }
   if (provider.sessionDiscovery === 'unsupported') {
-    return '新对话仍可使用；此版本暂不支持查找以前的对话。'
+    return '新对话仍可使用；此版本暂不支持查找以前的会话。'
   }
   return 'CodeTether 会在新执行前再次验证当前状态。'
 }

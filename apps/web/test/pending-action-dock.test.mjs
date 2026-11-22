@@ -61,8 +61,35 @@ test('multiple pending actions preserve identity and use semantic command presen
       },
     ],
   )
-  assert.equal(model[0].contextLabel, 'workspace/project')
+  assert.equal(model[0].contextLabel, 'project')
+  assert.equal(model[0].contextHasParent, true)
   assert.equal(model[0].context, 'C:\\workspace\\project')
+})
+
+test('project-root context is omitted while a subfolder keeps its folder name', () => {
+  const rootContext = createPendingActionDockModel(
+    [approvals[0]],
+    undefined,
+    'c:/WORKSPACE/project/',
+  )[0]
+  assert.equal(rootContext.context, undefined)
+  assert.equal(rootContext.contextLabel, undefined)
+
+  const subfolder = createPendingActionDockModel(
+    [{ ...approvals[0], context: 'C:\\workspace\\project\\windows-desktop' }],
+    undefined,
+    'C:\\workspace\\project',
+  )[0]
+  assert.equal(subfolder.contextLabel, 'windows-desktop')
+  assert.equal(subfolder.contextHasParent, true)
+  assert.equal(subfolder.context, 'C:\\workspace\\project\\windows-desktop')
+
+  const posixCaseMatters = createPendingActionDockModel(
+    [{ ...approvals[0], context: '/work/Project' }],
+    undefined,
+    '/work/project',
+  )[0]
+  assert.equal(posixCaseMatters.contextLabel, 'Project')
 })
 
 test('each pending action derives mutation state only from its own approvalId', () => {
@@ -126,6 +153,7 @@ test('Dock markup bounds long text and follows details, decline, accept keyboard
   assert.match(source, /<Disclosure/u)
   assert.match(source, /getApprovalFocusTarget/u)
   assert.match(source, /restoreComposerWhenEditable/u)
+  assert.match(source, /\[direction:rtl\]/u)
   assert.match(source, /composer\.disabled \|\| composer\.readOnly/u)
   assert.ok(details >= 0 && details < decline && decline < accept)
   assert.doesNotMatch(source, /jsonrpc|providerRequestId/iu)

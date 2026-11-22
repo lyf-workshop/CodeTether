@@ -7,6 +7,8 @@ import {
   displayToolCommand,
 } from '../.tmp/test-dist/components/conversation/tool-presentation.js'
 import { inspectorToolEntries } from '../.tmp/test-dist/components/conversation/inspector-tool-output.js'
+import { createPendingActionDockModel } from '../.tmp/test-dist/components/conversation/pending-action-dock-model.js'
+import { createInboxItemPresentation } from '../.tmp/test-dist/components/inbox/inbox-model.js'
 
 test('classifies direct and safely unwrapped PowerShell commands', () => {
   assert.deepEqual(present('git status --short'), {
@@ -242,7 +244,7 @@ test('timeline previews plain, wrapped, and compound commands lexically', () => 
   )
   assert.equal(
     wrapped.displayCommand,
-    "git status --short; Write-Output 'a;b'; pnpm test",
+    "& { git status --short; Write-Output 'a;b'; pnpm test }",
   )
   assert.equal(wrapped.subject, 'git status --short 等 3 条')
   assert.equal(
@@ -294,13 +296,13 @@ test('real Codex Windows launcher quoting stays raw but reads like typed command
   const commands = [
     {
       raw: '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "rg --files --hidden -g \'"\'!.git\'"\'"',
-      display: 'rg --files --hidden -g "!.git"',
-      timeline: 'rg --files --hidden -g "!.git"',
+      display: "rg --files --hidden -g '!.git'",
+      timeline: "rg --files --hidden -g '!.git'",
     },
     {
       raw: '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "Get-Location; rg --files --hidden -g \'"\'!.git\'"\' -g \'"\'!node_modules\'"\'"',
       display:
-        'Get-Location; rg --files --hidden -g "!.git" -g "!node_modules"',
+        "Get-Location; rg --files --hidden -g '!.git' -g '!node_modules'",
       timeline: 'Get-Location 等 2 条',
     },
   ]
@@ -341,6 +343,151 @@ test('real Codex Windows launcher quoting stays raw but reads like typed command
       ],
     })
     assert.equal(entries[0]?.title, command.display)
+    const dock = createPendingActionDockModel([
+      {
+        id: 'approval-' + index,
+        kind: 'command',
+        title: '执行命令',
+        summary: command.raw,
+        requestedAt: '12:00',
+      },
+    ])[0]
+    assert.equal(dock?.subtitle, command.display)
+    assert.equal(dock?.detail, command.raw)
+    const inbox = createInboxItemPresentation({
+      type: 'approval',
+      createdAt: '2026-11-21T12:00:00.000Z',
+      payload: {
+        kind: 'command',
+        actionTitle: '执行命令',
+        actionSubtitle: command.raw,
+      },
+    })
+    assert.equal(inbox.description, command.display)
+  }
+})
+
+test('Codex shlex PowerShell launchers round-trip scripts across command surfaces', () => {
+  const launcher =
+    'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+  const tick = String.fromCharCode(96)
+  const cases = [
+    {
+      script: "rg --files --hidden -g '!.git'",
+      subject: "rg --files --hidden -g '!.git'",
+    },
+    {
+      script: "Get-Location; rg --files --hidden -g '!.git' -g '!node_modules'",
+      subject: 'Get-Location 等 2 条',
+    },
+    {
+      script: "Get-Content -LiteralPath '.git\\HEAD'",
+      subject: "Get-Content -LiteralPath '.git\\HEAD'",
+    },
+    {
+      script: "Select-String -Path src\\app.ts -Pattern '$x'",
+      subject: "Select-String -Path src\\app.ts -Pattern '$x'",
+    },
+    {
+      script: 'git commit -m "fix: one"',
+      subject: 'git commit -m "fix: one"',
+    },
+    {
+      script: 'Write-Output "a!b"',
+      subject: 'Write-Output "a!b"',
+    },
+    {
+      script: 'Get-ChildItem -Force | Select-Object Name',
+      subject: 'Get-ChildItem -Force 等 2 条',
+    },
+    {
+      script: "Get-Location; rg --files -g '!.git'",
+      subject: 'Get-Location 等 2 条',
+    },
+    {
+      script: 'Write-Output \'say "hello"\'',
+      subject: 'Write-Output \'say "hello"\'',
+    },
+    {
+      script: 'Write-Output ' + tick + '"quoted' + tick + '"',
+      subject: 'Write-Output ' + tick + '"quoted' + tick + '"',
+    },
+    {
+      executable: 'C:\\Tools\\pwsh.exe',
+      flags: ['-NoProfile'],
+      script: "Write-Output 'NoProfile'; rg --files -g '!.git'",
+      subject: "Write-Output 'NoProfile' 等 2 条",
+    },
+  ]
+
+  for (const [index, entry] of cases.entries()) {
+    const raw = codexShlexJoin([
+      entry.executable ?? launcher,
+      ...(entry.flags ?? []),
+      '-Command',
+      entry.script,
+    ])
+    assert.equal(displayToolCommand(raw), entry.script, raw)
+    const timeline = createTimelineToolPresentation({
+      command: raw,
+      kind: 'shell',
+      status: 'completed',
+    })
+    assert.equal(timeline.displayCommand, entry.script, raw)
+    assert.equal(timeline.rawCommand, raw)
+    assert.equal(timeline.subject, entry.subject, raw)
+
+    const entries = inspectorToolEntries({
+      dayLabel: '今天',
+      blocks: [
+        {
+          kind: 'agent-run',
+          id: 'run',
+          turnId: 'turn_one',
+          time: '12:00',
+          status: 'completed',
+          executions: [
+            {
+              kind: 'tool',
+              id: 'tool-' + index,
+              tool: {
+                id: 'tool-' + index,
+                presentationKind: timeline.kind,
+                title: timeline.title,
+                subject: timeline.subject,
+                displayCommand: timeline.displayCommand,
+                status: 'completed',
+                rawCommand: timeline.rawCommand,
+              },
+            },
+          ],
+        },
+      ],
+    })
+    assert.equal(entries[0]?.title, compactCommand(entry.script), raw)
+
+    const dock = createPendingActionDockModel([
+      {
+        id: 'approval-' + index,
+        kind: 'command',
+        title: '执行命令',
+        summary: raw,
+        requestedAt: '12:00',
+      },
+    ])[0]
+    assert.equal(dock?.subtitle, compactCommand(entry.script), raw)
+    assert.equal(dock?.detail, raw)
+
+    const inbox = createInboxItemPresentation({
+      type: 'approval',
+      createdAt: '2026-11-21T12:00:00.000Z',
+      payload: {
+        kind: 'command',
+        actionTitle: '执行命令',
+        actionSubtitle: raw,
+      },
+    })
+    assert.equal(inbox.description, compactCommand(entry.script), raw)
   }
 })
 
@@ -391,4 +538,51 @@ test('timeline keeps canonical tool subjects and renders only verified metadata'
 
 function present(command) {
   return createToolPresentation({ command, status: 'completed' })
+}
+
+function compactCommand(value) {
+  const normalized = value.trim()
+  return normalized.length <= 80 ? normalized : normalized.slice(0, 79) + '…'
+}
+
+// Independent fixture generator using the shlex 2.x quote strategy in the review probe.
+function codexShlexJoin(words) {
+  return words.map(codexShlexQuote).join(' ')
+}
+
+function codexShlexQuote(value) {
+  if (value.length === 0) return "''"
+  let result = ''
+  let rest = value
+  while (rest.length > 0) {
+    let allowed = rest[0] === '^' ? 2 : 7
+    let length = rest[0] === '^' ? 1 : 0
+    for (; length < rest.length; length += 1) {
+      const character = rest[length]
+      let current = allowed
+      if (character.charCodeAt(0) >= 0x80) {
+        current &= ~1
+      } else {
+        if (!/[+\-./:@\]_0-9A-Za-z]/u.test(character)) current &= ~1
+        if (character === "'" || character === '^' || character === '\\')
+          current &= ~2
+        if (/[\x60$!^]/u.test(character)) current &= ~4
+      }
+      if (current === 0) break
+      allowed = current
+    }
+    const part = rest.slice(0, length)
+    if (length === rest.length && (allowed & 1) !== 0 && result.length === 0)
+      return value
+    result +=
+      (allowed & 1) !== 0
+        ? part
+        : (allowed & 2) !== 0
+          ? "'" + part + "'"
+          : '"' +
+            part.replace(/[$\x60"\\]/gu, (character) => '\\' + character) +
+            '"'
+    rest = rest.slice(length)
+  }
+  return result
 }

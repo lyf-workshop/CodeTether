@@ -183,6 +183,7 @@ export function ConversationWorkspace({
           <PendingActionDock
             approvals={viewModel.pendingApprovals}
             controller={controls?.approvals}
+            projectRootPath={viewModel.projectRootPath}
             className="mb-3"
           />
         </div>
@@ -208,6 +209,9 @@ export function ConversationWorkspace({
           agent={viewModel.agent}
           model={viewModel.model}
           previousUserInput={previousUserInput(viewModel.timeline)}
+          hasStartedTurn={
+            Object.keys(viewModel.timeline.turnHeaders ?? {}).length > 0
+          }
           archived={archived}
           projectBoundary={projectBoundary}
           recoveryAction={recoveryAction}

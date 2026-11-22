@@ -24,6 +24,7 @@ export interface PendingActionDockItemModel {
   readonly requestedAt: string
   readonly context?: string
   readonly contextLabel?: string
+  readonly contextHasParent?: boolean
   /** Full normalized action text. This is not a Provider JSON-RPC payload. */
   readonly detail: string
   readonly controls: PendingActionDockControlModel
@@ -38,6 +39,7 @@ type PendingActionControlSource = Pick<ApprovalController, 'enabled' | 'states'>
 export function createPendingActionDockModel(
   approvals: readonly ConversationApprovalViewModel[],
   controller?: PendingActionControlSource,
+  projectRootPath?: string,
 ): readonly PendingActionDockItemModel[] {
   return approvals.map((approval) => {
     const state = controller?.states[approval.id]
@@ -60,11 +62,14 @@ export function createPendingActionDockModel(
           ? compactSubtitle(approval.summary)
           : createToolCommandSubtitle(approval.summary),
       requestedAt: approval.requestedAt,
-      ...(approval.context === undefined
+      ...(approval.context === undefined ||
+      (projectRootPath !== undefined &&
+        sameDirectory(approval.context, projectRootPath))
         ? {}
         : {
             context: approval.context,
-            contextLabel: compactContext(approval.context),
+            contextLabel: contextFolderName(approval.context),
+            contextHasParent: hasContextParent(approval.context),
           }),
       detail: approval.summary,
       controls: {
@@ -91,7 +96,25 @@ function compactSubtitle(value: string): string {
   return `${normalized.slice(0, 79)}…`
 }
 
-function compactContext(value: string): string {
-  const segments = value.replace(/\\/gu, '/').split('/').filter(Boolean)
-  return segments.slice(-2).join('/') || value
+function contextSegments(value: string): readonly string[] {
+  return value.replace(/\\/gu, '/').split('/').filter(Boolean)
+}
+
+function contextFolderName(value: string): string {
+  return contextSegments(value).at(-1) ?? value
+}
+
+function hasContextParent(value: string): boolean {
+  return contextSegments(value).length > 1
+}
+
+function sameDirectory(left: string, right: string): boolean {
+  const normalize = (value: string) =>
+    value.replace(/\\/gu, '/').replace(/\/+$/u, '')
+  const normalizedLeft = normalize(left)
+  const normalizedRight = normalize(right)
+  const windowsPath = /^(?:[a-z]:|\/\/)/iu
+  return windowsPath.test(normalizedLeft) && windowsPath.test(normalizedRight)
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight
 }

@@ -49,7 +49,7 @@ export function ConversationItem({
         data-appearance="row"
         data-selected={selected || undefined}
         className={cn(
-          'group relative isolate flex h-[var(--layout-conversations-row-height)] w-full min-w-0 items-center gap-3 overflow-hidden rounded-md border border-border bg-surface/55 px-3.5',
+          'group group/conversation-row relative isolate flex h-[var(--layout-conversations-row-height)] w-full min-w-0 items-center gap-3 overflow-hidden rounded-md border border-border bg-surface/55 px-3.5',
           'transition-colors duration-150 motion-reduce:transition-none hover:border-border-strong hover:bg-surface-muted/55',
           selected &&
             "border-primary/40 bg-primary-muted/55 before:absolute before:inset-y-2.5 before:left-0 before:w-0.5 before:rounded-r-full before:bg-primary before:content-[''] hover:border-primary/60 hover:bg-primary-muted/65",
@@ -113,7 +113,13 @@ export function ConversationItem({
         </div>
 
         {activity ? (
-          <div className="pointer-events-none relative z-[1] flex w-[var(--layout-conversations-activity-width)] shrink-0 flex-col gap-1 text-xs font-regular text-text-muted tabular-nums">
+          <div
+            className={cn(
+              'pointer-events-none relative z-[1] flex w-[var(--layout-conversations-activity-width)] shrink-0 flex-col gap-1 text-xs font-regular text-text-muted tabular-nums',
+              actionPlacement === 'overlay' &&
+                'group-hover/conversation-row:invisible group-focus-within/conversation-row:invisible max-[600px]:invisible [@media(hover:none)]:invisible',
+            )}
+          >
             <span className="truncate">{activity}</span>
             {activityDetail ? (
               <span

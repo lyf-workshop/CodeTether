@@ -14,6 +14,7 @@ interface PendingActionDockProps {
   readonly approvals: readonly ConversationApprovalViewModel[]
   readonly className?: string
   readonly controller?: ApprovalController
+  readonly projectRootPath?: string
 }
 
 /**
@@ -24,8 +25,13 @@ export function PendingActionDock({
   approvals,
   className,
   controller,
+  projectRootPath,
 }: PendingActionDockProps) {
-  const items = createPendingActionDockModel(approvals, controller)
+  const items = createPendingActionDockModel(
+    approvals,
+    controller,
+    projectRootPath,
+  )
   const approvalIds = items.map((item) => item.id)
   const approvalIdentity = approvalIds.join('\u0000')
   const dockRef = useRef<HTMLElement>(null)
@@ -162,10 +168,18 @@ export function PendingActionDock({
               </code>
               {item.contextLabel ? (
                 <span
-                  className="max-w-24 shrink-0 truncate text-xs text-text-muted"
+                  className="flex max-w-36 min-w-0 shrink-0 items-center text-xs text-text-muted"
                   title={item.context}
+                  aria-label={item.context}
                 >
-                  {item.contextLabel}
+                  {item.contextHasParent ? (
+                    <span aria-hidden="true" className="shrink-0">
+                      …/
+                    </span>
+                  ) : null}
+                  <span className="min-w-0 truncate text-left [direction:rtl]">
+                    {item.contextLabel}
+                  </span>
                 </span>
               ) : null}
               <span className="shrink-0 text-xs text-text-muted tabular-nums">

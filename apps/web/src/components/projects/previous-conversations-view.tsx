@@ -73,8 +73,8 @@ export function PreviousConversationsView({
     >
       {collapsed ? (
         <PreviousConversationsCompactHeader
-          count={providerProblems.length === 0 ? candidates.length : undefined}
-          problemSummary={problemSummary}
+          count={hasSupportedProvider ? candidates.length : undefined}
+          problemSummary={expanded ? '' : problemSummary}
           expanded={expanded}
           contentId={detailsId}
           onToggle={() => setExpanded((current) => !current)}

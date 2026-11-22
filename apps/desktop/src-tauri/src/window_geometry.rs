@@ -14,12 +14,14 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Monitor, PhysicalPosition, PhysicalSize, WebviewWindow};
 #[cfg(windows)]
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
+#[cfg(windows)]
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 #[cfg(windows)]
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongW, GetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT,
+    GWL_EXSTYLE, GetWindowLongW, GetWindowPlacement, SW_SHOWMAXIMIZED, ShowWindow, WINDOWPLACEMENT,
     WS_EX_TOOLWINDOW,
 };
 
@@ -167,6 +169,23 @@ fn workspace_position_to_screen(
 }
 
 #[cfg(windows)]
+fn set_dwm_transitions_disabled(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    disabled: bool,
+) -> bool {
+    let value = i32::from(disabled);
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&value as *const i32).cast(),
+            std::mem::size_of_val(&value) as u32,
+        )
+    };
+    result >= 0
+}
+
+#[cfg(windows)]
 fn maximized_normal_geometry(window: &WebviewWindow) -> Option<Geometry> {
     let mut placement = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
@@ -249,8 +268,8 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
     app.manage(WindowGeometryState {
         path,
         normal: Mutex::new(normal),
-        // Tao's hidden-window maximize calls ShowWindow(SW_MAXIMIZE) before
-        // hiding again. Apply it only after Host-ready reveals the window.
+        // Tao's hidden-window maximize briefly reveals the window. Defer the
+        // first maximized reveal until the Host-ready show.
         maximize_on_first_show: AtomicBool::new(
             restored.is_some_and(|geometry| geometry.maximized),
         ),
@@ -258,26 +277,48 @@ pub(crate) fn initialize(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Reveal first, then maximize in the same Host-ready main-thread turn.
+/// Reveal at the saved size or maximized state only after the Host is ready.
 pub(crate) fn show_after_ready(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
-    window.show().map_err(|error| error.to_string())?;
     let Some(state) = app.try_state::<WindowGeometryState>() else {
-        return Ok(());
+        return window.show().map_err(|error| error.to_string());
     };
-    if state.maximize_on_first_show.swap(false, Ordering::AcqRel) {
-        if let Err(error) = window.maximize() {
-            eprintln!("[codetether:desktop] could not restore saved maximized state: {error}");
-            if let Some(geometry) = state
-                .normal
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .as_mut()
-            {
-                geometry.maximized = false;
+    if state.maximize_on_first_show.load(Ordering::Acquire) {
+        #[cfg(windows)]
+        {
+            let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+            // One Win32 reveal makes the first visible frame maximized. Tao
+            // observes WM_SIZE; show() then reconciles its visible flag. The
+            // DWM transition must not expose an interpolated normal frame.
+            let transitions_disabled = set_dwm_transitions_disabled(hwnd.0, true);
+            if !transitions_disabled {
+                eprintln!("[codetether:desktop] could not suppress startup maximize animation");
+            }
+            unsafe { ShowWindow(hwnd.0, SW_SHOWMAXIMIZED) };
+            let result = window.show().map_err(|error| error.to_string());
+            if transitions_disabled {
+                let _ = set_dwm_transitions_disabled(hwnd.0, false);
+            }
+            result?;
+        }
+        #[cfg(not(windows))]
+        {
+            window.show().map_err(|error| error.to_string())?;
+            if let Err(error) = window.maximize() {
+                eprintln!("[codetether:desktop] could not restore saved maximized state: {error}");
+                if let Some(geometry) = state
+                    .normal
+                    .lock()
+                    .unwrap_or_else(|poison| poison.into_inner())
+                    .as_mut()
+                {
+                    geometry.maximized = false;
+                }
             }
         }
+        state.maximize_on_first_show.store(false, Ordering::Release);
+        return Ok(());
     }
-    Ok(())
+    window.show().map_err(|error| error.to_string())
 }
 
 /// Keep the normal rectangle when the window is maximized or minimized.

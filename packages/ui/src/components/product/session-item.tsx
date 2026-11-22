@@ -33,7 +33,7 @@ export function SessionItem({
     <article
       data-slot="session-item"
       className={cn(
-        'group relative isolate flex min-h-15 min-w-0 flex-wrap items-center gap-3 border-t border-border bg-surface px-4 py-3 hover:bg-surface-muted',
+        'group group/conversation-row relative isolate flex min-h-15 min-w-0 flex-wrap items-center gap-3 border-t border-border bg-surface px-4 py-3 hover:bg-surface-muted',
         className,
       )}
       {...props}
@@ -55,7 +55,13 @@ export function SessionItem({
           <div className="mt-1 min-w-0 text-sm text-text-muted">{metadata}</div>
         ) : null}
       </div>
-      <div className="pointer-events-none relative z-[1] flex max-w-full shrink-0 flex-wrap items-center gap-3">
+      <div
+        className={cn(
+          'pointer-events-none relative z-[1] flex max-w-full shrink-0 flex-wrap items-center gap-3',
+          actionPlacement === 'overlay' &&
+            'group-hover/conversation-row:invisible group-focus-within/conversation-row:invisible max-[600px]:invisible [@media(hover:none)]:invisible',
+        )}
+      >
         {status}
         {activity ? (
           <span className="text-sm text-text-muted">{activity}</span>

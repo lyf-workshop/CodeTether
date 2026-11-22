@@ -166,7 +166,7 @@ function renderPrevious(props) {
   return renderToStaticMarkup(createElement(PreviousConversationsView, props))
 }
 
-test('partial native-session discovery collapses without claiming a complete count', () => {
+test('partial native-session discovery counts sessions from the provider that listed', () => {
   const candidate = {
     discoveryCandidateId: 'candidate_already_adopted',
     provider: 'codex',
@@ -190,8 +190,7 @@ test('partial native-session discovery collapses without claiming a complete cou
     }),
   )
   assert.match(html, /aria-expanded="false"/u)
-  assert.doesNotMatch(html, /发现 1 个以前的会话/u)
-  assert.match(html, /以前的会话/u)
+  assert.match(html, /发现 1 个以前的会话/u)
   assert.match(html, /Claude Code：当前版本不支持查找以前的会话/u)
   assert.match(html, /hidden=""/u)
   assert.doesNotMatch(html, /border-warning/u)
@@ -201,6 +200,7 @@ test('partial native-session discovery collapses without claiming a complete cou
 test('unavailable native-session providers have no zero count or punctuation gap', () => {
   const html = renderPrevious(
     previousProps({
+      hasSupportedProvider: false,
       providerProblems: [
         { provider: 'codex', status: 'failed' },
         {
@@ -213,7 +213,38 @@ test('unavailable native-session providers have no zero count or punctuation gap
   )
   assert.doesNotMatch(html, /发现 0 个以前的会话|未找到以前的会话/u)
   assert.match(html, /Codex：以前的会话暂时不可用。Claude Code：/u)
-  assert.match(html, /部分 AI 工具暂时无法查看以前的会话/u)
+  assert.doesNotMatch(html, /以前的会话\s*·\s*·/u)
+})
+
+test('expanded previous sessions show each provider problem only once', async (t) => {
+  const dom = await createDom()
+  t.after(() => dom.close())
+  await dom.render(
+    h(
+      PreviousConversationsView,
+      previousProps({
+        providerProblems: [
+          {
+            provider: 'claude-code',
+            status: 'unsupported',
+            failureReason: 'provider_session_format_unsupported',
+          },
+        ],
+      }),
+    ),
+  )
+  const trigger = dom.container.querySelector('[aria-expanded="false"]')
+  assert.ok(trigger)
+  await dom.perform(() => trigger.click())
+  assert.equal(trigger.getAttribute('aria-expanded'), 'true')
+  assert.equal(
+    (
+      dom.container.textContent.match(
+        /Claude Code：当前版本不支持查找以前的会话。/gu,
+      ) ?? []
+    ).length,
+    1,
+  )
 })
 
 test('complete native-session discovery can report its count', () => {

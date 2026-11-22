@@ -332,3 +332,95 @@ On the same branch and worktree, from `5d3584a`.
   - should-fix 3–7: before-and-after screenshots or measurements
 - **Report:** append a "Follow-up round 2" section to the D3b report.
 - **Push** the branch.
+
+## Review of follow-up round 2 (`a237312`)
+
+**Branch.** One commit on `5d3584a`: `a237312`. 18 files, +676 / −82 lines.
+
+- The changes are in the desktop shell's `window_geometry.rs` (with the `Win32_Graphics_Dwm` feature), the web UI, `packages/ui` and the tests.
+- No Host, Protocol or `docs/` file changed.
+
+**Gates (as reported).**
+
+- typecheck, lint, build and test: 2,668 passed, 14 skipped, 0 failed
+- Prettier on the changed files
+- the desktop's `cargo test`: 98 + 3
+- `rustfmt` on the changed Rust file
+- The repository-wide `pnpm format:check` fails on 962 files this round did not change. That predates D3b and is in the backlog (`.gitattributes` and `.prettierignore`).
+
+**Checked hands-on.**
+
+- **Build:** Claude Code rebuilt the isolated app at `a237312`, with the same recipe and data snapshot as before.
+- **Starts:** one maximized and one normal-size start, each with window events and a screen-capture burst.
+- **Window:** the Owner's size (1252 CSS px) and 1100 × 796 CSS px.
+- **A Turn:** one Codex Turn ran in `ta-budget-app`, a scratch fixture. Its one Approval, `node --test`, was allowed once.
+- **Commands:** every real PowerShell command in the snapshot was run through the branch's command display, and so were random scripts.
+- **Evidence:** `D:/Projects/Software/agenthub-archive/d3b-review-r2-2026-11-21/`. The installed app was not touched.
+
+**Verdict.** One short round.
+
+- Both must-fix items are met, and so are should-fix 3, 4 and 7 and the nit.
+- Should-fix 5 and 6 are met for what round 2 named. Each leaves one edge case: a long folder name on the Owner's computer page, and folder names that start with punctuation.
+- After round 3, Claude Code re-checks only those two items.
+
+**What holds up:**
+
+- **Must-fix 1, the maximized start:**
+  - **Events** (`r2-max-events.txt`): the Tauri window's SHOW at 5266 ms is already maximized, at (−7, −7) 1721 × 927 logical px. No LOCATION event from the normal rectangle follows.
+  - **Frames** (`r2-max-strip.png`): the frames before the SHOW have no app window. The first frame with the window, at 5377 ms, is maximized. It shows the page's loading skeleton for one frame.
+  - **Restore:** restoring after that start gives the saved rectangle, 1900 × 1250 px at (304, 34).
+  - **Animations:** after the start, minimize and restore animate again (`r2-minrestore-strip.png`). The window animation is turned off only for the reveal.
+  - **The normal start** (`r2-normal-events.txt`): one SHOW at the saved rectangle, after the Host is ready, and no later move.
+- **Must-fix 2, the command display:**
+  - **Real commands:** all 148 PowerShell commands in the snapshot now display exactly the script that ran, including the 10 `pwsh -NoProfile` ones (`probe_r2.mjs`; Python's `shlex` gives the expected script). The Approval dock's subtitle agrees. In round 1, 37 of 138 were wrong.
+  - **Random scripts:** 15,799 scripts mixing quotes, backslashes, `$`, `!`, `^`, the backquote and CJK were joined the way Codex joins them. All display exactly, and cut-off strings do not throw (`fuzz_r2.mjs`).
+  - **Safety:** the decoder accepts a string only when quoting its words again gives the same string back. Every other spelling keeps the old display.
+  - **In the Turn:** the timeline, 工具输出 and the dock show, for example, `rg --files --hidden -g '!node_modules' -g '!.git'` and `node --test`.
+  - **A changed test:** a script wrapped in `& { … }` now displays as it ran. Its timeline subject still lists the inner commands.
+- **Should-fix 3:** at 1252 and 1100 CSS px, hovering a row hides its whole status-and-date group and shows the actions. No word is cut (`21-crop-r2.png`, `21-crop-1100-r2.png`).
+- **Should-fix 4:** collapsed, the header reads "发现 5 个以前的会话" with the Claude Code note beside it. Expanded, the note appears once (`20-project-ta-budget-rest.png`, `24-previous-expanded.png`).
+- **Should-fix 5:** no gap follows the ellipsis on any computer card at 1252 or 1100 CSS px, in the project header or in New Conversation (`30-path-zoom-r2.png`, `31-computer-1100.png`, `10-new-in-ta-budget-1100.png`). For long folder names, see round 3, item 2.
+- **Should-fix 6:** an Approval in the project root shows no context label (`turn1100-approval-0.png`). For subfolders, see round 3, item 1.
+- **Should-fix 7:**
+  - The notice shows before the first Turn and goes when the Turn starts. At that moment the message area shrinks once, by 48 CSS px.
+  - The input box stayed 49 CSS px tall from sending to the end.
+  - During the Approval at 1100 × 796, the timeline below the title block is about 345 CSS px (the agent measured 342.7). The target is 320.
+- **Nit:** 关于与检查 now says "以前的会话".
+
+## Follow-up round 3
+
+On the same branch and worktree, from `a237312`.
+
+### Should-fix
+
+1. **The Approval's folder label reverses punctuation and can show two ellipses** (round 2, should-fix 6).
+   - **What it does:** the label is the folder name inside a box with `direction: rtl`, so that a long name is cut at its start.
+   - **Measured:** `rtl.html` reproduces the dock's classes, and `rtl.png` is its render in Edge, which uses the same engine as WebView2.
+     - `.github` shows as `github.`, and `_scratch` as `scratch_`.
+     - A long name shows as `…/ …p-audit-scratch`: two ellipses with a gap between them.
+   - **Fix:**
+     - Keep the text left to right. For example, wrap the name in `<bdi dir="ltr">` inside the box, or cut its start in code.
+     - When the name itself is cut, show one ellipsis, at the cut.
+     - Keep the full path in the title and the accessible label.
+   - **Tests:** `.github`, `_build`, `copy (1)`, a CJK name, and a name longer than the box.
+2. **A long folder name on a computer card loses its start to the path prefix** (round 2, should-fix 5).
+   - **Measured:** `D:\Projects\Software\agenthub-archive\t1a-tablet-tb375fc-scratch-20261107` shows as `D:\Projec…\…t-tb375fc-scratch-20261107`, and the vivo scratch project the same way (`30-path-zoom-r2.png`).
+   - **The cause:** `projectPathParts` caps the folder name at a fixed length before `fitProjectPathToWidth` runs, so the prefix keeps room that the folder name could use.
+   - **Fix:** the folder name comes before the prefix.
+     - Shorten the prefix first, down to the root: `D:\…\t1a-tablet-tb375fc-scratch-20261107`.
+     - If the root and the whole name still do not fit, drop the prefix and cut the start of the name: `…tablet-tb375fc-scratch-20261107`.
+     - Show at most one ellipsis.
+   - **Check:** every card on the computer page at 1100 and 1252 CSS px, the project header and New Conversation. Report the text shown for the two scratch projects.
+
+### Nit
+
+`show_after_ready` leaves `maximize_on_first_show` set when `window.hwnd()` or `window.show()` fails. `observe` then ignores every later size and position change for the rest of the session. Clear the flag on every path.
+
+### Process
+
+- **Gates:** all of them, and `cargo test` in `apps/desktop/src-tauri` if Rust changes.
+- **Evidence:**
+  - item 1: a render of each test name in the dock; round 2's fake Approval Host is fine
+  - item 2: the shown text and screenshots
+- **Report:** append a "Follow-up round 3" section to the D3b report.
+- **Push** the branch.

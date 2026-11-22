@@ -479,7 +479,7 @@ dependencies = [
 
 [[package]]
 name = "codetether-desktop"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "base64 0.22.1",
  "block2",
@@ -512,7 +512,7 @@ dependencies = [
 
 [[package]]
 name = "codetether-posix-supervisor"
-version = "0.1.0-alpha.5"
+version = "0.1.0-alpha.6"
 dependencies = [
  "libc",
  "serde",

@@ -199,14 +199,13 @@ export function CommandList({
           role="status"
           className="px-4 py-8 text-center text-sm text-text-muted"
         >
-          没有找到匹配的已加载标题或操作。
+          当前列表中没有匹配项。
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border px-4 py-2.5 text-xs text-text-muted">
         <span>↑ ↓ 选择</span>
         <span>Enter 打开</span>
         <span>Esc 关闭</span>
-        <span className="ml-auto">这里只匹配已加载的标题。</span>
       </div>
     </div>
   )

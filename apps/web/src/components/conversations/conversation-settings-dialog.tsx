@@ -24,6 +24,7 @@ import { projectDetailQueryOptions } from '../../runtime/host/project-query'
 import { machineListQueryOptions } from '../../runtime/host/machine-query'
 import { projectLocationForMachine } from '../../runtime/host/project-location'
 import { providerDisplayName } from './conversation-list-model'
+import { displayConversationTitle } from './conversation-title.js'
 import { ConversationSettingsFields } from './conversation-settings-fields'
 import {
   conversationArchiveBlockedReason,
@@ -51,7 +52,12 @@ export function ConversationSettingsDialog({
   returnFocus,
 }: ConversationSettingsDialogProps) {
   const runtime = useHostRuntime()
-  const [title, setTitle] = useState(conversation.title)
+  const displayTitle = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+    conversation.provider,
+  )
+  const [title, setTitle] = useState(displayTitle)
   const [localError, setLocalError] = useState<string>()
   const operationPendingRef = useRef(false)
   const organizationMovedRef = useRef(false)
@@ -130,6 +136,10 @@ export function ConversationSettingsDialog({
   }
   function submitRename() {
     if (operationPendingRef.current) return
+    if (title === displayTitle && displayTitle !== conversation.title) {
+      handleOpenChange(false)
+      return
+    }
     if (!ManualConversationTitleSchema.safeParse(title).success) {
       setLocalError('请输入有效的会话标题；名称过长时请缩短后重试。')
       return

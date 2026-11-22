@@ -6,7 +6,12 @@ html,
 body,
 #root {
   height: 100%;
-  overflow: hidden;
+  overflow: clip;
+}
+
+#root {
+  position: fixed;
+  inset: 0;
 }
 
 .ct-workspace-shell {

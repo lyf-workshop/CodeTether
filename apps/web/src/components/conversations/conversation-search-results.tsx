@@ -25,6 +25,7 @@ import {
 } from './conversation-search-presentation'
 import { conversationSearchFocusCandidates } from './conversation-search-focus'
 import { providerAgentId } from '../../provider/provider-presentation'
+import { displayConversationTitle } from './conversation-title.js'
 
 interface ConversationSearchResultsProps {
   archiveView: 'active' | 'archived'
@@ -172,6 +173,11 @@ function ConversationSearchResultRow({
 }: ConversationSearchResultRowProps) {
   const [restoreError, setRestoreError] = useState<string>()
   const conversation = result.conversation
+  const displayTitle = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+    conversation.provider,
+  )
   const archived =
     archiveView === 'archived' || conversation.archivedAt !== undefined
   const matchDescription = `${providerDisplayName(conversation.provider)}${machineName === undefined ? '' : ` · ${machineName}`} · ${conversationSearchMatchDescription(result)}`
@@ -185,7 +191,7 @@ function ConversationSearchResultRow({
       onUnarchived={() => onMembershipChanged(conversation.conversationId)}
       trigger={
         <IconButton
-          label={`更多会话操作：${conversation.title}`}
+          label={`更多会话操作：${displayTitle}`}
           size="sm"
           variant="ghost"
           data-conversation-search-organization-trigger
@@ -202,7 +208,7 @@ function ConversationSearchResultRow({
       className="min-w-0"
     >
       <SessionItem
-        title={conversation.title}
+        title={displayTitle}
         leading={
           <AgentIdentityMark
             agent={providerAgentId(conversation.provider)}
@@ -227,8 +233,8 @@ function ConversationSearchResultRow({
             params={{ conversationId: conversation.conversationId }}
             search={conversationSearchTurnIntent(result)}
             data-conversation-search-primary-action
-            aria-label={`打开搜索结果：${conversation.title}`}
-            title={conversation.title}
+            aria-label={`打开搜索结果：${displayTitle}`}
+            title={displayTitle}
             className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
           />
         }

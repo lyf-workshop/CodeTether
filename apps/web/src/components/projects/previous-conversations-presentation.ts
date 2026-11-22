@@ -5,6 +5,7 @@ import {
   type ProviderSessionDiscoveryCandidate,
   type ProviderSessionDiscoveryProviderResult,
 } from '@codetether/protocol'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 export type CandidateActivity =
   | { readonly state: 'idle' }
@@ -15,10 +16,6 @@ export type CandidateActivity =
 export const providerOrder: readonly ProviderId[] = ['codex', 'claude-code']
 export const maximumImportSelection =
   providerSessionDiscoveryLimits.maximumPageSize
-const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-})
 
 export function mergeCandidates(
   current: readonly ProviderSessionDiscoveryCandidate[],
@@ -61,9 +58,8 @@ export function formatCandidateTime(
 ): string {
   const timestamp = candidate.lastActiveAt ?? candidate.createdAt
   if (timestamp === undefined) return '可继续'
-  const date = new Date(timestamp)
-  if (Number.isNaN(date.getTime())) return '可继续'
-  return `${dateFormatter.format(date)} · 可继续`
+  const date = formatLocalDateTime(timestamp)
+  return date === undefined ? '可继续' : `${date} · 可继续`
 }
 
 export function scanStatusText(
@@ -71,12 +67,14 @@ export function scanStatusText(
   candidateCount: number,
   importedCount: number,
   hasSupportedProvider: boolean,
+  hasProviderProblems = false,
 ): string {
   if (state === 'scanning') return '正在查找以前的会话。'
   if (state === 'loading-more') return '正在加载更多以前的会话。'
   if (state === 'failed') return '无法检查以前的会话。'
   if (importedCount > 0) return `已导入 ${importedCount} 个会话。`
   if (!hasSupportedProvider) return '以前的会话当前不可用。'
+  if (hasProviderProblems) return '部分 AI 工具暂时无法查看以前的会话。'
   return candidateCount === 0
     ? '未找到以前的会话。'
     : `已找到 ${candidateCount} 个以前的会话。`

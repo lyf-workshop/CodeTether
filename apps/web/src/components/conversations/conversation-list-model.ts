@@ -1,17 +1,10 @@
 import type { ConversationSummary } from '@codetether/protocol'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 const providerLabels = {
   codex: 'Codex',
   'claude-code': 'Claude Code',
 } satisfies Record<ConversationSummary['provider'], string>
-
-const activityFormatter = new Intl.DateTimeFormat('zh-CN', {
-  month: 'numeric',
-  day: 'numeric',
-  hour: '2-digit',
-  minute: '2-digit',
-  hour12: false,
-})
 
 export function providerDisplayName(
   provider: ConversationSummary['provider'],
@@ -20,9 +13,9 @@ export function providerDisplayName(
 }
 
 export function formatConversationActivity(timestamp: string): string {
-  return activityFormatter.format(new Date(timestamp))
+  return formatLocalDateTime(timestamp) ?? '时间未知'
 }
 
 export function formatConversationArchivedAt(timestamp: string): string {
-  return activityFormatter.format(new Date(timestamp))
+  return formatLocalDateTime(timestamp) ?? '时间未知'
 }

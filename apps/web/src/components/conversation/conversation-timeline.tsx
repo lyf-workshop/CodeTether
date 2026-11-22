@@ -10,6 +10,7 @@ import {
 import { ChevronUp, FilePenLine, LoaderCircle } from 'lucide-react'
 
 import type { MachineId, ProjectId } from '@codetether/protocol'
+import { formatLocalTime } from '../../presentation/date-time.js'
 import {
   DiffCard,
   Button,
@@ -39,7 +40,6 @@ import {
   timelineContainsTurn,
   type TimelineUpdateKind,
 } from './conversation-timeline-behavior'
-import { createToolPresentation } from './tool-presentation'
 import { groupRunExecutions } from './tool-grouping'
 import {
   AgentMessage,
@@ -76,7 +76,6 @@ interface AgentRunExecutionsProps {
     string,
     ConversationChangesViewModel['files'][number]
   >
-  approvalsById: ReadonlyMap<string, ConversationApprovalViewModel>
   projectRootPath?: string
   selectedChangeId?: string
 }
@@ -84,7 +83,6 @@ interface AgentRunExecutionsProps {
 function AgentRunExecutions({
   executions,
   changesById,
-  approvalsById,
   projectRootPath,
   selectedChangeId,
 }: AgentRunExecutionsProps) {
@@ -161,40 +159,10 @@ function AgentRunExecutions({
       )
     }
 
-    const pendingApproval = approvalsById.get(execution.approvalId)
-    if (pendingApproval === undefined) return null
-
-    const presentation =
-      pendingApproval.kind === 'command'
-        ? createToolPresentation({
-            command: pendingApproval.summary,
-            status: 'running',
-          })
-        : undefined
-    const title = presentation?.title ?? pendingApproval.title
-
-    return (
-      <div
-        key={execution.id}
-        data-approval-history="requested"
-        className="mt-3 min-w-0 border-t border-status-waiting/20 bg-status-waiting-muted/5"
-      >
-        <ToolCallCard
-          title={title}
-          description="已请求批准 · 请在下方待处理操作中确认"
-          status="waiting"
-          metadata={
-            <span className="inline-flex max-w-48 items-center gap-2">
-              <span className="truncate">
-                {compactContext(pendingApproval.context)}
-              </span>
-              <span className="shrink-0">{pendingApproval.requestedAt}</span>
-            </span>
-          }
-          aria-label={`${pendingApproval.title}，等待批准`}
-        />
-      </div>
-    )
+    // The actionable Dock already owns a pending Approval. Its Tool row above
+    // reads "等待批准"; another history card would repeat the request and take
+    // space from the Timeline.
+    return null
   })
 }
 
@@ -367,10 +335,6 @@ export function ConversationTimeline({
   const changesById = useMemo(
     () => new Map(changes.files.map((change) => [change.id, change])),
     [changes.files],
-  )
-  const approvalsById = useMemo(
-    () => new Map(pendingApprovals.map((approval) => [approval.id, approval])),
-    [pendingApprovals],
   )
   const canonicalActivityVersion = useMemo(
     () =>
@@ -633,7 +597,6 @@ export function ConversationTimeline({
                               <AgentRunExecutions
                                 executions={block.executions}
                                 changesById={changesById}
-                                approvalsById={approvalsById}
                                 projectRootPath={projectRootPath}
                                 selectedChangeId={targetChangeId}
                               />
@@ -719,13 +682,7 @@ export function ConversationTimeline({
 
 function historicalTime(value: string | undefined): string {
   if (value === undefined) return '更早'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '更早'
-  return new Intl.DateTimeFormat('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
+  return formatLocalTime(value) ?? '更早'
 }
 
 function findTimelineAnchor(
@@ -766,10 +723,4 @@ function highlightTimelineTurn(target: HTMLElement): () => void {
     window.clearTimeout(timer)
     delete target.dataset.turnHighlight
   }
-}
-
-function compactContext(value: string | undefined): string {
-  if (value === undefined) return '由 CodeTether 管理'
-  const segments = value.replace(/\\/gu, '/').split('/').filter(Boolean)
-  return segments.slice(-2).join('/') || value
 }

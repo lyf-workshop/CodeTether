@@ -18,6 +18,7 @@ import {
   restoreTriggerFocus,
   type OrganizationConversation,
 } from './conversation-organization-shared'
+import { displayConversationTitle } from './conversation-title.js'
 
 interface ArchiveConversationDialogProps {
   conversation: OrganizationConversation
@@ -75,7 +76,13 @@ export function ArchiveConversationDialog({
           </span>
           <DialogTitle>归档会话</DialogTitle>
           <DialogDescription className="break-words">
-            归档“{conversation.title}”后，该会话不会出现在活跃会话列表中。
+            归档“
+            {displayConversationTitle(
+              conversation.title,
+              conversation.createdAt,
+              conversation.provider,
+            )}
+            ”后，该会话不会出现在活跃会话列表中。
           </DialogDescription>
         </DialogHeader>
 

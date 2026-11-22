@@ -45,6 +45,8 @@ test('Detail organization actions use one shared control and archive into the UR
 
   assert.match(chromeActions, /ConversationOrganizationMenu/u)
   assert.match(chromeActions, /label="管理会话"/u)
+  assert.match(chromeActions, /conversation\.archivedAt === undefined/u)
+  assert.match(chromeActions, /已归档/u)
   assert.match(
     route,
     /search: \{ view: 'archived', machineId: owningMachineId \}/u,
@@ -63,7 +65,7 @@ test('Workspace Sidebar explicitly identifies the current archived Conversation 
 
   assert.match(sidebar, /workspaceLocationConversations/u)
   assert.match(sidebar, /当前已归档/u)
-  assert.match(sidebar, /查看已归档会话/u)
+  assert.doesNotMatch(sidebar, /查看已归档会话/u)
   assert.match(rootLayout, /currentConversation=\{currentConversation\}/u)
 })
 

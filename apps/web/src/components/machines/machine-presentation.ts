@@ -4,6 +4,7 @@ import type {
   MachineSummary,
   RemoteMachineAddress,
 } from '@codetether/protocol'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 export function machinePlatformFamily(
   platform: string,
@@ -193,12 +194,7 @@ export function remoteMachineAddressLabel(
 
 export function formatMachineLastSeen(lastSeenAt?: string): string | undefined {
   if (lastSeenAt === undefined) return undefined
-  const timestamp = new Date(lastSeenAt)
-  if (Number.isNaN(timestamp.getTime())) return undefined
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(timestamp)
+  return formatLocalDateTime(lastSeenAt)
 }
 
 export function machineConnectionTone(

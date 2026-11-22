@@ -9,7 +9,6 @@ import {
   SessionItem,
   StatusBadge,
   agentDefinitions,
-  cn,
 } from '@codetether/ui'
 import type { ConversationSummary } from '@codetether/protocol'
 
@@ -22,6 +21,7 @@ import {
   formatConversationArchivedAt,
   providerDisplayName,
 } from './conversation-list-model'
+import { displayConversationTitle } from './conversation-title'
 import { providerAgentId } from '../../provider/provider-presentation'
 
 interface ConversationGroupProps {
@@ -116,6 +116,11 @@ function ConversationRow({
   const rowRef = useRef<HTMLLIElement>(null)
   const [restoreError, setRestoreError] = useState<string>()
   const archived = archiveView === 'archived'
+  const displayTitle = displayConversationTitle(
+    conversation.title,
+    conversation.createdAt,
+    conversation.provider,
+  )
 
   function focusAdjacentRow() {
     const row = rowRef.current
@@ -146,6 +151,7 @@ function ConversationRow({
       <ConversationRestoreButton
         conversation={conversation}
         size="sm"
+        variant="secondary"
         onRestoreError={setRestoreError}
         onRestored={focusAdjacentRow}
         showInlineError={false}
@@ -153,12 +159,7 @@ function ConversationRow({
       {menu}
     </div>
   ) : (
-    <div className="flex w-max items-center gap-1 min-[601px]:opacity-0 min-[601px]:group-hover/conversation-row:opacity-100 min-[601px]:group-focus-within/conversation-row:opacity-100">
-      {conversation.pinnedAt === undefined ? null : (
-        <Pin aria-label="已置顶" className="size-3.5 text-text-muted" />
-      )}
-      {menu}
-    </div>
+    <div className="flex w-max items-center gap-1">{menu}</div>
   )
 
   return (
@@ -180,7 +181,7 @@ function ConversationRow({
       >
         {showProvider ? (
           <SessionItem
-            title={conversation.title}
+            title={displayTitle}
             leading={
               <AgentIdentityMark
                 agent={providerAgentId(conversation.provider)}
@@ -191,6 +192,9 @@ function ConversationRow({
               <span className="truncate">
                 {providerDisplayName(conversation.provider)}
                 {machineName === undefined ? '' : ` · ${machineName}`}
+                {conversation.pinnedAt === undefined || archived
+                  ? ''
+                  : ' · 已置顶'}
                 {archived && conversation.archivedAt !== undefined
                   ? ` · 归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
                   : ''}
@@ -207,17 +211,18 @@ function ConversationRow({
                 to="/c/$conversationId"
                 params={{ conversationId: conversation.conversationId }}
                 data-conversation-primary-action
-                aria-label={`打开会话：${conversation.title}`}
-                title={conversation.title}
+                aria-label={`打开会话：${displayTitle}`}
+                title={displayTitle}
                 className="absolute inset-0 z-0 rounded-xs outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               />
             }
             actions={organizationActions}
+            actionPlacement="overlay"
           />
         ) : (
           <ConversationItem
             appearance="row"
-            title={conversation.title}
+            title={displayTitle}
             description={
               archived && conversation.archivedAt !== undefined
                 ? `归档于 ${formatConversationArchivedAt(conversation.archivedAt)}`
@@ -234,9 +239,7 @@ function ConversationRow({
                   : '已置顶'
             }
             selected={selected}
-            className={cn(
-              archived ? 'pr-36' : conversation.pinnedAt && 'pr-12',
-            )}
+            actionPlacement="overlay"
             primaryAction={
               <Link
                 to="/c/$conversationId"
@@ -244,8 +247,8 @@ function ConversationRow({
                   conversationId: conversation.conversationId,
                 }}
                 data-conversation-primary-action
-                aria-label={`打开会话：${conversation.title}`}
-                title={conversation.title}
+                aria-label={`打开会话：${displayTitle}`}
+                title={displayTitle}
                 className="absolute inset-0 z-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
               />
             }

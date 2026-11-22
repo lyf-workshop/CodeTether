@@ -10,6 +10,7 @@ import type {
 import { projectLocationAvailability } from '../../runtime/host/project-location.js'
 import { providerPresentationForMachine } from '../../provider/provider-presentation.js'
 import { deriveLiveControlAvailability } from '../conversation/conversation-controls.js'
+import { displayConversationTitle } from '../conversations/conversation-title.js'
 
 export interface InboxItemMetadata {
   readonly conversationTitle?: string
@@ -61,7 +62,11 @@ export function inboxItemContext(
     ...(conversation === undefined
       ? {}
       : {
-          conversationTitle: conversation.title,
+          conversationTitle: displayConversationTitle(
+            conversation.title,
+            conversation.createdAt,
+            conversation.provider,
+          ),
           provider: conversation.provider,
           machineId: conversation.machineId,
         }),

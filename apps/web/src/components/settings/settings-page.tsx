@@ -45,7 +45,7 @@ export function SettingsPage({
       data-page-type="settings"
     >
       <div className="grid grid-cols-1 gap-6 px-4 pt-4 pb-8 @2xl/workspace:grid-cols-[var(--layout-settings-navigation-compact-width)_minmax(0,1fr)] @2xl/workspace:px-(--layout-page-gutter) @2xl/workspace:pt-6 @2xl/workspace:pb-12 @4xl/workspace:grid-cols-[var(--layout-settings-navigation-width)_minmax(0,1fr)] @4xl/workspace:gap-[var(--s10)]">
-        <div>
+        <div className="sticky top-0 z-10 self-start bg-background py-2 @2xl/workspace:top-6 @2xl/workspace:bg-transparent @2xl/workspace:py-0">
           <p className="mb-5 text-xl font-semibold">设置</p>
           <nav
             aria-label="设置分类"

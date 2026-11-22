@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
+import { JSDOM } from 'jsdom'
 
 import { createPendingActionDockModel } from '../.tmp/test-dist/components/conversation/pending-action-dock-model.js'
+import { loadWebComponent } from './fixtures/render-ui.mjs'
 
 const approvals = [
   {
@@ -61,8 +65,70 @@ test('multiple pending actions preserve identity and use semantic command presen
       },
     ],
   )
-  assert.equal(model[0].contextLabel, 'workspace/project')
+  assert.equal(model[0].contextLabel, 'project')
+  assert.equal(model[0].contextHasParent, true)
   assert.equal(model[0].context, 'C:\\workspace\\project')
+})
+
+test('project-root context is omitted while a subfolder keeps its folder name', () => {
+  const rootContext = createPendingActionDockModel(
+    [approvals[0]],
+    undefined,
+    'c:/WORKSPACE/project/',
+  )[0]
+  assert.equal(rootContext.context, undefined)
+  assert.equal(rootContext.contextLabel, undefined)
+
+  const subfolder = createPendingActionDockModel(
+    [{ ...approvals[0], context: 'C:\\workspace\\project\\windows-desktop' }],
+    undefined,
+    'C:\\workspace\\project',
+  )[0]
+  assert.equal(subfolder.contextLabel, 'windows-desktop')
+  assert.equal(subfolder.contextHasParent, true)
+  assert.equal(subfolder.context, 'C:\\workspace\\project\\windows-desktop')
+
+  const posixCaseMatters = createPendingActionDockModel(
+    [{ ...approvals[0], context: '/work/Project' }],
+    undefined,
+    '/work/project',
+  )[0]
+  assert.equal(posixCaseMatters.contextLabel, 'Project')
+})
+
+test('Approval folder labels keep punctuation and CJK in left-to-right order', () => {
+  const { PendingActionDock } = loadWebComponent(
+    'components/conversation/pending-action-dock.tsx',
+  )
+  const names = [
+    '.github',
+    '_build',
+    'copy (1)',
+    '中文项目',
+    'windows-desktop-audit-scratch',
+  ]
+
+  for (const [index, name] of names.entries()) {
+    const context = `C:\\workspace\\project\\${name}`
+    const html = renderToStaticMarkup(
+      createElement(PendingActionDock, {
+        approvals: [
+          { ...approvals[0], id: `approval_folder_${index}`, context },
+        ],
+        projectRootPath: 'C:\\workspace\\project',
+      }),
+    )
+    const document = new JSDOM(html).window.document
+    const nameNode = document.querySelector('bdi')
+    const contextNode = nameNode?.parentElement?.parentElement
+
+    assert.ok(nameNode, name)
+    assert.equal(nameNode.getAttribute('dir'), 'ltr', name)
+    assert.equal(nameNode.textContent, `…/${name}`, name)
+    assert.equal((nameNode.textContent.match(/…/gu) ?? []).length, 1, name)
+    assert.equal(contextNode?.getAttribute('title'), context, name)
+    assert.equal(contextNode?.getAttribute('aria-label'), context, name)
+  }
 })
 
 test('each pending action derives mutation state only from its own approvalId', () => {
@@ -126,6 +192,7 @@ test('Dock markup bounds long text and follows details, decline, accept keyboard
   assert.match(source, /<Disclosure/u)
   assert.match(source, /getApprovalFocusTarget/u)
   assert.match(source, /restoreComposerWhenEditable/u)
+  assert.match(source, /<bdi dir="ltr">/u)
   assert.match(source, /composer\.disabled \|\| composer\.readOnly/u)
   assert.ok(details >= 0 && details < decline && decline < accept)
   assert.doesNotMatch(source, /jsonrpc|providerRequestId/iu)

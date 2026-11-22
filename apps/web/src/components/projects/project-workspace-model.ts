@@ -32,6 +32,14 @@ export function projectViewIncludesStatus(
   )
 }
 
+/** Keep an active filter visible so it can be cleared after narrowing a list. */
+export function projectFilterControlsVisible(
+  currentViewCount: number,
+  hasActiveFilter: boolean,
+): boolean {
+  return currentViewCount > 5 || hasActiveFilter
+}
+
 export function parseProjectWorkspaceSearch(
   search: Record<string, unknown>,
 ): ProjectWorkspaceSearch {

@@ -74,6 +74,7 @@ interface ComposerProps {
   modelControlRequest?: number
   model?: string
   previousUserInput?: string
+  hasStartedTurn?: boolean
   archived?: boolean
   projectBoundary?: ConversationProjectBoundaryViewModel
   recoveryAction?: ReactNode
@@ -100,6 +101,7 @@ export function Composer({
   model,
   modelControlRequest = 0,
   previousUserInput,
+  hasStartedTurn = false,
   archived = false,
   projectBoundary,
   recoveryAction,
@@ -192,6 +194,7 @@ export function Composer({
     )
   }, [conversationId])
   const visibleModelFallback =
+    !hasStartedTurn &&
     modelFallback?.conversationId === conversationId &&
     modelFallback.notice.selectedModel === currentModel
       ? modelFallback.notice

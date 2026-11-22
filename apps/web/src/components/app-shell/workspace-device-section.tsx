@@ -42,7 +42,7 @@ export function WorkspaceDeviceSection({
       <div
         data-state={active ? 'selected' : undefined}
         className={cn(
-          'group/device flex h-[var(--tree-device-h)] min-w-0 items-center rounded-sm px-1',
+          'group/device flex h-[var(--tree-device-h)] min-w-0 items-center gap-1.5 rounded-sm px-1',
           active ? 'bg-surface-muted' : 'hover:bg-surface-muted/55',
         )}
       >
@@ -73,7 +73,7 @@ export function WorkspaceDeviceSection({
             aria-hidden="true"
             className="size-4 shrink-0 text-text-muted"
           />
-          <span className="truncate">{machine.displayName}</span>
+          <span className="min-w-0 flex-1 truncate">{machine.displayName}</span>
         </Link>
         {canAddProject && onAddProject !== undefined ? (
           <IconButton

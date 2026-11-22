@@ -14,6 +14,7 @@ interface PendingActionDockProps {
   readonly approvals: readonly ConversationApprovalViewModel[]
   readonly className?: string
   readonly controller?: ApprovalController
+  readonly projectRootPath?: string
 }
 
 /**
@@ -24,8 +25,13 @@ export function PendingActionDock({
   approvals,
   className,
   controller,
+  projectRootPath,
 }: PendingActionDockProps) {
-  const items = createPendingActionDockModel(approvals, controller)
+  const items = createPendingActionDockModel(
+    approvals,
+    controller,
+    projectRootPath,
+  )
   const approvalIds = items.map((item) => item.id)
   const approvalIdentity = approvalIds.join('\u0000')
   const dockRef = useRef<HTMLElement>(null)
@@ -110,15 +116,15 @@ export function PendingActionDock({
         className,
       )}
     >
-      <header className="flex min-w-0 items-center justify-between gap-3 border-b border-border px-4 py-2.5">
-        <div className="min-w-0">
+      <header className="flex min-w-0 items-center gap-2 border-b border-border px-4 py-1.5">
+        <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <h2
             id="pending-action-dock-title"
             className="truncate text-sm font-semibold text-text-primary"
           >
             等待你的批准
           </h2>
-          <p className="truncate text-xs text-text-muted">
+          <p className="min-w-0 truncate text-xs text-text-muted">
             请确认每项操作后，AI 工具才会继续。
           </p>
         </div>
@@ -142,44 +148,46 @@ export function PendingActionDock({
             data-approval-id={item.id}
             aria-busy={item.controls.pending || undefined}
             aria-labelledby={`pending-action-${item.id}`}
-            className="min-w-0 px-4 py-3"
+            className="min-w-0 px-4 py-2"
           >
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <h3
-                    id={`pending-action-${item.id}`}
-                    className="truncate text-sm font-semibold text-text-primary"
-                  >
-                    {item.title}
-                  </h3>
-                  <Badge
-                    variant="outline"
-                    className="h-5 shrink-0 rounded-xs px-1.5 text-[0.6875rem] text-text-muted"
-                  >
-                    {item.kindLabel}
-                  </Badge>
-                </div>
-                <code
-                  className="mt-1 block min-w-0 truncate font-mono text-xs text-text-secondary"
-                  title={item.subtitle}
+            <div className="flex min-w-0 items-center gap-2">
+              <h3 id={`pending-action-${item.id}`} className="sr-only">
+                {item.title}
+              </h3>
+              <Badge
+                variant="outline"
+                className="h-5 shrink-0 rounded-xs px-1.5 text-[0.6875rem] text-text-muted"
+              >
+                {item.kindLabel}
+              </Badge>
+              <code
+                className="min-w-0 flex-1 truncate font-mono text-xs text-text-secondary"
+                title={item.subtitle}
+              >
+                {item.subtitle}
+              </code>
+              {item.contextLabel ? (
+                <span
+                  className="flex max-w-36 min-w-0 shrink-0 items-center text-xs text-text-muted"
+                  title={item.context}
+                  aria-label={item.context}
                 >
-                  {item.subtitle}
-                </code>
-              </div>
-              <span className="flex max-w-32 shrink-0 flex-col items-end text-xs text-text-muted">
-                {item.contextLabel ? (
-                  <span className="max-w-full truncate" title={item.context}>
-                    {item.contextLabel}
+                  <span className="min-w-0 truncate text-left [direction:rtl]">
+                    <bdi dir="ltr">
+                      {item.contextHasParent ? '…/' : null}
+                      {item.contextLabel}
+                    </bdi>
                   </span>
-                ) : null}
-                <span className="tabular-nums">{item.requestedAt}</span>
+                </span>
+              ) : null}
+              <span className="shrink-0 text-xs text-text-muted tabular-nums">
+                {item.requestedAt}
               </span>
             </div>
 
             <Disclosure
               label="查看详情"
-              className="mt-2 min-w-0 text-xs text-text-secondary"
+              className="mt-1 min-w-0 text-xs text-text-secondary"
             >
               <dl className="mt-2 grid min-w-0 gap-2 rounded-sm bg-surface-muted/45 p-3">
                 <div className="grid min-w-0 gap-1">
@@ -207,7 +215,7 @@ export function PendingActionDock({
               </p>
             ) : null}
 
-            <div className="mt-3 flex shrink-0 items-center justify-end gap-2">
+            <div className="mt-1.5 flex shrink-0 items-center justify-end gap-2">
               <Button
                 type="button"
                 size="sm"

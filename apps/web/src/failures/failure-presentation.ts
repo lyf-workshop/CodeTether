@@ -3,6 +3,7 @@ import type {
   HostError,
   HostErrorCode,
 } from '@codetether/protocol'
+import { formatLocalDateTime } from '../presentation/date-time.js'
 
 type CanonicalFailureReason = CanonicalFailure['reason']
 type CanonicalFailureSource = CanonicalFailure['source']
@@ -264,8 +265,8 @@ const failureReasonCopy = {
   },
   provider_error: {
     title: 'AI 工具执行失败',
-    cause: 'AI 工具未能完成本轮工作。',
-    guidance: '请查看电脑详情中的执行状态后再继续。',
+    cause: 'AI 工具在本轮执行中失败。',
+    guidance: '请在电脑详情查看运行状态，确认问题后再开始新一轮。',
   },
   runtime_error: {
     title: '运行时执行失败',
@@ -310,15 +311,18 @@ export function executionFailurePresentation(
   const reason = failure?.reason ?? legacyFailureReason(error?.code)
   const copy = contextualizedCopy(failureReasonCopy[reason], context)
   const canStartNewTurn = canStartNewTurnAfterFailure(failure)
-  const navigation = failureNavigation(failure)
+  const navigation = failureNavigation(failure, reason)
 
   return {
     title: copy.title,
     cause: copy.cause,
     guidance: copy.guidance,
-    historyNote: replayUnsafeReasons.has(reason)
-      ? '本轮工作可能不完整。已保存的会话历史仍可查看，CodeTether 未自动重新发送原请求。'
-      : '本轮工作可能不完整。已保存的会话历史仍可查看。',
+    historyNote:
+      reason === 'provider_error'
+        ? '已保存的会话历史仍可查看。'
+        : replayUnsafeReasons.has(reason)
+          ? '本轮工作可能不完整。已保存的会话历史仍可查看，CodeTether 未自动重新发送原请求。'
+          : '本轮工作可能不完整。已保存的会话历史仍可查看。',
     canStartNewTurn,
     ...(navigation === undefined ? {} : { navigation }),
     modelUnavailable: failure?.reason === 'provider_model_unavailable',
@@ -335,7 +339,7 @@ export function canonicalFailureActionPresentation(
   context?: FailurePresentationContext,
 ): CanonicalFailureActionPresentation {
   const copy = contextualizedCopy(failureReasonCopy[failure.reason], context)
-  const navigation = failureNavigation(failure)
+  const navigation = failureNavigation(failure, failure.reason)
   return {
     cause: copy.cause,
     guidance: copy.guidance,
@@ -386,7 +390,9 @@ export function canStartNewTurnAfterFailure(
 
 function failureNavigation(
   failure: CanonicalFailure | undefined,
+  reason?: CanonicalFailureReason,
 ): 'machine' | 'project' | undefined {
+  if (reason === 'provider_error') return 'machine'
   switch (failure?.userAction) {
     case 'login_on_machine':
     case 'open_machine':
@@ -420,7 +426,10 @@ function technicalDetails(
     details.push(
       { label: '故障代码', value: failure.technicalCode },
       { label: '来源', value: sourceLabels[failure.source] },
-      { label: '发生时间', value: failure.occurredAt },
+      {
+        label: '发生时间',
+        value: formatLocalDateTime(failure.occurredAt) ?? '时间未知',
+      },
     )
   }
   if (details.length === 0) {

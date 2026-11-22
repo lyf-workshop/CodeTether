@@ -74,7 +74,7 @@ export function createTimelineToolPresentation(
     classification.kind === 'git-status' ||
     classification.kind === 'test'
   ) {
-    subject = summarizeCommand(displayCommand)
+    subject = summarizeCommand(unwrapPowerShellScriptBlock(displayCommand))
   }
 
   return {
@@ -90,12 +90,13 @@ function inspectToolCommand({
   kind,
 }: Pick<ToolPresentationInput, 'command' | 'kind'>) {
   const rawCommand = command.trim() || '执行命令'
-  const displayCommand = unwrapPowerShellCommand(rawCommand)
-  const tokens = tokenizeCommandPrefix(displayCommand, 6)
+  const displayCommand = displayToolCommand(rawCommand)
+  const classificationCommand = unwrapPowerShellScriptBlock(displayCommand)
+  const tokens = tokenizeCommandPrefix(classificationCommand, 6)
   const executable = normalizeExecutable(tokens[0]?.value)
   const classification =
     kind === undefined
-      ? hasCompoundCommandSyntax(displayCommand)
+      ? hasCompoundCommandSyntax(classificationCommand)
         ? ({ kind: 'command', title: '执行命令' } as const)
         : classifyCommand(executable, tokens)
       : classifyCanonicalTool(kind, displayCommand)
@@ -161,7 +162,12 @@ function canonicalToolSubject(
 /** Compact, wrapper-free command text suitable for a secondary UI label. */
 export function createToolCommandSubtitle(command: string): string {
   const normalized = command.trim() || '执行命令'
-  return compactSubtitle(unwrapPowerShellCommand(normalized))
+  return compactSubtitle(displayToolCommand(normalized))
+}
+
+/** Display-only shell text; never used to execute or authorize a command. */
+export function displayToolCommand(command: string): string {
+  return unwrapPowerShellCommand(unwrapWholeQuotedValue(command.trim()))
 }
 
 interface CommandClassification {
@@ -313,6 +319,9 @@ function summarizeToolFailure(
 }
 
 function unwrapPowerShellCommand(command: string): string {
+  const codexScript = decodeCodexPowerShellCommand(command)
+  if (codexScript !== undefined) return codexScript
+
   const wrapperTokens = tokenizeCommandPrefix(command, 16)
   let executableIndex = 0
   if (wrapperTokens[0]?.value === '&') executableIndex = 1
@@ -335,6 +344,112 @@ function unwrapPowerShellCommand(command: string): string {
     return unwrapPowerShellScriptBlock(unwrapWholeQuotedValue(wrapped))
   }
   return command
+}
+
+/**
+ * Codex joins its PowerShell argv with POSIX shlex before publishing the
+ * command. Decode only a complete, canonical join with one -Command script.
+ * Other PowerShell spellings retain the existing display handling.
+ */
+function decodeCodexPowerShellCommand(command: string): string | undefined {
+  const words = splitPosixShellWords(command)
+  if (
+    words === undefined ||
+    words.length < 3 ||
+    words.map(quoteCodexShellWord).join(' ') !== command
+  ) {
+    return undefined
+  }
+  const executable = normalizeExecutable(words[0])
+  if (executable !== 'powershell' && executable !== 'pwsh') return undefined
+
+  const commandIndex = words.findIndex((word, index) =>
+    index > 0 ? word.toLocaleLowerCase('en-US') === '-command' : false,
+  )
+  if (commandIndex < 1 || commandIndex !== words.length - 2) return undefined
+  if (
+    words
+      .slice(1, commandIndex)
+      .some((flag) => !/^-(?:noprofile|nologo|noninteractive)$/iu.test(flag))
+  ) {
+    return undefined
+  }
+  const script = words[commandIndex + 1]
+  return script
+}
+
+/** POSIX shell-word decoding for a display string; never run the result. */
+function splitPosixShellWords(command: string): readonly string[] | undefined {
+  const words: string[] = []
+  let index = 0
+  while (index < command.length) {
+    while (/\s/u.test(command[index] ?? '')) index += 1
+    if (index >= command.length) break
+    let word = ''
+    let quote: "'" | '"' | undefined
+    while (index < command.length) {
+      const character = command[index]
+      const next = command[index + 1]
+      if (character === undefined) break
+      if (quote === undefined && /\s/u.test(character)) break
+      if (quote === undefined && (character === "'" || character === '"')) {
+        quote = character
+      } else if (character === quote) {
+        quote = undefined
+      } else if (character === '\\' && quote !== "'") {
+        if (next === undefined) return undefined
+        if (quote === undefined || /[\\"$`]/u.test(next)) {
+          word += next
+          index += 1
+        } else {
+          word += character
+        }
+      } else {
+        word += character
+      }
+      index += 1
+    }
+    if (quote !== undefined) return undefined
+    words.push(word)
+  }
+  return words
+}
+
+/** Mirrors the bounded shlex 2.x join used for Codex's published argv. */
+function quoteCodexShellWord(value: string): string {
+  if (value.length === 0) return "''"
+  let result = ''
+  let rest = value
+  while (rest.length > 0) {
+    let allowed = rest[0] === '^' ? 2 : 7
+    let length = rest[0] === '^' ? 1 : 0
+    for (; length < rest.length; length += 1) {
+      const character = rest[length]
+      if (character === undefined) break
+      let current = allowed
+      if (character.charCodeAt(0) >= 0x80) {
+        current &= ~1
+      } else {
+        if (!/[+\-./:@\]_0-9A-Za-z]/u.test(character)) current &= ~1
+        if (character === "'" || character === '^' || character === '\\')
+          current &= ~2
+        if (/[`$!^]/u.test(character)) current &= ~4
+      }
+      if (current === 0) break
+      allowed = current
+    }
+    const part = rest.slice(0, length)
+    if (length === rest.length && (allowed & 1) !== 0 && result.length === 0)
+      return value
+    result +=
+      (allowed & 1) !== 0
+        ? part
+        : (allowed & 2) !== 0
+          ? `'${part}'`
+          : `"${part.replace(/[$`"\\]/gu, (character) => `\\${character}`)}"`
+    rest = rest.slice(length)
+  }
+  return result
 }
 
 /** Lexically summarizes top-level commands without evaluating shell syntax. */
@@ -512,6 +627,10 @@ function unwrapWholeQuotedValue(value: string): string {
         index += 1
         continue
       }
+      if (quote === '"' && value[index + 1] === '"') {
+        index += 1
+        continue
+      }
       return value
     }
     escaped = false
@@ -520,7 +639,7 @@ function unwrapWholeQuotedValue(value: string): string {
   const inner = value.slice(1, -1)
   return quote === "'"
     ? inner.replace(/''/gu, "'")
-    : inner.replace(/`([`"$])/gu, '$1')
+    : inner.replace(/""/gu, '"').replace(/`([`"$])/gu, '$1')
 }
 
 interface CommandToken {

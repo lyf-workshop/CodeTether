@@ -594,7 +594,7 @@ function candidateFromThread(
 ): NativeProviderSessionCandidate {
   const createdAt = timestampToIso(thread.createdAt)
   const lastActiveAt = timestampToIso(thread.recencyAt ?? thread.updatedAt)
-  const title = boundedTitle(thread.name, thread.createdAt)
+  const title = boundedTitle(thread.name)
   return {
     provider: 'codex',
     nativeSessionId: thread.id,
@@ -622,7 +622,7 @@ function candidateFromThread(
     title,
     ...(thread.name === undefined
       ? {}
-      : { providerTitle: boundedTitle(thread.name, thread.createdAt) }),
+      : { providerTitle: boundedTitle(thread.name) }),
     ...(createdAt === undefined ? {} : { createdAt }),
     ...(lastActiveAt === undefined ? {} : { lastActiveAt }),
     providerVersion: thread.cliVersion,
@@ -988,11 +988,10 @@ function transcriptFailurePage(
   }
 }
 
-function boundedTitle(value: string | undefined, createdAt: number): string {
+function boundedTitle(value: string | undefined): string {
   const normalized = value?.normalize('NFC').replace(/\s+/gu, ' ').trim()
   if (normalized === undefined || normalized.length === 0) {
-    const timestamp = timestampToIso(createdAt)
-    return `Codex 会话${timestamp === undefined ? '' : ` · ${timestamp}`}`
+    return 'Codex 会话'
   }
   const codePoints = [...normalized]
   return codePoints.length <= MAX_TITLE_CODE_POINTS

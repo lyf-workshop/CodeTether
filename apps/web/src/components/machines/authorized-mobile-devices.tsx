@@ -17,6 +17,7 @@ import {
   Notice,
   StatusTag,
 } from '@codetether/ui'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 import { controlPlaneBaseUrl } from '../../runtime/account/account-config.js'
 import {
@@ -32,11 +33,6 @@ import {
 import type { LocalHostIdentityRecord } from '../../runtime/account/remote-supervisor.js'
 import { getSupabaseAccountClient } from '../../runtime/account/supabase-account.js'
 import { nativeCapabilities } from '../../runtime/native/native-capabilities.js'
-
-const lastUsedFormat = new Intl.DateTimeFormat('zh-CN', {
-  dateStyle: 'medium',
-  timeStyle: 'short',
-})
 
 export function AuthorizedMobileDevices({
   userId,
@@ -249,7 +245,7 @@ export function AuthorizedMobileDevicesList({
                     <>
                       上次使用{' '}
                       <time dateTime={device.lastUsedAt}>
-                        {lastUsedFormat.format(new Date(device.lastUsedAt))}
+                        {formatLocalDateTime(device.lastUsedAt) ?? '时间未知'}
                       </time>
                     </>
                   )}

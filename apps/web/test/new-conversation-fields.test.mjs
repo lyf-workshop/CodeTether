@@ -88,7 +88,10 @@ test('a long selected project path preserves its full Windows path in the hover 
   const html = render({
     project: { ...project, location: { rootPath: fullPath } },
   })
-  assert.match(html, /class="min-w-0 truncate font-mono" title="[^"]+"/u)
+  assert.match(
+    html,
+    /class="inline-flex min-w-0 max-w-full flex-1 font-mono" title="[^"]+"/u,
+  )
   assert.ok(html.includes(`title="${fullPath}"`))
 })
 
@@ -98,6 +101,7 @@ test('multiple computers have distinct, prominent project group headers', () => 
   const selectUi = {
     ...loadUiComponent('components/product/agent-badge.tsx'),
     ...loadUiComponent('components/badge.tsx'),
+    ...loadUiComponent('components/product/project-path.tsx'),
     ...loadUiComponent('lib/cn.ts'),
     Select: ({ children }) => createElement('div', null, children),
     SelectTrigger: ({ children }) => createElement('div', null, children),

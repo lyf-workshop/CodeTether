@@ -196,6 +196,7 @@ test('uses one projected file change for Timeline Diff and Inspector Changes', (
   )
 
   assert.equal(viewModel.changes.files[0]?.id, 'src/example.ts')
+  assert.equal(viewModel.changes.files[0]?.turnNumber, 1)
   assert.deepEqual(viewModel.changes.totals, { additions: 1, deletions: 1 })
   const run = viewModel.timeline.blocks.find(
     (block) => block.kind === 'agent-run',
@@ -203,6 +204,62 @@ test('uses one projected file change for Timeline Diff and Inspector Changes', (
   assert.equal(run?.kind, 'agent-run')
   assert.equal(run?.executions[0]?.kind, 'diff')
   assert.equal(run?.executions[0]?.changeId, viewModel.changes.files[0]?.id)
+})
+
+test('repeated file changes identify their owning Turn in Inspector order', () => {
+  const secondTurn = {
+    id: 'turn_live02',
+    status: 'completed',
+    startedAt: '2026-08-26T12:05:00.000Z',
+    completedAt: '2026-08-26T12:06:00.000Z',
+    order: 1,
+  }
+  const firstTurn = {
+    id: 'turn_live01',
+    status: 'completed',
+    startedAt: timestamp,
+    completedAt: '2026-08-26T12:04:00.000Z',
+    order: 0,
+  }
+  const viewModel = createLiveConversationViewModel(
+    conversation({
+      turns: [firstTurn, secondTurn],
+      currentTurn: secondTurn,
+      changes: [
+        {
+          id: 'change-first',
+          turnId: firstTurn.id,
+          itemId: 'item_first',
+          path: 'src/example.ts',
+          kind: 'modified',
+          additions: 3,
+          deletions: 0,
+          diffLines: [],
+          timestamp,
+          order: 1,
+        },
+        {
+          id: 'change-second',
+          turnId: secondTurn.id,
+          itemId: 'item_second',
+          path: 'src/example.ts',
+          kind: 'modified',
+          additions: 0,
+          deletions: 3,
+          diffLines: [],
+          timestamp: secondTurn.startedAt,
+          order: 2,
+        },
+      ],
+    }),
+  )
+  assert.deepEqual(
+    viewModel.changes.files.map((change) => [change.path, change.turnNumber]),
+    [
+      ['src/example.ts', 1],
+      ['src/example.ts', 2],
+    ],
+  )
 })
 
 test('presents workspace file changes without leaking an absolute local path', () => {

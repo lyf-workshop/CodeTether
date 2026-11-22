@@ -26,6 +26,10 @@ import type {
 import type { AgentId } from '@codetether/ui'
 
 import { canonicalFailureActionPresentation } from '../failures/failure-presentation.js'
+import {
+  formatLocalDate,
+  formatLocalDateTime,
+} from '../presentation/date-time.js'
 
 export type AgentProvider = ProviderId
 
@@ -201,7 +205,7 @@ export function providerSummary(
     connectionState !== 'online'
   ) {
     const installationKnown =
-      (lifecycle?.installations.length ?? 0) > 0 ||
+      hasRecordedInstallation(lifecycle) ||
       provider?.version !== undefined ||
       provider?.availability === 'available' ||
       provider?.availability === 'unsupported_version' ||
@@ -314,12 +318,7 @@ export function providerSummary(
 
 function formatExecutionDate(observedAt?: string): string | undefined {
   if (observedAt === undefined) return undefined
-  const date = new Date(observedAt)
-  if (Number.isNaN(date.getTime())) return undefined
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'long',
-    day: 'numeric',
-  }).format(date)
+  return formatLocalDate(observedAt)
 }
 
 function providerHealthNextStep(
@@ -786,7 +785,10 @@ function unavailableProviderPresentation(
 
 export function onboardingProviderInstallationLabel(
   provider: DoctorProviderStatus,
+  lifecycle?: MachineProviderLifecycle,
 ): string {
+  if (usesRecordedUnselectedInstallation(provider, lifecycle))
+    return '已安装 · 未选择'
   if (provider.freshness === 'not_observed') return '尚未检查'
   const label = !provider.installed
     ? '未安装'
@@ -798,9 +800,11 @@ export function onboardingProviderInstallationLabel(
 
 export function onboardingProviderRuntimeLabel(
   provider: DoctorProviderStatus,
+  lifecycle?: MachineProviderLifecycle,
 ): string {
+  if (usesRecordedUnselectedInstallation(provider, lifecycle)) return '尚未选择'
   if (provider.freshness === 'not_observed') return '尚未检查'
-  const compatibility = providerCompatibilityLabel(provider)
+  const compatibility = providerCompatibilityLabel(provider, lifecycle)
   const readiness =
     provider.runtimeReadiness === 'ready'
       ? '可用'
@@ -834,7 +838,9 @@ export function onboardingSessionDiscoveryLabel(
 
 export function providerCompatibilityLabel(
   provider: DoctorProviderStatus,
+  lifecycle?: MachineProviderLifecycle,
 ): string {
+  if (usesRecordedUnselectedInstallation(provider, lifecycle)) return '尚未选择'
   if (provider.freshness === 'not_observed') return '尚未检查'
   const label = !provider.installed
     ? '未安装'
@@ -844,16 +850,46 @@ export function providerCompatibilityLabel(
   return label
 }
 
-export function providerVersionLabel(provider: DoctorProviderStatus): string {
+export function providerVersionLabel(
+  provider: DoctorProviderStatus,
+  lifecycle?: MachineProviderLifecycle,
+): string {
+  if (usesRecordedUnselectedInstallation(provider, lifecycle)) {
+    const onlyInstallation =
+      lifecycle?.installations.length === 1
+        ? lifecycle.installations[0]
+        : undefined
+    return onlyInstallation?.version === undefined
+      ? '已安装 · 未选择'
+      : `${onlyInstallation.version} · 未选择`
+  }
   if (provider.freshness === 'not_observed') return '尚未检查'
   const label = provider.installed ? (provider.version ?? '已安装') : '未安装'
   return label
 }
 
+function hasRecordedInstallation(
+  lifecycle: MachineProviderLifecycle | undefined,
+): boolean {
+  return (lifecycle?.installations.length ?? 0) > 0
+}
+
+/** A retained, unusable installation still exists, even without a selection. */
+function usesRecordedUnselectedInstallation(
+  provider: DoctorProviderStatus,
+  lifecycle: MachineProviderLifecycle | undefined,
+): boolean {
+  return (
+    provider.freshness !== 'current' &&
+    !provider.installed &&
+    hasRecordedInstallation(lifecycle)
+  )
+}
+
 export function backendModeLabel(
   backend: Pick<DoctorBackendStatus, 'mode'> | undefined,
 ): string {
-  if (backend === undefined) return 'AI 服务尚未检查'
+  if (backend === undefined) return 'AI 服务'
   switch (backend.mode) {
     case 'first_party':
       return '官方 AI 服务'
@@ -901,10 +937,5 @@ export function lifecycleObservationLabel(
 
 function formatObservationTime(observedAt?: string): string | undefined {
   if (observedAt === undefined) return undefined
-  const date = new Date(observedAt)
-  if (Number.isNaN(date.getTime())) return undefined
-  return new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'short',
-    timeStyle: 'short',
-  }).format(date)
+  return formatLocalDateTime(observedAt)
 }

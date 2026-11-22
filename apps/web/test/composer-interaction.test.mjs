@@ -20,6 +20,7 @@ test('Composer shows a create-time model fallback explanation once', async () =>
     currentModel = 'gpt-6.1-terra',
     state = 'idle',
     id = conversationId,
+    hasStartedTurn = false,
   ) =>
     view.render(
       createElement(
@@ -27,6 +28,7 @@ test('Composer shows a create-time model fallback explanation once', async () =>
         null,
         createElement(Composer, {
           conversationId: id,
+          hasStartedTurn,
           capabilities: { canCompose: true },
           controller: {
             state,
@@ -51,8 +53,13 @@ test('Composer shows a create-time model fallback explanation once', async () =>
         ?.textContent ?? '',
       /gpt-6\.2-astra.*gpt-6\.1-terra/u,
     )
-    await render('gpt-6.1-terra', 'running')
+    await render('gpt-6.1-terra', 'idle')
     assert.ok(view.container.querySelector('[data-model-fallback-notice]'))
+    await render('gpt-6.1-terra', 'running', conversationId, true)
+    assert.equal(
+      view.container.querySelector('[data-model-fallback-notice]'),
+      null,
+    )
     await render('gpt-6.1-terra', 'idle', 'conv_model_fallback02')
     assert.equal(
       view.container.querySelector('[data-model-fallback-notice]'),

@@ -100,7 +100,7 @@ export function ConversationFailureCard({
                   params={{ machineId }}
                   aria-label="打开执行电脑详情"
                 >
-                  查看电脑
+                  查看电脑详情
                 </Link>
               </Button>
             ) : null}

@@ -3,6 +3,7 @@ import { Folder, Plus } from 'lucide-react'
 
 import { Button, type ButtonProps } from '../button'
 import { cn } from '../../lib/cn'
+import { ProjectPath } from './project-path'
 
 export interface ProjectCardProps extends Omit<
   React.ComponentPropsWithoutRef<'article'>,
@@ -65,11 +66,8 @@ export function ProjectCard({
           </h3>
           {status}
         </div>
-        <p
-          title={rootPath}
-          className="mt-1.5 truncate font-mono text-xs text-text-muted"
-        >
-          {rootPath}
+        <p className="mt-1.5 min-w-0 font-mono text-xs text-text-muted">
+          <ProjectPath path={rootPath} />
         </p>
       </div>
       {metrics || activity ? (

@@ -35,6 +35,8 @@ export {
   type ProjectCardProps,
   type AddProjectCardProps,
 } from './project-card'
+export { ProjectPath } from './project-path'
+export { projectPathParts } from './project-path-parts'
 
 export { SessionItem, type SessionItemProps } from './session-item'
 export { CommandBlock, type CommandBlockProps } from './command-block'

@@ -100,8 +100,10 @@ test('device project empty state adapts its single real Add Project flow', async
   const source = await readSource(
     'components/machines/machine-projects-section.tsx',
   )
-  assert.equal((source.match(/<AddProjectDialog/gu) ?? []).length, 1)
+  assert.equal((source.match(/<AddProjectDialog/gu) ?? []).length, 2)
   assert.match(source, /fixedMachineId=\{machine\.machineId\}/u)
+  assert.match(source, /canAdd && showAddInHeader/u)
+  assert.match(source, /canAdd && showAddCard/u)
   assert.match(source, /ownProjects\.length === 0/u)
   assert.match(source, /machineCanAddProject\(machine\)/u)
   assert.match(source, /这台设备上还没有项目/u)

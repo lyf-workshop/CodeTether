@@ -493,5 +493,5 @@ test('an unobserved compatibility sentinel cannot report a failed check; latest 
   )
   assert.equal(summary.status.label, '已安装，待确认')
   assert.equal(summary.advisory, undefined)
-  assert.match(summary.freshnessLabel, /11\/20/u)
+  assert.match(summary.freshnessLabel, /11月20日/u)
 })

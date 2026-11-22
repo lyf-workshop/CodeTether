@@ -34,6 +34,7 @@ import type {
   DoctorRemoteComputer,
 } from '@codetether/protocol'
 import { ProjectIdSchema } from '@codetether/protocol'
+import { formatLocalDateTime } from '../../presentation/date-time.js'
 
 import {
   useHostConnectionState,
@@ -67,6 +68,7 @@ import {
   lifecycleObservationLabel,
   providerCompatibilityLabel,
   providerDisplayName,
+  providerLifecycleForMachine,
   providerVersionLabel,
 } from '../../provider/provider-presentation'
 import { doctorComponentStatus } from './doctor-component-status'
@@ -447,6 +449,7 @@ export function DoctorPage({ embedded = false }: { embedded?: boolean }) {
                 value={onboardingSessionDiscoveryLabel(
                   provider.sessionDiscovery,
                 )}
+                stacked
               />
             ))}
           </div>
@@ -523,6 +526,10 @@ function DoctorProviderCard({
   readonly provider: DoctorProviderStatus
   readonly detail?: MachineProviderRead
 }) {
+  const lifecycle = providerLifecycleForMachine(
+    detail?.data?.providerLifecycles ?? [],
+    provider.provider,
+  )
   const guidance = providerInstallationGuidance[provider.provider]
   const authRequired =
     provider.backend?.freshness === 'current' &&
@@ -542,10 +549,13 @@ function DoctorProviderCard({
       }
     >
       <div className="space-y-2">
-        <KeyValue label="安装" value={providerVersionLabel(provider)} />
+        <KeyValue
+          label="安装"
+          value={providerVersionLabel(provider, lifecycle)}
+        />
         <KeyValue
           label="运行环境"
-          value={providerCompatibilityLabel(provider)}
+          value={providerCompatibilityLabel(provider, lifecycle)}
         />
         <KeyValue
           label={backendModeLabel(provider.backend)}
@@ -553,10 +563,11 @@ function DoctorProviderCard({
         />
         <KeyValue
           label="检查时间"
-          value={lifecycleObservationLabel(
-            provider.freshness,
-            provider.observedAt,
-          )}
+          value={
+            provider.observedAt === undefined
+              ? '尚未检查'
+              : (formatLocalDateTime(provider.observedAt) ?? '尚未检查')
+          }
         />
       </div>
       {provider.freshness !== 'current' ? (
@@ -626,7 +637,7 @@ function DoctorProviderCard({
           ) : null}
           <KeyValue
             label="状态"
-            value={providerCompatibilityLabel(provider)}
+            value={providerCompatibilityLabel(provider, lifecycle)}
             compact
             mono
           />
@@ -723,53 +734,59 @@ function RemoteComputerCard({
         </p>
       ) : null}
       <div className="mt-3 space-y-2">
-        {machine.providers.map((provider) => (
-          <div
-            key={provider.provider}
-            className="rounded-sm border border-border bg-surface-muted px-3 py-2.5"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-              <span className="text-sm font-medium text-text-primary">
-                {providerDisplayName(provider.provider)}
-              </span>
-              <MachineProviderBadge
-                read={detail}
-                provider={provider.provider}
-                connectionState={machine.connectionState}
-                placement="inline"
-              />
+        {machine.providers.map((provider) => {
+          const lifecycle = providerLifecycleForMachine(
+            detail?.data?.providerLifecycles ?? [],
+            provider.provider,
+          )
+          return (
+            <div
+              key={provider.provider}
+              className="rounded-sm border border-border bg-surface-muted px-3 py-2.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                <span className="text-sm font-medium text-text-primary">
+                  {providerDisplayName(provider.provider)}
+                </span>
+                <MachineProviderBadge
+                  read={detail}
+                  provider={provider.provider}
+                  connectionState={machine.connectionState}
+                  placement="inline"
+                />
+              </div>
+              <div className="mt-2 space-y-1">
+                <KeyValue
+                  label="版本"
+                  value={providerVersionLabel(provider, lifecycle)}
+                  compact
+                />
+                <KeyValue
+                  label="运行环境"
+                  value={providerCompatibilityLabel(provider, lifecycle)}
+                  compact
+                />
+                <KeyValue
+                  label={backendModeLabel(provider.backend)}
+                  value={backendReadinessLabel(provider.backend)}
+                  compact
+                />
+                <KeyValue
+                  label="以前的会话"
+                  value={onboardingSessionDiscoveryLabel(
+                    provider.sessionDiscovery,
+                  )}
+                  compact
+                />
+              </div>
+              {provider.state !== 'ready' ? (
+                <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                  {providerRepairText(provider)}
+                </p>
+              ) : null}
             </div>
-            <div className="mt-2 space-y-1">
-              <KeyValue
-                label="版本"
-                value={providerVersionLabel(provider)}
-                compact
-              />
-              <KeyValue
-                label="运行环境"
-                value={providerCompatibilityLabel(provider)}
-                compact
-              />
-              <KeyValue
-                label={backendModeLabel(provider.backend)}
-                value={backendReadinessLabel(provider.backend)}
-                compact
-              />
-              <KeyValue
-                label="以前的会话"
-                value={onboardingSessionDiscoveryLabel(
-                  provider.sessionDiscovery,
-                )}
-                compact
-              />
-            </div>
-            {provider.state !== 'ready' ? (
-              <p className="mt-2 text-xs leading-relaxed text-text-secondary">
-                {providerRepairText(provider)}
-              </p>
-            ) : null}
-          </div>
-        ))}
+          )
+        })}
       </div>
       <Disclosure
         label="技术详情"
@@ -842,20 +859,22 @@ function KeyValue({
   compact = false,
   label,
   mono = false,
+  stacked = false,
   value,
 }: {
   readonly compact?: boolean
   readonly label: string
   readonly mono?: boolean
+  readonly stacked?: boolean
   readonly value: string
 }) {
   return (
     <div
-      className={`flex min-w-0 items-start justify-between gap-4 ${compact ? 'text-xs' : 'text-sm'}`}
+      className={`flex min-w-0 ${stacked ? 'flex-col gap-1' : 'items-start justify-between gap-4'} ${compact ? 'text-xs' : 'text-sm'}`}
     >
       <span className="shrink-0 text-text-muted">{label}</span>
       <span
-        className={`min-w-0 break-words text-right text-text-primary ${mono ? 'font-mono' : ''}`}
+        className={`min-w-0 break-words text-text-primary ${stacked ? 'text-left' : 'text-right'} ${mono ? 'font-mono' : ''}`}
       >
         {value}
       </span>

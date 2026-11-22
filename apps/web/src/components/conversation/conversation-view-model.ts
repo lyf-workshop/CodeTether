@@ -49,6 +49,7 @@ export interface ConversationToolViewModel {
 
 export interface ConversationFileChangeViewModel {
   readonly id: string
+  readonly turnNumber?: number
   readonly path: string
   readonly name: string
   readonly kind: 'added' | 'modified' | 'deleted' | 'renamed' | 'unknown'
@@ -180,6 +181,7 @@ export interface ConversationCapabilitiesViewModel {
 export interface ConversationViewModel {
   readonly id: string
   readonly title: string
+  readonly createdAt?: string
   readonly titleSource: ConversationTitleSource
   readonly pinnedAt?: string
   readonly archivedAt?: string

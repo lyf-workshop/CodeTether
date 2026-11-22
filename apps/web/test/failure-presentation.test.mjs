@@ -9,6 +9,12 @@ import {
 const timestamp = '2026-09-02T20:00:00.000Z'
 
 const profiles = {
+  provider_error: {
+    category: 'provider',
+    retryability: 'unknown',
+    userAction: 'view_details',
+    source: 'provider',
+  },
   provider_crashed: {
     category: 'provider',
     retryability: 'unknown',
@@ -304,12 +310,30 @@ test('technical details contain only CodeTether-owned bounded fields', () => {
     failure: canonicalFailure('provider_crashed'),
   })
 
-  assert.deepEqual(presentation.technicalDetails, [
+  assert.deepEqual(presentation.technicalDetails.slice(0, 3), [
     { label: '主机错误代码', value: 'provider_error' },
     { label: '故障代码', value: 'provider_crashed' },
     { label: '来源', value: 'AI 工具' },
-    { label: '发生时间', value: timestamp },
   ])
+  assert.equal(presentation.technicalDetails[3]?.label, '发生时间')
+  assert.match(presentation.technicalDetails[3]?.value ?? '', /月.*日/u)
+  assert.doesNotMatch(presentation.technicalDetails[3]?.value ?? '', /T.*Z/u)
+})
+
+test('a broad Provider execution failure tells the next step and links to the computer', () => {
+  const presentation = executionFailurePresentation({
+    code: 'provider_error',
+    message: 'private diagnostic',
+    failure: canonicalFailure('provider_error'),
+  })
+  assert.equal(presentation.navigation, 'machine')
+  assert.equal(presentation.cause, 'AI 工具在本轮执行中失败。')
+  assert.equal(presentation.historyNote, '已保存的会话历史仍可查看。')
+  assert.match(presentation.guidance, /电脑详情.*开始新一轮/u)
+  assert.doesNotMatch(
+    JSON.stringify(presentation),
+    /private diagnostic|。 {2}/u,
+  )
 })
 
 test('legacy errors use structured Host codes and never expose message text', () => {
@@ -412,11 +436,11 @@ test('Relay failure ordinary copy uses device nouns while technical facts stay e
       ).value,
       'RAW_MACHINE_HOST_CODE',
     )
-    assert.equal(
+    assert.match(
       presentation.technicalDetails.find(
         (detail) => detail.label === '发生时间',
       ).value,
-      timestamp,
+      /月.*日/u,
     )
   }
 })

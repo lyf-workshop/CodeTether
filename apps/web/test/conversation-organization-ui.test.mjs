@@ -16,14 +16,18 @@ test('Conversation list exposes URL-backed Active and Archived views', async () 
   assert.match(page, /search\.view === 'archived' \? 'archived' : 'active'/u)
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'active', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'active'\)/u,
   )
   assert.match(
     page,
-    /conversationListQueryOptions\(runtime, projectId, 'archived', filters\)/u,
+    /conversationListQueryOptions\(runtime, projectId, 'archived'\)/u,
+  )
+  assert.match(
+    page,
+    /conversationListQueryOptions\(runtime, projectId, archiveView, filters\)/u,
   )
   assert.match(page, /SegmentedControlItem value="active"/u)
-  assert.match(page, /SegmentedControlItem value="archived"/u)
+  assert.match(page, /SegmentedControlItem\s+value="archived"/u)
   assert.match(page, /value === 'archived' \? 'archived' : undefined/u)
   assert.match(model, /search\.view === 'archived'/u)
   assert.match(router, /path: '\/projects\/\$projectId\/conversations'/u)
@@ -50,11 +54,14 @@ test('rows expose only durable organization actions with bounded titles', async 
   ])
 
   assert.match(group, /conversation\.pinnedAt/u)
-  assert.match(group, /aria-label="已置顶"/u)
+  assert.match(group, / · 已置顶/u)
   assert.match(group, /ConversationRestoreButton/u)
   assert.match(group, /showInlineError=\{false\}/u)
   assert.match(group, /role="alert"/u)
-  assert.match(group, /title=\{conversation\.title\}/u)
+  assert.match(group, /title=\{displayTitle\}/u)
+  assert.match(group, /displayConversationTitle\(/u)
+  assert.match(group, /actionPlacement="overlay"/u)
+  assert.doesNotMatch(group, /pr-36|pr-12/u)
   assert.match(controls, /'置顶'/u)
   assert.match(controls, /'取消置顶'/u)
   assert.match(controls, /重命名/u)
@@ -98,7 +105,7 @@ test('Archive safety and organization empty states are truthful', async () => {
   assert.match(controls, /运行中的会话暂时不能归档/u)
   assert.match(controls, /conversation\.status === 'waiting'/u)
   assert.match(controls, /当前会话仍在等待你的确认/u)
-  assert.match(page, /还没有会话/u)
+  assert.match(page, /没有进行中的会话/u)
   assert.match(page, /没有已归档的会话/u)
   assert.match(page, /value="active"/u)
   assert.match(page, /value="archived"/u)

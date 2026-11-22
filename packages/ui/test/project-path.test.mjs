@@ -32,14 +32,11 @@ test('short paths and paths without a parent remain intact', () => {
   })
 })
 
-test('a final folder longer than its available budget keeps its suffix', () => {
-  assert.deepEqual(
-    projectPathParts('/work/very-long-distinguishing-tail', 12),
-    {
-      prefix: '/work',
-      tail: '/…shing-tail',
-    },
-  )
+test('a long final folder remains whole before width fitting', () => {
+  assert.deepEqual(projectPathParts('/work/very-long-distinguishing-tail'), {
+    prefix: '/work',
+    tail: '/very-long-distinguishing-tail',
+  })
 })
 
 test('visible path cuts at character boundaries and keeps the final folder', () => {
@@ -62,6 +59,34 @@ test('visible path cuts at character boundaries and keeps the final folder', () 
   assert.equal(monospaceWidth(posixDisplay), 20 * 8)
 })
 
+test('long scratch folders keep their beginning before any parent characters', () => {
+  const tablet =
+    'D:\\Projects\\Software\\agenthub-archive\\t1a-tablet-tb375fc-scratch-20261107'
+  const vivo =
+    'D:\\Projects\\Software\\agenthub-archive\\t1a-vivo-x60-scratch-20261106-e2945b18'
+
+  assert.equal(
+    fitProjectPathToWidth(tablet, 40 * 8, monospaceWidth),
+    'D:\\…\\t1a-tablet-tb375fc-scratch-20261107',
+  )
+  assert.equal(
+    fitProjectPathToWidth(tablet, 32 * 8, monospaceWidth),
+    '…tablet-tb375fc-scratch-20261107',
+  )
+  assert.equal(
+    fitProjectPathToWidth(vivo, 43 * 8, monospaceWidth),
+    'D:\\…\\t1a-vivo-x60-scratch-20261106-e2945b18',
+  )
+  for (const path of [tablet, vivo]) {
+    for (const columns of [32, 39, 40, 43]) {
+      const shown = fitProjectPathToWidth(path, columns * 8, monospaceWidth)
+      assert.ok(monospaceWidth(shown) <= columns * 8)
+      assert.ok((shown.match(/…/gu) ?? []).length <= 1)
+      assert.doesNotMatch(shown, /…[\\/]…/u)
+    }
+  }
+})
+
 test('short paths and a tail wider than the row retain visible source text', () => {
   assert.equal(fitProjectPathToWidth('C:\\x', 12 * 8, monospaceWidth), 'C:\\x')
   assert.equal(
@@ -73,8 +98,23 @@ test('short paths and a tail wider than the row retain visible source text', () 
     8 * 8,
     monospaceWidth,
   )
-  assert.match(narrow, /^\/….*tail$/u)
+  assert.match(narrow, /^….*tail$/u)
   assert.ok(monospaceWidth(narrow) <= 8 * 8)
+})
+
+test('POSIX and UNC roots remain when their complete folder fits', () => {
+  assert.equal(
+    fitProjectPathToWidth(
+      '/Users/lin/work/payments-api',
+      18 * 8,
+      monospaceWidth,
+    ),
+    '/Use…/payments-api',
+  )
+  assert.equal(
+    fitProjectPathToWidth('\\\\server\\share\\folder', 22 * 8, monospaceWidth),
+    '\\\\server\\share\\folder',
+  )
 })
 
 test('the full path remains available on hover and to screen readers', () => {

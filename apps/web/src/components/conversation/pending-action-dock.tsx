@@ -172,13 +172,11 @@ export function PendingActionDock({
                   title={item.context}
                   aria-label={item.context}
                 >
-                  {item.contextHasParent ? (
-                    <span aria-hidden="true" className="shrink-0">
-                      …/
-                    </span>
-                  ) : null}
                   <span className="min-w-0 truncate text-left [direction:rtl]">
-                    {item.contextLabel}
+                    <bdi dir="ltr">
+                      {item.contextHasParent ? '…/' : null}
+                      {item.contextLabel}
+                    </bdi>
                   </span>
                 </span>
               ) : null}

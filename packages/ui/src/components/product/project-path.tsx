@@ -7,10 +7,7 @@ import {
 } from 'react'
 
 import { cn } from '../../lib/cn.js'
-import {
-  fitProjectPathToWidth,
-  projectPathParts,
-} from './project-path-parts.js'
+import { fitProjectPathToWidth } from './project-path-parts.js'
 
 export function ProjectPath({
   path,
@@ -19,9 +16,8 @@ export function ProjectPath({
   readonly path: string
   readonly className?: string
 }) {
-  const { prefix, tail } = projectPathParts(path)
   const pathRef = useRef<HTMLSpanElement>(null)
-  const [visiblePath, setVisiblePath] = useState(prefix + tail)
+  const [visiblePath, setVisiblePath] = useState(path)
 
   const measure = useCallback(() => {
     const element = pathRef.current

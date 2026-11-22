@@ -283,40 +283,46 @@ pub(crate) fn show_after_ready(app: &AppHandle, window: &WebviewWindow) -> Resul
         return window.show().map_err(|error| error.to_string());
     };
     if state.maximize_on_first_show.load(Ordering::Acquire) {
-        #[cfg(windows)]
-        {
-            let hwnd = window.hwnd().map_err(|error| error.to_string())?;
-            // One Win32 reveal makes the first visible frame maximized. Tao
-            // observes WM_SIZE; show() then reconciles its visible flag. The
-            // DWM transition must not expose an interpolated normal frame.
-            let transitions_disabled = set_dwm_transitions_disabled(hwnd.0, true);
-            if !transitions_disabled {
-                eprintln!("[codetether:desktop] could not suppress startup maximize animation");
+        let result = (|| -> Result<(), String> {
+            #[cfg(windows)]
+            {
+                let hwnd = window.hwnd().map_err(|error| error.to_string())?;
+                // One Win32 reveal makes the first visible frame maximized. Tao
+                // observes WM_SIZE; show() then reconciles its visible flag. The
+                // DWM transition must not expose an interpolated normal frame.
+                let transitions_disabled = set_dwm_transitions_disabled(hwnd.0, true);
+                if !transitions_disabled {
+                    eprintln!("[codetether:desktop] could not suppress startup maximize animation");
+                }
+                unsafe { ShowWindow(hwnd.0, SW_SHOWMAXIMIZED) };
+                let result = window.show().map_err(|error| error.to_string());
+                if transitions_disabled {
+                    let _ = set_dwm_transitions_disabled(hwnd.0, false);
+                }
+                result?;
             }
-            unsafe { ShowWindow(hwnd.0, SW_SHOWMAXIMIZED) };
-            let result = window.show().map_err(|error| error.to_string());
-            if transitions_disabled {
-                let _ = set_dwm_transitions_disabled(hwnd.0, false);
-            }
-            result?;
-        }
-        #[cfg(not(windows))]
-        {
-            window.show().map_err(|error| error.to_string())?;
-            if let Err(error) = window.maximize() {
-                eprintln!("[codetether:desktop] could not restore saved maximized state: {error}");
-                if let Some(geometry) = state
-                    .normal
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner())
-                    .as_mut()
-                {
-                    geometry.maximized = false;
+            #[cfg(not(windows))]
+            {
+                window.show().map_err(|error| error.to_string())?;
+                if let Err(error) = window.maximize() {
+                    eprintln!(
+                        "[codetether:desktop] could not restore saved maximized state: {error}"
+                    );
+                    if let Some(geometry) = state
+                        .normal
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner())
+                        .as_mut()
+                    {
+                        geometry.maximized = false;
+                    }
                 }
             }
-        }
+            Ok(())
+        })();
+        // A failed handle lookup or show must not suppress future observations.
         state.maximize_on_first_show.store(false, Ordering::Release);
-        return Ok(());
+        return result;
     }
     window.show().map_err(|error| error.to_string())
 }
